@@ -1,0 +1,41 @@
+# Default configuration values for WatchTower.
+# Every key here can be overridden by an environment variable of the same
+# name in upper case (see backend/.env.example) or by the internal/config
+# envBindings table. Secrets should never be committed with real values —
+# leave them empty here and supply them via .env or the process environment.
+
+app_env: development
+app_port: 8080
+frontend_url: ""
+
+db_host: 127.0.0.1
+db_port: 3306
+db_user: root
+db_password: ""
+db_name: watchtower
+
+redis_host: 127.0.0.1
+redis_port: 6379
+redis_password: ""
+
+jwt_secret: ""
+jwt_expiry_hours: 24
+
+deepseek_api_key: ""
+deepseek_model: deepseek-chat
+
+telegram_asset_bot_token: ""
+telegram_sentinel_bot_token: ""
+telegram_mode: polling
+
+twelve_data_api_key: ""
+coingecko_base_url: https://api.coingecko.com/api/v3
+open_er_base_url: https://open.er-api.com/v6/latest/USD
+github_token: ""
+
+asset_scheduler_interval_hours: 4
+sentinel_scheduler_interval_hours: 6
+
+max_unique_symbols: 100
+alert_cooldown_hours: 4
+alert_price_move_pct: 3
