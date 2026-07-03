@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/karvin-nanda/watchtower/internal/currency"
 )
 
 // AlertType mirrors the asset_subscriptions.alert_type enum.
@@ -176,18 +174,19 @@ type analysisJSON struct {
 
 // AnalyzeAsset asks DeepSeek to produce a bilingual (Indonesian/English)
 // market commentary for data, taking into account how close the price is
-// to any subscriber's alert thresholds.
-func (a *DeepSeekAnalyzer) AnalyzeAsset(data *FetchResult, subscribers []SubscriberContext) (*AnalysisResult, error) {
+// to any subscriber's alert thresholds. usdToIDR is the current USD->IDR
+// exchange rate (from currency.GetUSDToIDR, fetched by the caller) — it's
+// injected into the prompt both as the pre-computed IDR price and as an
+// explicit instruction, so DeepSeek's own commentary can convert other USD
+// figures it might mention using the same rate WatchTower actually used.
+func (a *DeepSeekAnalyzer) AnalyzeAsset(data *FetchResult, subscribers []SubscriberContext, usdToIDR float64) (*AnalysisResult, error) {
 	if a.apiKey == "" {
 		return nil, fmt.Errorf("asset: DeepSeek API key is not configured")
 	}
 
-	priceIDR, err := currency.ConvertToIDR(data.PriceUSD)
-	if err != nil {
-		log.Printf("[ERROR] AnalyzeAsset: convert price to IDR for %s: %v", data.Symbol, err)
-	}
+	priceIDR := data.PriceUSD * usdToIDR
 
-	prompt := buildAnalysisPrompt(data, priceIDR, subscribers)
+	prompt := buildAnalysisPrompt(data, priceIDR, usdToIDR, subscribers)
 
 	raw, err := a.callDeepSeek(prompt)
 	if err != nil {
@@ -209,7 +208,7 @@ func (a *DeepSeekAnalyzer) AnalyzeAsset(data *FetchResult, subscribers []Subscri
 	}, nil
 }
 
-func buildAnalysisPrompt(data *FetchResult, priceIDR float64, subscribers []SubscriberContext) string {
+func buildAnalysisPrompt(data *FetchResult, priceIDR, usdToIDR float64, subscribers []SubscriberContext) string {
 	var thresholds strings.Builder
 	if len(subscribers) == 0 {
 		thresholds.WriteString("Tidak ada subscriber dengan threshold spesifik saat ini.")
@@ -244,6 +243,13 @@ Data harga terkini untuk %s:
 - Perubahan 24 jam: %.2f%%
 - Sumber data: %s
 
+Kurs saat ini: 1 USD = Rp %.0f (gunakan nilai ini untuk semua konversi).
+
+Aturan format angka WAJIB diikuti:
+- Semua angka gunakan separator ribuan dengan koma, contoh: $61,633.00 bukan $61633
+- Semua harga USD sertakan konversi IDR, contoh: $61,633.00 (Rp 1,108,743,364)
+- Jangan gunakan format angka tanpa separator
+
 Konteks subscriber:
 %s
 
@@ -252,7 +258,7 @@ apakah threshold subscriber di atas berisiko tersentuh, dan rekomendasi singkat.
 
 Balas HANYA dengan JSON valid tanpa markdown code fence, dengan struktur persis seperti ini:
 {"analysis_id": "<analisis dalam Bahasa Indonesia>", "analysis_en": "<analysis in English>"}`,
-		data.Symbol, data.PriceUSD, priceIDR, data.ChangePct24h, data.Source, thresholds.String())
+		data.Symbol, data.PriceUSD, priceIDR, data.ChangePct24h, data.Source, usdToIDR, thresholds.String())
 }
 
 func (a *DeepSeekAnalyzer) callDeepSeek(prompt string) (string, error) {

@@ -6,7 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "audit": "npm audit --audit-level=moderate",
+    "audit:fix": "npm audit fix",
+    "lint:security": "npx retire --path src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@vueuse/core": "^11.0.0",
@@ -19,6 +25,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.0",
-    "vite": "^5.4.0"
+    "@vitest/coverage-v8": "^4.1.9",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.9"
   }
 }

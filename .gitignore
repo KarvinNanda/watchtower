@@ -46,6 +46,10 @@ frontend/.env.*
 !frontend/.env.example
 frontend/*.local
 
+# SCA / test coverage output
+frontend/retire-report.json
+frontend/coverage/
+
 # =========================================
 # Docker / TLS
 # =========================================

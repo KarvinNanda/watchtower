@@ -6,6 +6,7 @@ import { NCard, NForm, NFormItem, NInput, NButton, NAlert } from 'naive-ui'
 
 import { useAuthStore } from '@/stores/auth'
 import { message } from '@/plugins/naive'
+import { isValidEmail, validatePassword, sanitizeInput } from '@/utils/security'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import LanguageSwitcher from '@/components/common/LanguageSwitcher.vue'
 
@@ -23,8 +24,6 @@ const form = ref({
   confirmPassword: '',
 })
 
-const passwordPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[!@#$%^&*]).{8,}$/
-
 function validateConfirmPassword(_rule, value) {
   if (value !== form.value.password) {
     return new Error(t('auth.password_mismatch'))
@@ -35,15 +34,23 @@ function validateConfirmPassword(_rule, value) {
 const rules = {
   email: {
     required: true,
-    message: () => t('common.required_field'),
     trigger: ['input', 'blur'],
+    validator: (_rule, value) => {
+      if (!value) return new Error(t('common.required_field'))
+      if (!isValidEmail(value)) return new Error(t('auth.invalid_email_format'))
+      return true
+    },
   },
   password: {
     required: true,
     trigger: ['input', 'blur'],
     validator: (_rule, value) => {
       if (!value) return new Error(t('common.required_field'))
-      if (!passwordPattern.test(value)) return new Error(t('auth.password_hint'))
+      // validatePassword's own error strings are hardcoded Indonesian (see
+      // utils/security.js) — keep the displayed message on the existing
+      // i18n-translated password_hint key instead, so English-locale users
+      // don't see Indonesian text mixed into the form.
+      if (validatePassword(value).length > 0) return new Error(t('auth.password_hint'))
       return true
     },
   },
@@ -64,7 +71,8 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
-    await authStore.register(form.value.email, form.value.password)
+    const email = sanitizeInput(form.value.email)
+    await authStore.register(email, form.value.password)
     message.success(t('auth.register_success'))
     router.push({ name: 'login' })
   } catch (err) {

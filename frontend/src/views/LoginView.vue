@@ -6,6 +6,7 @@ import { NCard, NForm, NFormItem, NInput, NButton, NAlert } from 'naive-ui'
 
 import { useAuthStore } from '@/stores/auth'
 import { message } from '@/plugins/naive'
+import { isValidEmail, sanitizeInput } from '@/utils/security'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import LanguageSwitcher from '@/components/common/LanguageSwitcher.vue'
 
@@ -26,8 +27,12 @@ const form = ref({
 const rules = {
   email: {
     required: true,
-    message: () => t('common.required_field'),
     trigger: ['input', 'blur'],
+    validator: (_rule, value) => {
+      if (!value) return new Error(t('common.required_field'))
+      if (!isValidEmail(value)) return new Error(t('auth.invalid_email_format'))
+      return true
+    },
   },
   password: {
     required: true,
@@ -52,7 +57,8 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
-    await authStore.login(form.value.email, form.value.password)
+    const email = sanitizeInput(form.value.email)
+    await authStore.login(email, form.value.password)
     router.push({ name: 'dashboard' })
   } catch (err) {
     errorMessage.value = err.response?.data?.message || t('auth.login_failed')

@@ -1,0 +1,46 @@
+name: Frontend Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      # New advisories can appear for existing dependencies at any time,
+      # independently of our own code changes — this step is informational
+      # rather than a hard gate, mirroring backend/.github/workflows/sca.yml:
+      # it must not block the retire.js scan/artifact upload below from
+      # running just because npm audit's own exit code is non-zero.
+      - name: Run npm audit
+        continue-on-error: true
+        run: |
+          cd frontend
+          npm audit --audit-level=moderate
+
+      - name: Check for known vulnerable libraries
+        run: |
+          cd frontend
+          npx retire --path src/ --outputformat json --outputpath retire-report.json || true
+
+      - name: Upload retire report
+        uses: actions/upload-artifact@v4
+        with:
+          name: retire-report
+          path: frontend/retire-report.json
+        if: always()

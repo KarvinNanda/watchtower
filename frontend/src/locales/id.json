@@ -37,8 +37,9 @@
     "no_account": "Belum punya akun?",
     "have_account": "Sudah punya akun?",
     "email_placeholder": "Masukkan alamat email Anda",
-    "password_hint": "Minimal 8 karakter, 1 huruf besar, 1 angka, 1 karakter spesial (!@#$%^&*)",
+    "password_hint": "Minimal 8 karakter, 1 huruf besar, 1 angka, 1 karakter spesial (!＠#$%^&*)",
     "password_mismatch": "Konfirmasi kata sandi tidak cocok",
+    "invalid_email_format": "Format email tidak valid",
     "register_success": "Pendaftaran berhasil, silakan masuk",
     "login_failed": "Email atau kata sandi salah",
     "register_failed": "Pendaftaran gagal"

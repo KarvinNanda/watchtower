@@ -34,7 +34,7 @@ type NotifierInterface interface {
 // AssetAnalyzerInterface is the subset of asset.DeepSeekAnalyzer's behavior
 // AssetWorker depends on, allowing tests to inject a mock analyzer.
 type AssetAnalyzerInterface interface {
-	AnalyzeAsset(data *asset.FetchResult, subscribers []asset.SubscriberContext) (*asset.AnalysisResult, error)
+	AnalyzeAsset(data *asset.FetchResult, subscribers []asset.SubscriberContext, usdToIDR float64) (*asset.AnalysisResult, error)
 }
 
 // AssetWorker periodically fetches market data (via the Redis/MySQL cache
@@ -286,16 +286,18 @@ func (w *AssetWorker) processSymbol(
 		})
 	}
 
-	analysis, err := w.analyzer.AnalyzeAsset(fetchResult, subscriberContexts)
+	usdToIDR, rateErr := currency.GetUSDToIDR()
+	if rateErr != nil {
+		log.Printf("[ERROR] processSymbol: get USD/IDR rate for %s: %v", symbol.Symbol, rateErr)
+	}
+
+	analysis, err := w.analyzer.AnalyzeAsset(fetchResult, subscriberContexts, usdToIDR)
 	if err != nil {
 		log.Printf("[WARN] processSymbol: AnalyzeAsset failed for %s, alerting without AI commentary: %v", symbol.Symbol, err)
 		analysis = nil
 	}
 
-	priceIDR, convErr := currency.ConvertToIDR(fetchResult.PriceUSD)
-	if convErr != nil {
-		log.Printf("[ERROR] processSymbol: convert %s to IDR: %v", symbol.Symbol, convErr)
-	}
+	priceIDR := fetchResult.PriceUSD * usdToIDR
 
 	triggered := 0
 	for _, sub := range subscribers {
@@ -588,16 +590,17 @@ func (w *AssetWorker) upsertAlertState(ctx context.Context, userID uint64, symbo
 // batched alert message, in the subscriber's preferred language ('en' for
 // English, anything else — including the 'id' default — for Indonesian).
 // Every dynamic field is escaped for Telegram's MarkdownV2 parse mode via
-// notifier.EscapeTelegramMarkdown, including the formatted numbers — a
-// decimal point like the one in "60123.45" is itself a MarkdownV2 special
-// character. The literal "$", "(", ")" around the price and the leading
-// "*"/trailing bold marker around the symbol are static template
-// characters, not dynamic data — they're hardcoded with their own required
-// MarkdownV2 backslash escapes directly in the format string below.
+// notifier.EscapeTelegramMarkdown, including the formatted price/percentage
+// text — formatUSD/formatIDR's thousands-separator commas are harmless to
+// escape (comma isn't a MarkdownV2 special character) but their decimal
+// points are. The leading "*"/trailing bold marker around the symbol and
+// the "(", ")" wrapping the IDR amount are static template characters, not
+// dynamic data — they're hardcoded with their own required MarkdownV2
+// backslash escapes directly in the format string below.
 func buildAssetItemBlock(lang string, item AlertItem) string {
 	symbol := notifier.EscapeTelegramMarkdown(item.Symbol)
-	priceUSDText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.2f", item.PriceUSD))
-	priceIDRText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.0f", item.PriceIDR))
+	priceUSDText := notifier.EscapeTelegramMarkdown(formatUSD(item.PriceUSD))
+	priceIDRText := notifier.EscapeTelegramMarkdown(formatIDR(item.PriceIDR))
 	changePctText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.2f", item.ChangePct))
 
 	priceLabel := "💰 Harga"
@@ -610,7 +613,7 @@ func buildAssetItemBlock(lang string, item AlertItem) string {
 	}
 
 	block := fmt.Sprintf(
-		"📊 *%s*\n%s: \\$%s \\(Rp %s\\)\n📈 24h: %s%%\n⚠️ Trigger: %s",
+		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s%%\n⚠️ Trigger: %s",
 		symbol, priceLabel, priceUSDText, priceIDRText, changePctText, notifier.EscapeTelegramMarkdown(triggerLabel),
 	)
 

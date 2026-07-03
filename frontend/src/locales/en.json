@@ -37,8 +37,9 @@
     "no_account": "Don't have an account?",
     "have_account": "Already have an account?",
     "email_placeholder": "Enter your email address",
-    "password_hint": "Min 8 characters, 1 uppercase, 1 number, 1 special character (!@#$%^&*)",
+    "password_hint": "Min 8 characters, 1 uppercase, 1 number, 1 special character (!＠#$%^&*)",
     "password_mismatch": "Password confirmation doesn't match",
+    "invalid_email_format": "Invalid email format",
     "register_success": "Registration successful, please sign in",
     "login_failed": "Incorrect email or password",
     "register_failed": "Registration failed"

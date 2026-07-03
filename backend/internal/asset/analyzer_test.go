@@ -2,10 +2,8 @@ package asset_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -13,27 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/karvin-nanda/watchtower/internal/asset"
-	"github.com/karvin-nanda/watchtower/internal/currency"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
-
-// TestMain disables internal/currency's real network call for the whole
-// package: AnalyzeAsset calls currency.ConvertToIDR internally, and without
-// this override every test here would attempt a real HTTPS call to
-// open.er-api.com, making the suite slow, flaky, and dependent on network
-// access. Forcing an immediate transport error makes GetUSDToIDR fall back
-// to its hardcoded rate synchronously instead.
-func TestMain(m *testing.M) {
-	currency.SetHTTPClient(&http.Client{
-		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return nil, fmt.Errorf("network access disabled in tests")
-		}),
-	})
-	os.Exit(m.Run())
-}
 
 // clientForServer returns an *http.Client that redirects every outgoing
 // request to ts, regardless of the URL the caller actually dialed. This is
@@ -80,7 +62,7 @@ func TestAnalyzeAsset_MockDeepSeek(t *testing.T) {
 	analyzer := asset.NewDeepSeekAnalyzer("test-key", "deepseek-chat")
 	analyzer.SetHTTPClient(clientForServer(ts))
 
-	result, err := analyzer.AnalyzeAsset(sampleFetchResult(), nil)
+	result, err := analyzer.AnalyzeAsset(sampleFetchResult(), nil, 16000)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -99,7 +81,7 @@ func TestAnalyzeAsset_DeepSeekDown(t *testing.T) {
 	analyzer := asset.NewDeepSeekAnalyzer("test-key", "deepseek-chat")
 	analyzer.SetHTTPClient(clientForServer(ts))
 
-	result, err := analyzer.AnalyzeAsset(sampleFetchResult(), nil)
+	result, err := analyzer.AnalyzeAsset(sampleFetchResult(), nil, 16000)
 
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -117,7 +99,7 @@ func TestAnalyzeAsset_InvalidJSON(t *testing.T) {
 	analyzer := asset.NewDeepSeekAnalyzer("test-key", "deepseek-chat")
 	analyzer.SetHTTPClient(clientForServer(ts))
 
-	result, err := analyzer.AnalyzeAsset(sampleFetchResult(), nil)
+	result, err := analyzer.AnalyzeAsset(sampleFetchResult(), nil, 16000)
 
 	require.Error(t, err)
 	assert.Nil(t, result)
