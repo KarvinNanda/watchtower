@@ -21,6 +21,9 @@ const (
 	// sentinelItemRetention matches the architecture spec: expires_at =
 	// first_seen_at + 7 days.
 	sentinelItemRetention = 7 * 24 * time.Hour
+	// sentinelTitleTruncateLen bounds how much of an item's title appears in
+	// a batched message section and in the notification_logs summary.
+	sentinelTitleTruncateLen = 80
 )
 
 // SentinelNotifierInterface is the subset of notifier.Notifier's behavior
@@ -31,7 +34,9 @@ type SentinelNotifierInterface interface {
 	SendSentinelAlert(chatID int64, message string) error
 }
 
-// ProcessCounters tallies one Run's activity for the summary log.
+// ProcessCounters tallies one Run's activity for the summary log. Sent
+// counts users whose batched message was delivered successfully (not
+// individual items — one user can receive many matched items in one send).
 type ProcessCounters struct {
 	Fetched int
 	New     int
@@ -39,11 +44,36 @@ type ProcessCounters struct {
 	Sent    int
 }
 
+// SentinelBatchItem is one matched sentinel item for a single user,
+// collected during a run and rendered as one section of that user's
+// batched message.
+type SentinelBatchItem struct {
+	SourceType string
+	Title      string
+	URL        string
+	AnalysisID string
+	AnalysisEN string
+	Keywords   []string
+}
+
+// SentinelBatch accumulates every SentinelBatchItem matched for one user
+// during a single SentinelWorker.Run, so they can be delivered as one
+// combined Telegram message instead of one message per matched item.
+type SentinelBatch struct {
+	UserID   uint64
+	ChatID   int64
+	Language string
+	Items    []SentinelBatchItem
+}
+
 // SentinelWorker periodically polls all six threat-intel sources,
 // deduplicates items globally via sentinel_seen_items, runs one DeepSeek
 // analysis per new item that matches at least one active keyword
 // subscription (shared across every matching user), and notifies matching
-// users via the Sentinel Telegram bot.
+// users via the Sentinel Telegram bot. Every item matched for a given user
+// within one run is batched into a single Telegram message (see
+// SentinelBatch) rather than sent as separate messages per item, to avoid
+// spamming a user whose keywords match several items in the same run.
 type SentinelWorker struct {
 	db       *sql.DB
 	fetcher  *sentinel.SentinelFetcher
@@ -71,8 +101,10 @@ func NewSentinelWorker(
 }
 
 // Run is the scheduler entry point: it cleans up expired sentinel_seen_items,
-// fetches and processes every source, and logs a summary. It never panics —
-// any recovered panic is logged and returned as an error.
+// fetches and processes every source (collecting matched items per user),
+// then sends each user at most one combined message for the run, and logs
+// a summary. It never panics — any recovered panic is logged and returned
+// as an error.
 func (w *SentinelWorker) Run() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -89,13 +121,18 @@ func (w *SentinelWorker) Run() (err error) {
 	}
 
 	counters := &ProcessCounters{}
-	if procErr := w.fetchAndProcess(counters); procErr != nil {
+	batches := make(map[uint64]*SentinelBatch)
+	if procErr := w.fetchAndProcess(counters, batches); procErr != nil {
 		log.Printf("[ERROR] SentinelWorker.Run: fetch and process: %v", procErr)
 		return fmt.Errorf("scheduler: fetch and process: %w", procErr)
 	}
 
-	log.Printf("[INFO] SentinelWorker.Run: completed in %s — fetched: %d, new: %d, matched: %d, sent: %d",
-		time.Since(start), counters.Fetched, counters.New, counters.Matched, counters.Sent)
+	sent, usersNotified := w.dispatchBatches(batches)
+	counters.Sent = sent
+
+	log.Printf("[INFO] SentinelWorker.Run: completed in %s — fetched: %d, new: %d, matched: %d, "+
+		"users notified: %d, sent: %d",
+		time.Since(start), counters.Fetched, counters.New, counters.Matched, usersNotified, counters.Sent)
 
 	return nil
 }
@@ -144,8 +181,9 @@ func (w *SentinelWorker) cleanupExpiredItems() error {
 }
 
 // fetchAndProcess fetches every source and processes each item, tallying
-// results into counters. One item's failure never stops the others.
-func (w *SentinelWorker) fetchAndProcess(counters *ProcessCounters) error {
+// results into counters and accumulating matched items per user into
+// batches. One item's failure never stops the others.
+func (w *SentinelWorker) fetchAndProcess(counters *ProcessCounters, batches map[uint64]*SentinelBatch) error {
 	items, err := w.fetcher.FetchAll()
 	if err != nil {
 		return fmt.Errorf("fetch all sentinel sources: %w", err)
@@ -153,7 +191,7 @@ func (w *SentinelWorker) fetchAndProcess(counters *ProcessCounters) error {
 	counters.Fetched = len(items)
 
 	for _, item := range items {
-		if err := w.processItem(item, counters); err != nil {
+		if err := w.processItem(item, counters, batches); err != nil {
 			log.Printf("[ERROR] fetchAndProcess: process item %s/%s failed: %v", item.SourceType, item.Identifier, err)
 		}
 	}
@@ -161,10 +199,13 @@ func (w *SentinelWorker) fetchAndProcess(counters *ProcessCounters) error {
 	return nil
 }
 
-// processItem implements the full dedup -> match -> analyze -> notify flow
-// for a single item. It never panics — any recovered panic is logged and
-// returned as an error, and the caller continues to the next item.
-func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *ProcessCounters) (err error) {
+// processItem implements the dedup -> match -> analyze flow for a single
+// item, appending a SentinelBatchItem to every matched user's batch rather
+// than sending anything directly — delivery happens once per user after
+// every item has been processed, via dispatchBatches. It never panics —
+// any recovered panic is logged and returned as an error, and the caller
+// continues to the next item.
+func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *ProcessCounters, batches map[uint64]*SentinelBatch) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[ERROR] processItem: recovered from panic for %s/%s: %v", item.SourceType, item.Identifier, r)
@@ -212,24 +253,23 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 	}
 
 	for _, u := range groupMatchesByUser(matches) {
-		message := buildSentinelMessage(u.PreferredLang, item, analysis, u.Keywords)
-
-		sendErr := w.notifier.SendSentinelAlert(u.TelegramChatID, message)
-
-		status := notifier.StatusSent
-		if sendErr != nil {
-			status = notifier.StatusFailed
-			log.Printf("[ERROR] processItem: send telegram alert to user %d failed: %v", u.UserID, sendErr)
-		} else {
-			counters.Sent++
+		batch, ok := batches[u.UserID]
+		if !ok {
+			batch = &SentinelBatch{
+				UserID:   u.UserID,
+				ChatID:   u.TelegramChatID,
+				Language: u.PreferredLang,
+			}
+			batches[u.UserID] = batch
 		}
-
-		if logErr := w.logNotification(u.UserID, u.Keywords[0], message, status); logErr != nil {
-			log.Printf("[ERROR] processItem: log notification for user %d failed: %v", u.UserID, logErr)
-		}
-
-		// Telegram rate limit: stay under ~30 messages/second.
-		time.Sleep(telegramSendGap)
+		batch.Items = append(batch.Items, SentinelBatchItem{
+			SourceType: item.SourceType,
+			Title:      item.Title,
+			URL:        item.URL,
+			AnalysisID: analysis.AnalysisID,
+			AnalysisEN: analysis.AnalysisEN,
+			Keywords:   u.Keywords,
+		})
 	}
 
 	return nil
@@ -388,7 +428,7 @@ func buildAggregateUserContext(matches []matchRow) *sentinel.UserContext {
 }
 
 // userMatchInfo groups every keyword that matched for one specific user, so
-// their notification can list only their own matched keywords.
+// their batch entry can list only their own matched keywords.
 type userMatchInfo struct {
 	UserID         uint64
 	TelegramChatID int64
@@ -454,52 +494,121 @@ func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem, analysis *se
 	return nil
 }
 
-func (w *SentinelWorker) logNotification(userID uint64, keyword, message string, status notifier.Status) error {
+// dispatchBatches sends one combined Telegram message per user in batches
+// (splitting into multiple messages only if the combined text would exceed
+// Telegram's 4096-character limit — see buildBatchedMessages), and records
+// exactly one notification_logs entry per user for the run.
+func (w *SentinelWorker) dispatchBatches(batches map[uint64]*SentinelBatch) (sent, usersNotified int) {
+	if len(batches) == 0 {
+		return 0, 0
+	}
+
+	timestamp := time.Now().In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
+	timestampEscaped := notifier.EscapeTelegramMarkdown(timestamp)
+
+	for _, batch := range batches {
+		if len(batch.Items) == 0 {
+			continue
+		}
+		if w.dispatchUserBatch(batch, timestampEscaped) {
+			sent++
+		}
+		usersNotified++
+	}
+
+	return sent, usersNotified
+}
+
+// dispatchUserBatch sends batch as one or more Telegram messages (per
+// buildBatchedMessages) and records exactly one notification_logs row for
+// the whole batch, reporting whether every message part sent successfully.
+func (w *SentinelWorker) dispatchUserBatch(batch *SentinelBatch, timestampEscaped string) bool {
+	blocks := make([]string, 0, len(batch.Items))
+	for _, item := range batch.Items {
+		blocks = append(blocks, buildSentinelItemBlock(batch.Language, item))
+	}
+
+	messages := buildBatchedMessages("🛡️ *WATCHTOWER SENTINEL REPORT*", timestampEscaped, blocks)
+
+	allSent := true
+	for _, msg := range messages {
+		if err := w.notifier.SendSentinelAlert(batch.ChatID, msg); err != nil {
+			allSent = false
+			log.Printf("[ERROR] dispatchUserBatch: send telegram alert to user %d failed: %v", batch.UserID, err)
+			break
+		}
+		// Telegram rate limit: stay under ~30 messages/second.
+		time.Sleep(telegramSendGap)
+	}
+
+	status := notifier.StatusSent
+	if !allSent {
+		status = notifier.StatusFailed
+	}
+
+	titles := make([]string, 0, len(batch.Items))
+	for _, item := range batch.Items {
+		titles = append(titles, truncateTitle(item.Title))
+	}
+	summary := strings.Join(titles, ", ") + " sentinel alert triggered"
+
+	if err := w.logNotification(batch.UserID, summary, status); err != nil {
+		log.Printf("[ERROR] dispatchUserBatch: log notification for user %d failed: %v", batch.UserID, err)
+	}
+
+	return allSent
+}
+
+func (w *SentinelWorker) logNotification(userID uint64, summary string, status notifier.Status) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
-	kw := keyword
 	return w.notifLogs.Record(ctx, notifier.LogEntry{
 		UserID:         userID,
 		NotifType:      notifier.TypeSentinel,
-		Keyword:        &kw,
-		ContentSummary: message,
+		ContentSummary: summary,
 		Status:         status,
 	})
 }
 
-// buildSentinelMessage formats the Telegram alert text in the subscriber's
-// preferred language ('en' for English, anything else — including the 'id'
-// default — for Indonesian), listing only that user's own matched keywords.
-func buildSentinelMessage(lang string, item sentinel.SentinelItem, analysis *sentinel.SentinelAnalysis, userKeywords []string) string {
-	analysisText := analysis.AnalysisID
+// buildSentinelItemBlock formats a single matched item's section within a
+// batched sentinel report, in the subscriber's preferred language ('en' for
+// English, anything else — including the 'id' default — for Indonesian),
+// listing only that user's own matched keywords for this item. Every
+// dynamic field is escaped for Telegram's MarkdownV2 parse mode — fetched
+// titles/descriptions and AI-generated analysis text routinely contain raw
+// underscores, asterisks, parentheses, etc. that would otherwise break
+// Telegram's entity parser (e.g. an unescaped "_" in "wp_ajax_nopriv_..." is
+// read as an unterminated italic marker). The literal "*" and "\|" around
+// the source type/title are static template characters, not dynamic data —
+// hardcoded with their own required MarkdownV2 backslash escape directly in
+// the format string below.
+func buildSentinelItemBlock(lang string, item SentinelBatchItem) string {
+	sourceType := notifier.EscapeTelegramMarkdown(item.SourceType)
+	title := notifier.EscapeTelegramMarkdown(truncateTitle(item.Title))
+	url := notifier.EscapeTelegramMarkdown(item.URL)
+	keywordsText := notifier.EscapeTelegramMarkdown(strings.Join(item.Keywords, ", "))
+
+	analysisText := item.AnalysisID
 	if lang == "en" {
-		analysisText = analysis.AnalysisEN
+		analysisText = item.AnalysisEN
 	}
 
-	timestamp := time.Now().In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
-	keywordsText := strings.Join(userKeywords, ", ")
+	block := fmt.Sprintf("📌 *%s* \\| %s\n🔗 %s", sourceType, title, url)
+	if analysisText != "" {
+		block += "\n" + notifier.EscapeTelegramMarkdown(analysisText)
+	}
+	block += "\n🏷️ " + keywordsText
 
-	// Every dynamic field must be escaped for Telegram's MarkdownV2 parse
-	// mode — fetched titles/descriptions and AI-generated analysis text
-	// routinely contain raw underscores, asterisks, parentheses, etc. that
-	// would otherwise break Telegram's entity parser (e.g. an unescaped
-	// "_" in "wp_ajax_nopriv_..." is read as an unterminated italic marker).
-	// The literal "*" around the bold header below is template formatting,
-	// not dynamic data, so it is intentionally left unescaped.
-	return fmt.Sprintf(
-		"🛡️ *WATCHTOWER SENTINEL*\n"+
-			"📌 Source: %s\n"+
-			"🔍 Item: %s\n"+
-			"🔗 %s\n\n"+
-			"%s\n\n"+
-			"🏷️ Keywords: %s\n"+
-			"⏰ %s",
-		notifier.EscapeTelegramMarkdown(item.SourceType),
-		notifier.EscapeTelegramMarkdown(item.Title),
-		notifier.EscapeTelegramMarkdown(item.URL),
-		notifier.EscapeTelegramMarkdown(analysisText),
-		notifier.EscapeTelegramMarkdown(keywordsText),
-		notifier.EscapeTelegramMarkdown(timestamp),
-	)
+	return block
+}
+
+// truncateTitle bounds title to sentinelTitleTruncateLen runes, appending an
+// ellipsis when truncated so it's clear the text was cut off.
+func truncateTitle(title string) string {
+	runes := []rune(title)
+	if len(runes) <= sentinelTitleTruncateLen {
+		return title
+	}
+	return string(runes[:sentinelTitleTruncateLen]) + "…"
 }

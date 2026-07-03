@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile.api
+    container_name: watchtower_api
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks: 
+      - watchtower_shared
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile.scheduler
+    container_name: watchtower_scheduler
+    env_file: ./backend/.env
+    restart: unless-stopped
+    networks:
+      - watchtower_shared
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: watchtower_frontend
+    ports:
+      - "8888:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks: 
+      - watchtower_shared
+
+networks:
+  watchtower_shared:
+    external: true

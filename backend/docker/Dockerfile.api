@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+
+# ---- Builder ----
+# backend/go.mod pins "toolchain go1.25.11" (required by the security-patch
+# upgrade that resolved several stdlib CVEs found via govulncheck). Building
+# from golang:1.22-alpine would still work — Go's toolchain manager
+# auto-downloads 1.25.11 at build time — but that needs network access
+# during every image build and adds several minutes. Building directly from
+# a 1.25 base avoids that download entirely.
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-w -s" \
+    -o /app/bin/api ./cmd/api
+
+# ---- Runtime ----
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S watchtower && adduser -S watchtower -G watchtower
+
+WORKDIR /app
+
+# migrations/ and configs/ are read at runtime (internal/db.RunMigrations
+# and internal/config.Load both resolve these as relative paths from CWD).
+COPY --from=builder /app/bin/api ./api
+COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/configs ./configs
+
+ENV TZ=Asia/Jakarta
+
+USER watchtower
+
+EXPOSE 8080
+
+CMD ["./api"]
