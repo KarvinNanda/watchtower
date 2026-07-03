@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -33,12 +34,16 @@ type NotifierInterface interface {
 // AssetAnalyzerInterface is the subset of asset.DeepSeekAnalyzer's behavior
 // AssetWorker depends on, allowing tests to inject a mock analyzer.
 type AssetAnalyzerInterface interface {
-	AnalyzeAsset(data *asset.FetchResult, subscribers []asset.SubscriberContext) (*asset.AnalysisResult, error)
+	AnalyzeAsset(data *asset.FetchResult, subscribers []asset.SubscriberContext, usdToIDR float64) (*asset.AnalysisResult, error)
 }
 
 // AssetWorker periodically fetches market data (via the Redis/MySQL cache
 // layer), evaluates every active asset subscription for alert conditions,
-// and notifies subscribers whose thresholds are breached.
+// and notifies subscribers whose thresholds are breached. Every triggered
+// alert for a given user within one run is batched into a single Telegram
+// message (see UserAlertBatch) rather than sent as separate messages per
+// symbol, to avoid spamming a user who subscribes to several assets that
+// trigger in the same run.
 type AssetWorker struct {
 	db       *sql.DB
 	redis    *redis.Client
@@ -101,8 +106,31 @@ type SubscriberData struct {
 	CooldownUntil       *time.Time
 }
 
-// Run is the scheduler entry point: it processes every distinct active
-// symbol, sending alerts as needed, and never panics — any error or
+// AlertItem is one triggered symbol alert for a single user, collected
+// during a run and rendered as one section of that user's batched message.
+type AlertItem struct {
+	Symbol      string
+	PriceUSD    float64
+	PriceIDR    float64
+	ChangePct   float64
+	TriggerType string
+	AnalysisID  string
+	AnalysisEN  string
+}
+
+// UserAlertBatch accumulates every AlertItem triggered for one user during
+// a single AssetWorker.Run, so they can be delivered as one combined
+// Telegram message instead of one message per symbol.
+type UserAlertBatch struct {
+	UserID   uint64
+	ChatID   int64
+	Language string
+	Alerts   []AlertItem
+}
+
+// Run is the scheduler entry point: it evaluates every distinct active
+// symbol, collecting triggered alerts per user, then sends each user at
+// most one combined message for the run. It never panics — any error or
 // recovered panic is logged and does not stop the run for other symbols.
 func (w *AssetWorker) Run() (err error) {
 	defer func() {
@@ -121,19 +149,25 @@ func (w *AssetWorker) Run() (err error) {
 		return fmt.Errorf("scheduler: get unique active symbols: %w", err)
 	}
 
-	var totalAlerts, totalErrors int
+	batches := make(map[uint64]*UserAlertBatch)
+	cooldownHoursByUser := make(map[uint64]int)
+
+	var totalTriggered, totalErrors int
 	for _, symbol := range symbols {
-		alerts, procErr := w.processSymbolSafe(symbol)
+		triggered, procErr := w.processSymbolSafe(symbol, batches, cooldownHoursByUser)
 		if procErr != nil {
 			totalErrors++
 			log.Printf("[ERROR] AssetWorker.Run: process symbol %s failed: %v", symbol.Symbol, procErr)
 			continue
 		}
-		totalAlerts += alerts
+		totalTriggered += triggered
 	}
 
-	log.Printf("[INFO] AssetWorker.Run: completed in %s — symbols processed: %d, alerts sent: %d, errors: %d",
-		time.Since(start), len(symbols), totalAlerts, totalErrors)
+	alertsSent, usersNotified := w.dispatchBatches(batches, cooldownHoursByUser)
+
+	log.Printf("[INFO] AssetWorker.Run: completed in %s — symbols processed: %d, alerts triggered: %d, "+
+		"users notified: %d, alerts sent: %d, errors: %d",
+		time.Since(start), len(symbols), totalTriggered, usersNotified, alertsSent, totalErrors)
 
 	return nil
 }
@@ -193,20 +227,31 @@ func (w *AssetWorker) getUniqueActiveSymbols() ([]SymbolInfo, error) {
 
 // processSymbolSafe wraps processSymbol with panic recovery so a failure
 // processing one symbol never stops the run for the remaining symbols.
-func (w *AssetWorker) processSymbolSafe(symbol SymbolInfo) (alertsSent int, err error) {
+func (w *AssetWorker) processSymbolSafe(
+	symbol SymbolInfo,
+	batches map[uint64]*UserAlertBatch,
+	cooldownHoursByUser map[uint64]int,
+) (alertsTriggered int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[ERROR] processSymbolSafe: recovered from panic processing %s: %v", symbol.Symbol, r)
 			err = fmt.Errorf("recovered from panic: %v", r)
 		}
 	}()
-	return w.processSymbol(symbol)
+	return w.processSymbol(symbol, batches, cooldownHoursByUser)
 }
 
 // processSymbol fetches fresh market data for symbol via the cache layer,
 // loads every active subscriber, runs one shared DeepSeek analysis for the
-// symbol, and evaluates each subscriber's alert conditions.
-func (w *AssetWorker) processSymbol(symbol SymbolInfo) (int, error) {
+// symbol, and evaluates each subscriber's alert conditions — appending a
+// triggered alert to that subscriber's UserAlertBatch in batches rather
+// than sending anything directly. Actual delivery happens once per user
+// after every symbol has been processed, via dispatchBatches.
+func (w *AssetWorker) processSymbol(
+	symbol SymbolInfo,
+	batches map[uint64]*UserAlertBatch,
+	cooldownHoursByUser map[uint64]int,
+) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
@@ -241,27 +286,46 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo) (int, error) {
 		})
 	}
 
-	analysis, err := w.analyzer.AnalyzeAsset(fetchResult, subscriberContexts)
+	usdToIDR, rateErr := currency.GetUSDToIDR()
+	if rateErr != nil {
+		log.Printf("[ERROR] processSymbol: get USD/IDR rate for %s: %v", symbol.Symbol, rateErr)
+	}
+
+	analysis, err := w.analyzer.AnalyzeAsset(fetchResult, subscriberContexts, usdToIDR)
 	if err != nil {
-		log.Printf("[WARN] processSymbol: AnalyzeAsset failed for %s, sending alert without AI commentary: %v", symbol.Symbol, err)
+		log.Printf("[WARN] processSymbol: AnalyzeAsset failed for %s, alerting without AI commentary: %v", symbol.Symbol, err)
 		analysis = nil
 	}
 
-	alertsSent := 0
+	priceIDR := fetchResult.PriceUSD * usdToIDR
+
+	triggered := 0
 	for _, sub := range subscribers {
-		sent, evalErr := w.evaluateAndAlertSafe(sub, fetchResult, analysis)
+		item, ok, evalErr := w.evaluateSubscriberSafe(sub, fetchResult, priceIDR, analysis)
 		if evalErr != nil {
 			log.Printf("[ERROR] processSymbol: evaluate alert for user %d symbol %s failed: %v", sub.UserID, symbol.Symbol, evalErr)
 			continue
 		}
-		if sent {
-			alertsSent++
-			// Telegram rate limit: stay under ~30 messages/second.
-			time.Sleep(telegramSendGap)
+		if !ok {
+			continue
 		}
+
+		cooldownHoursByUser[sub.UserID] = sub.AlertCooldownHours
+
+		batch, exists := batches[sub.UserID]
+		if !exists {
+			batch = &UserAlertBatch{
+				UserID:   sub.UserID,
+				ChatID:   sub.TelegramAssetChatID,
+				Language: sub.PreferredLanguage,
+			}
+			batches[sub.UserID] = batch
+		}
+		batch.Alerts = append(batch.Alerts, item)
+		triggered++
 	}
 
-	return alertsSent, nil
+	return triggered, nil
 }
 
 // loadSubscribers returns every active subscriber for symbol who has an
@@ -340,72 +404,61 @@ func (w *AssetWorker) loadSubscribers(ctx context.Context, symbol string) ([]Sub
 	return subscribers, rows.Err()
 }
 
-// evaluateAndAlertSafe wraps evaluateAndAlert with panic recovery so a
+// evaluateSubscriberSafe wraps evaluateSubscriber with panic recovery so a
 // failure evaluating one subscriber never stops evaluation of the rest.
-func (w *AssetWorker) evaluateAndAlertSafe(subscriber SubscriberData, fetchResult *asset.FetchResult, analysis *asset.AnalysisResult) (sent bool, err error) {
+func (w *AssetWorker) evaluateSubscriberSafe(
+	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, analysis *asset.AnalysisResult,
+) (item AlertItem, triggered bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[ERROR] evaluateAndAlertSafe: recovered from panic for user %d: %v", subscriber.UserID, r)
+			log.Printf("[ERROR] evaluateSubscriberSafe: recovered from panic for user %d: %v", subscriber.UserID, r)
 			err = fmt.Errorf("recovered from panic: %v", r)
 		}
 	}()
-	return w.evaluateAndAlert(subscriber, fetchResult, analysis)
+	return w.evaluateSubscriber(subscriber, fetchResult, priceIDR, analysis)
 }
 
-// evaluateAndAlert implements the full cooldown + threshold + notify +
-// persist flow for a single subscriber:
+// evaluateSubscriber implements the cooldown + threshold evaluation for a
+// single subscriber against fetchResult:
 //
 //  1. If the subscriber is still within cooldown AND the price hasn't
 //     moved by at least ALERT_PRICE_MOVE_PCT since the last alert, skip.
 //  2. Otherwise evaluate the subscription's threshold(s); if none are
 //     breached, skip.
-//  3. Send the Telegram alert in the subscriber's preferred language.
-//  4. On successful send, upsert alert_states (cooldown, last alerted
-//     price/type/time) and record the notification either way.
-func (w *AssetWorker) evaluateAndAlert(subscriber SubscriberData, fetchResult *asset.FetchResult, analysis *asset.AnalysisResult) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
-	defer cancel()
-
+//  3. Return the AlertItem to be appended to this subscriber's batch —
+//     delivery and cooldown persistence happen later, once per user, in
+//     dispatchBatches.
+func (w *AssetWorker) evaluateSubscriber(
+	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, analysis *asset.AnalysisResult,
+) (AlertItem, bool, error) {
 	if subscriber.CooldownUntil != nil && time.Now().Before(*subscriber.CooldownUntil) {
 		priceMovePct := 0.0
 		if subscriber.LastAlertedPriceUSD != nil && *subscriber.LastAlertedPriceUSD != 0 {
 			priceMovePct = math.Abs(fetchResult.PriceUSD-*subscriber.LastAlertedPriceUSD) / *subscriber.LastAlertedPriceUSD * 100
 		}
 		if priceMovePct < w.alertPriceMovePct {
-			return false, nil
+			return AlertItem{}, false, nil
 		}
 	}
 
 	triggerType, triggered := evaluateThreshold(subscriber, fetchResult)
 	if !triggered {
-		return false, nil
+		return AlertItem{}, false, nil
 	}
 
-	message := buildAlertMessage(subscriber.PreferredLanguage, fetchResult, triggerType, analysis)
-
-	sendErr := w.notifier.SendAssetAlert(subscriber.TelegramAssetChatID, message)
-
-	status := notifier.StatusSent
-	if sendErr != nil {
-		status = notifier.StatusFailed
-		log.Printf("[ERROR] evaluateAndAlert: send telegram alert to user %d failed: %v", subscriber.UserID, sendErr)
-	} else {
-		now := time.Now()
-		cooldownUntil := now.Add(time.Duration(subscriber.AlertCooldownHours) * time.Hour)
-		if err := w.upsertAlertState(ctx, subscriber.UserID, fetchResult.Symbol, triggerType, fetchResult.PriceUSD, now, cooldownUntil); err != nil {
-			log.Printf("[ERROR] evaluateAndAlert: upsert alert state for user %d failed: %v", subscriber.UserID, err)
-		}
+	item := AlertItem{
+		Symbol:      fetchResult.Symbol,
+		PriceUSD:    fetchResult.PriceUSD,
+		PriceIDR:    priceIDR,
+		ChangePct:   fetchResult.ChangePct24h,
+		TriggerType: triggerType,
+	}
+	if analysis != nil {
+		item.AnalysisID = analysis.AnalysisID
+		item.AnalysisEN = analysis.AnalysisEN
 	}
 
-	if err := w.logNotification(ctx, subscriber.UserID, fetchResult.Symbol, message, status); err != nil {
-		log.Printf("[ERROR] evaluateAndAlert: log notification for user %d failed: %v", subscriber.UserID, err)
-	}
-
-	if sendErr != nil {
-		return false, fmt.Errorf("send telegram alert: %w", sendErr)
-	}
-
-	return true, nil
+	return item, true, nil
 }
 
 // evaluateThreshold checks subscriber's alert_type against fetchResult and
@@ -433,6 +486,87 @@ func evaluateThreshold(subscriber SubscriberData, fetchResult *asset.FetchResult
 	return "", false
 }
 
+// dispatchBatches sends one combined Telegram message per user in batches
+// (splitting into multiple messages only if the combined text would exceed
+// Telegram's 4096-character limit — see buildBatchedMessages), persists
+// alert_states for every alert successfully delivered, and records exactly
+// one notification_logs entry per user for the run.
+func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch, cooldownHoursByUser map[uint64]int) (alertsSent, usersNotified int) {
+	if len(batches) == 0 {
+		return 0, 0
+	}
+
+	now := time.Now()
+	timestamp := now.In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
+	timestampEscaped := notifier.EscapeTelegramMarkdown(timestamp)
+
+	for _, batch := range batches {
+		if len(batch.Alerts) == 0 {
+			continue
+		}
+		w.dispatchUserBatch(batch, cooldownHoursByUser[batch.UserID], timestampEscaped, now)
+		alertsSent += len(batch.Alerts)
+		usersNotified++
+	}
+
+	return alertsSent, usersNotified
+}
+
+// dispatchUserBatch sends batch as one or more Telegram messages (per
+// buildBatchedMessages), then — only if every message part sent
+// successfully — upserts alert_states for each included alert so the next
+// run's cooldown check has the correct baseline. Exactly one
+// notification_logs row is recorded for the whole batch either way.
+func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, cooldownHours int, timestampEscaped string, now time.Time) {
+	blocks := make([]string, 0, len(batch.Alerts))
+	for _, alert := range batch.Alerts {
+		blocks = append(blocks, buildAssetItemBlock(batch.Language, alert))
+	}
+
+	messages := buildBatchedMessages("🔔 *WATCHTOWER ASSET ALERT*", timestampEscaped, blocks)
+
+	allSent := true
+	for _, msg := range messages {
+		if err := w.notifier.SendAssetAlert(batch.ChatID, msg); err != nil {
+			allSent = false
+			log.Printf("[ERROR] dispatchUserBatch: send telegram alert to user %d failed: %v", batch.UserID, err)
+			break
+		}
+		// Telegram rate limit: stay under ~30 messages/second.
+		time.Sleep(telegramSendGap)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
+	defer cancel()
+
+	status := notifier.StatusSent
+	if !allSent {
+		status = notifier.StatusFailed
+	} else {
+		cooldownUntil := now.Add(time.Duration(cooldownHours) * time.Hour)
+		for _, alert := range batch.Alerts {
+			if err := w.upsertAlertState(ctx, batch.UserID, alert.Symbol, alert.TriggerType, alert.PriceUSD, now, cooldownUntil); err != nil {
+				log.Printf("[ERROR] dispatchUserBatch: upsert alert state for user %d symbol %s failed: %v", batch.UserID, alert.Symbol, err)
+			}
+		}
+	}
+
+	symbols := make([]string, 0, len(batch.Alerts))
+	for _, alert := range batch.Alerts {
+		symbols = append(symbols, alert.Symbol)
+	}
+	summary := strings.Join(symbols, ", ") + " alert triggered"
+
+	if err := w.notifLogs.Record(ctx, notifier.LogEntry{
+		UserID:         batch.UserID,
+		NotifType:      notifier.TypeAsset,
+		ContentSummary: summary,
+		Status:         status,
+	}); err != nil {
+		log.Printf("[ERROR] dispatchUserBatch: log notification for user %d failed: %v", batch.UserID, err)
+	}
+}
+
 // upsertAlertState records the alert just sent so the next run's cooldown
 // check has the correct baseline.
 func (w *AssetWorker) upsertAlertState(ctx context.Context, userID uint64, symbol, alertType string, price float64, alertedAt, cooldownUntil time.Time) error {
@@ -452,84 +586,47 @@ func (w *AssetWorker) upsertAlertState(ctx context.Context, userID uint64, symbo
 	return nil
 }
 
-func (w *AssetWorker) logNotification(ctx context.Context, userID uint64, symbol, message string, status notifier.Status) error {
-	assetSymbol := symbol
-	return w.notifLogs.Record(ctx, notifier.LogEntry{
-		UserID:         userID,
-		NotifType:      notifier.TypeAsset,
-		AssetSymbol:    &assetSymbol,
-		ContentSummary: message,
-		Status:         status,
-	})
-}
+// buildAssetItemBlock formats a single triggered symbol's section within a
+// batched alert message, in the subscriber's preferred language ('en' for
+// English, anything else — including the 'id' default — for Indonesian).
+// Every dynamic field is escaped for Telegram's MarkdownV2 parse mode via
+// notifier.EscapeTelegramMarkdown, including the formatted price/percentage
+// text — formatUSD/formatIDR's thousands-separator commas are harmless to
+// escape (comma isn't a MarkdownV2 special character) but their decimal
+// points are. The leading "*"/trailing bold marker around the symbol and
+// the "(", ")" wrapping the IDR amount are static template characters, not
+// dynamic data — they're hardcoded with their own required MarkdownV2
+// backslash escapes directly in the format string below.
+func buildAssetItemBlock(lang string, item AlertItem) string {
+	symbol := notifier.EscapeTelegramMarkdown(item.Symbol)
+	priceUSDText := notifier.EscapeTelegramMarkdown(formatUSD(item.PriceUSD))
+	priceIDRText := notifier.EscapeTelegramMarkdown(formatIDR(item.PriceIDR))
+	changePctText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.2f", item.ChangePct))
 
-// buildAlertMessage formats the Telegram alert text in the subscriber's
-// preferred language ('en' for English, anything else — including the
-// 'id' default — for Indonesian).
-func buildAlertMessage(lang string, fetchResult *asset.FetchResult, triggerType string, analysis *asset.AnalysisResult) string {
-	priceIDR, err := currency.ConvertToIDR(fetchResult.PriceUSD)
-	if err != nil {
-		log.Printf("[ERROR] buildAlertMessage: convert %s to IDR: %v", fetchResult.Symbol, err)
+	priceLabel := "💰 Harga"
+	triggerLabel := triggerLabelID(item.TriggerType)
+	analysisText := item.AnalysisID
+	if lang == "en" {
+		priceLabel = "💰 Price"
+		triggerLabel = triggerLabelEN(item.TriggerType)
+		analysisText = item.AnalysisEN
 	}
 
-	timestamp := time.Now().In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
-
-	var analysisText string
-	if analysis != nil {
-		if lang == "en" {
-			analysisText = analysis.AnalysisEN
-		} else {
-			analysisText = analysis.AnalysisID
-		}
-	}
-
-	// Every dynamic field must be escaped for Telegram's MarkdownV2 parse
-	// mode, including the formatted numbers below — a decimal point like
-	// the one in "60123.45" is itself a MarkdownV2 special character.
-	// Numbers are formatted to strings first so EscapeTelegramMarkdown has
-	// something to operate on. The literal "*" around the bold header is
-	// template formatting, not dynamic data, so it stays unescaped.
-	symbol := notifier.EscapeTelegramMarkdown(fetchResult.Symbol)
-	priceUSDText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.2f", fetchResult.PriceUSD))
-	priceIDRText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.0f", priceIDR))
-	changePctText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.2f", fetchResult.ChangePct24h))
-	timestampEscaped := notifier.EscapeTelegramMarkdown(timestamp)
+	block := fmt.Sprintf(
+		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s%%\n⚠️ Trigger: %s",
+		symbol, priceLabel, priceUSDText, priceIDRText, changePctText, notifier.EscapeTelegramMarkdown(triggerLabel),
+	)
 
 	// When AnalyzeAsset fails (DeepSeek down/timed out/rate-limited),
 	// analysisText is empty and the alert still needs to go out — the
 	// price/threshold breach is the important, time-sensitive part; the AI
-	// commentary is a nice-to-have. Omit the AI section entirely instead of
+	// commentary is a nice-to-have. Omit the AI line entirely instead of
 	// leaving a blank line where it would have gone.
-	var aiSection string
 	if analysisText != "" {
-		aiSection = "\n\n" + notifier.EscapeTelegramMarkdown(analysisText)
+		block += "\n" + notifier.EscapeTelegramMarkdown(analysisText)
 	}
 
-	if lang == "en" {
-		return fmt.Sprintf(
-			"🔔 *WATCHTOWER ASSET ALERT*\n"+
-				"📊 Symbol: %s\n"+
-				"💰 Price: $%s (Rp %s)\n"+
-				"📈 24h: %s%%\n"+
-				"⚠️ Trigger: %s"+
-				"%s\n\n"+
-				"⏰ %s",
-			symbol, priceUSDText, priceIDRText, changePctText,
-			notifier.EscapeTelegramMarkdown(triggerLabelEN(triggerType)), aiSection, timestampEscaped,
-		)
-	}
-
-	return fmt.Sprintf(
-		"🔔 *WATCHTOWER ASSET ALERT*\n"+
-			"📊 Symbol: %s\n"+
-			"💰 Harga: $%s (Rp %s)\n"+
-			"📈 24h: %s%%\n"+
-			"⚠️ Trigger: %s"+
-			"%s\n\n"+
-			"⏰ %s",
-		symbol, priceUSDText, priceIDRText, changePctText,
-		notifier.EscapeTelegramMarkdown(triggerLabelID(triggerType)), aiSection, timestampEscaped,
-	)
+	return block
 }
 
 func triggerLabelID(triggerType string) string {

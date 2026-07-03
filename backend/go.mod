@@ -1,6 +1,6 @@
 module github.com/karvin-nanda/watchtower
 
-go 1.23.0
+go 1.25.0
 
 toolchain go1.25.11
 
@@ -15,6 +15,7 @@ require (
 	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.36.0
+	golang.org/x/text v0.38.0
 )
 
 require (
@@ -61,7 +62,6 @@ require (
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

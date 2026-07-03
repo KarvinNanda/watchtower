@@ -4,18 +4,22 @@
 .env
 .env.*
 !.env.example
+backend/.env
+frontend/.env
 .claude
 
 # =========================================
 # Go (backend)
 # =========================================
 backend/bin/
+bin/
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 *.test
+*.log
 
 # Test / coverage artifacts
 coverage.out
@@ -31,15 +35,25 @@ gosec-results.sarif
 /vendor/
 
 # =========================================
-# Node / frontend (menyusul)
+# Node / frontend (Vite + Vue 3)
 # =========================================
 frontend/node_modules/
-frontend/.next/
-frontend/out/
+node_modules/
 frontend/dist/
-frontend/.env
+dist/
+frontend/dist-ssr/
 frontend/.env.*
 !frontend/.env.example
+frontend/*.local
+
+# SCA / test coverage output
+frontend/retire-report.json
+frontend/coverage/
+
+# =========================================
+# Docker / TLS
+# =========================================
+nginx/ssl/
 
 # =========================================
 # Editor / OS

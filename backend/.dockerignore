@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.git
+bin/
+coverage.out
+coverage.html
+security-report.json
+*.sarif
+*.test

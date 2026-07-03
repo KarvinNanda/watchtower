@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+
+# ---- Builder ----
+# See Dockerfile.api for why this builds from golang:1.25-alpine rather
+# than the 1.22 base originally specified: go.mod pins toolchain go1.25.11.
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-w -s" \
+    -o /app/bin/scheduler ./cmd/scheduler
+
+# ---- Runtime ----
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S watchtower && adduser -S watchtower -G watchtower
+
+WORKDIR /app
+
+# cmd/scheduler also calls config.Load(".env") and db.RunMigrations
+# ("migrations") on startup, so it needs the same two directories as the
+# api image even though it has no HTTP server of its own.
+COPY --from=builder /app/bin/scheduler ./scheduler
+COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/configs ./configs
+
+ENV TZ=Asia/Jakarta
+
+USER watchtower
+
+CMD ["./scheduler"]
