@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 // AlertType mirrors the asset_subscriptions.alert_type enum.
@@ -120,7 +122,6 @@ const (
 	deepSeekAPIURL      = "https://api.deepseek.com/v1/chat/completions"
 	deepSeekMaxTokens   = 800
 	deepSeekTemperature = 0.3
-	deepSeekHTTPTimeout = 30 * time.Second
 )
 
 // DeepSeekAnalyzer produces bilingual AI market commentary via the
@@ -134,13 +135,13 @@ type DeepSeekAnalyzer struct {
 	httpClient *http.Client
 }
 
-// NewDeepSeekAnalyzer builds a DeepSeekAnalyzer using apiKey/model, with a
-// 30-second HTTP timeout.
+// NewDeepSeekAnalyzer builds a DeepSeekAnalyzer using apiKey/model, with the
+// standard hardened HTTP client (see utils.NewHTTPClient).
 func NewDeepSeekAnalyzer(apiKey, model string) *DeepSeekAnalyzer {
 	return &DeepSeekAnalyzer{
 		apiKey:     apiKey,
 		model:      model,
-		httpClient: &http.Client{Timeout: deepSeekHTTPTimeout},
+		httpClient: utils.NewHTTPClient(),
 	}
 }
 
@@ -236,13 +237,32 @@ func buildAnalysisPrompt(data *FetchResult, priceIDR, usdToIDR float64, subscrib
 		}
 	}
 
+	// The technical-indicator block is only available for stock symbols
+	// (see enrichWithTechnicalIndicators in technical.go) — data.Signal is
+	// left at its zero value "" for crypto/gold, which is used here as the
+	// flag for whether to include the block at all, rather than showing
+	// DeepSeek a block of misleading zeros for assets with no history
+	// wired up.
+	var technicalBlock string
+	if data.Signal != "" {
+		technicalBlock = fmt.Sprintf(`
+Data teknikal per aset:
+- RSI (14): %.2f — di bawah 30 oversold, di atas 70 overbought
+- Volatilitas (annualized): %.2f%%
+- Trend: %s (BULLISH/BEARISH/NEUTRAL)
+- Signal: %s (BUY/SELL/HOLD)
+- Range 14 hari: $%.2f - $%.2f
+- Target beli: $%.2f | Target jual: $%.2f
+`, data.RSI, data.Volatility, data.Trend, data.Signal, data.RangeLow14D, data.RangeHigh14D, data.TargetBuyUSD, data.TargetSellUSD)
+	}
+
 	return fmt.Sprintf(`Kamu adalah analis pasar untuk aplikasi monitoring harga WatchTower.
 
 Data harga terkini untuk %s:
 - Harga: $%.2f USD (Rp%.0f IDR)
 - Perubahan 24 jam: %.2f%%
 - Sumber data: %s
-
+%s
 Kurs saat ini: 1 USD = Rp %.0f (gunakan nilai ini untuk semua konversi).
 
 Aturan format angka WAJIB diikuti:
@@ -253,12 +273,18 @@ Aturan format angka WAJIB diikuti:
 Konteks subscriber:
 %s
 
-Tulis analisis singkat (maksimal 200 kata per bahasa) yang membahas kondisi pasar saat ini,
-apakah threshold subscriber di atas berisiko tersentuh, dan rekomendasi singkat.
+Format analisis yang WAJIB diikuti:
+1. Signal: BUY/SELL/HOLD dengan alasan 1 kalimat
+2. Durasi hold yang disarankan
+3. Level support dan resisten terdekat
+4. Action item konkret dalam 24 jam
+5. Satu peringatan risiko utama
+
+Maksimal 150 kata per bahasa. Gunakan angka spesifik, bukan range yang terlalu lebar.
 
 Balas HANYA dengan JSON valid tanpa markdown code fence, dengan struktur persis seperti ini:
 {"analysis_id": "<analisis dalam Bahasa Indonesia>", "analysis_en": "<analysis in English>"}`,
-		data.Symbol, data.PriceUSD, priceIDR, data.ChangePct24h, data.Source, usdToIDR, thresholds.String())
+		data.Symbol, data.PriceUSD, priceIDR, data.ChangePct24h, data.Source, technicalBlock, usdToIDR, thresholds.String())
 }
 
 func (a *DeepSeekAnalyzer) callDeepSeek(prompt string) (string, error) {

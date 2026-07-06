@@ -6,6 +6,7 @@ package middleware
 import (
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,41 +61,18 @@ func RateLimiter(maxRequests int, windowSeconds int) gin.HandlerFunc {
 		counter, _ := counterVal.(*int64)
 		count := atomic.AddInt64(counter, 1)
 
+		remaining := int64(maxRequests) - count
+		if remaining < 0 {
+			remaining = 0
+		}
+		c.Header("X-RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+
 		if count > int64(maxRequests) {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"success": false,
 				"error":   "rate_limit_exceeded",
 				"message": "too many requests",
 			})
-			return
-		}
-
-		c.Next()
-	}
-}
-
-// CORSMiddleware handles cross-origin requests. In development (env !=
-// "production") it allows any origin; in production it only allows
-// frontendURL. env and frontendURL are passed in explicitly (from
-// config.Config) rather than read globally, keeping this package
-// dependency-free of internal/config.
-func CORSMiddleware(env, frontendURL string) gin.HandlerFunc {
-	allowAll := env != "production" || frontendURL == ""
-
-	return func(c *gin.Context) {
-		if allowAll {
-			c.Header("Access-Control-Allow-Origin", "*")
-		} else {
-			c.Header("Access-Control-Allow-Origin", frontendURL)
-			c.Header("Vary", "Origin")
-		}
-
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-		c.Header("Access-Control-Max-Age", "86400")
-
-		if c.Request.Method == http.MethodOptions {
-			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 

@@ -140,7 +140,11 @@ func isDuplicateEntry(err error) bool {
 // convention used throughout the rest of the codebase (scheduler, cache).
 const dbTimeout = 30 * time.Second
 
-const maxKeywordLength = 100
+// maxKeywordLength was tightened from 100 to 50 as part of a security
+// hardening pass — a shorter cap gives less room for a subscribed keyword
+// to be abused as an oversized payload wherever it's later interpolated
+// (the sentinel_seen_items matching query, batched Telegram messages).
+const maxKeywordLength = 50
 
 // Errors returned by UserService. Handlers can compare against these with
 // errors.Is to decide which HTTP status/code to respond with.
@@ -153,7 +157,7 @@ var (
 	ErrMaxUniqueSymbolsReached = errors.New("maximum number of unique tracked symbols reached")
 	ErrSubscriptionNotFound    = errors.New("subscription not found")
 	ErrEmptyKeyword            = errors.New("keyword cannot be empty")
-	ErrKeywordTooLong          = errors.New("keyword must be at most 100 characters")
+	ErrKeywordTooLong          = errors.New("keyword must be at most 50 characters")
 	ErrDuplicateKeyword        = errors.New("keyword already subscribed")
 	ErrInvalidExpertiseLevel   = errors.New("expertise_level must be one of: beginner, intermediate, advanced")
 	ErrInvalidPreferredLang    = errors.New("preferred_language must be one of: id, en")

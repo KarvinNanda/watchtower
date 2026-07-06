@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
 	"github.com/karvin-nanda/watchtower/internal/auth"
@@ -31,12 +32,26 @@ import (
 const maxRequestBodyBytes = 1 << 20
 
 // Rate limits, per middleware.RateLimiter's (maxRequests, windowSeconds)
-// signature.
+// signature. Register/login get their own, stricter limits than the
+// general per-user API limit since they're unauthenticated and the most
+// attractive targets for credential-stuffing/brute-force and registration
+// spam; the webhook limit protects against a flood of forged Telegram
+// webhook calls.
 const (
 	authRateLimitMaxRequests = 10
 	authRateLimitWindowSecs  = 60
-	apiRateLimitMaxRequests  = 100
-	apiRateLimitWindowSecs   = 60
+
+	registerRateLimitMaxRequests = 5
+	registerRateLimitWindowSecs  = 60
+
+	loginRateLimitMaxRequests = 10
+	loginRateLimitWindowSecs  = 60
+
+	webhookRateLimitMaxRequests = 100
+	webhookRateLimitWindowSecs  = 60
+
+	apiRateLimitMaxRequests = 100
+	apiRateLimitWindowSecs  = 60
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -61,7 +76,13 @@ func main() {
 	userService := user.NewUserService(database.SQL, cfg.Limits.MaxUniqueSymbols)
 	botHandler := telegram.NewBotHandler(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 
-	if cfg.Server.Env == "production" {
+	// isProduction drives both gin's own release mode and the auth cookie's
+	// Secure/SameSite attributes (see auth.Service.setAuthCookie) — a
+	// single source of truth so a misconfigured environment can't set
+	// gin to release mode while still issuing a non-Secure cookie, or
+	// vice versa.
+	isProduction := cfg.Server.Env == "production"
+	if isProduction {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -72,14 +93,53 @@ func main() {
 	// uncaught. Logger and the security/CORS/size-limit/SQLi middleware are
 	// registered after it for that reason, even though the one-shot spec
 	// listed Logger/Recovery last.
-	router.Use(gin.Recovery())
+	//
+	// gin.CustomRecovery (rather than plain gin.Recovery) lets us control
+	// exactly what reaches the client on a panic: gin.Recovery's default
+	// behavior renders the recovered value into the response in debug mode,
+	// which can leak internal detail (a Go stack frame, a raw error
+	// string) to an attacker probing for panics — the handler below always
+	// logs the real error server-side but returns a fixed generic message.
+	router.Use(gin.CustomRecovery(func(c *gin.Context, err interface{}) {
+		log.Printf("[PANIC] recovered: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "internal_server_error",
+			"message": "An unexpected error occurred",
+		})
+	}))
 	router.Use(gin.Logger())
 	router.Use(middleware.SecurityHeaders())
-	router.Use(middleware.CORSMiddleware(cfg.Server.Env, cfg.Server.FrontendURL))
+	// AllowCredentials is required for the browser to send/accept the
+	// httpOnly auth cookie on cross-origin requests (the SPA is served from
+	// a different origin than the API in local dev, and from the same
+	// origin only in production via nginx's /api/ proxy_pass) — and per the
+	// Fetch/XHR spec, AllowCredentials can never be paired with a wildcard
+	// AllowOrigins, so every allowed origin must be listed explicitly here
+	// rather than falling back to "*" the way the previous CORS middleware
+	// did in non-production environments.
+	allowedOrigins := []string{
+		"http://localhost:5173",
+		"http://192.168.146.128:8888",
+	}
+	// gin-contrib/cors validates every entry looks like a real origin
+	// ("http://..."/"https://..."/"*") and panics at startup otherwise —
+	// FRONTEND_URL is blank in most local dev setups, so it's only
+	// appended when actually configured (e.g. in production).
+	if cfg.Server.FrontendURL != "" {
+		allowedOrigins = append(allowedOrigins, cfg.Server.FrontendURL)
+	}
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     allowedOrigins,
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type", "X-Requested-With"},
+		AllowCredentials: true,
+		MaxAge:           86400 * time.Second,
+	}))
 	router.Use(middleware.RequestSizeLimit(maxRequestBodyBytes))
 	router.Use(middleware.SQLInjectionGuard())
 
-	registerRoutes(router, database, authService, userService)
+	registerRoutes(router, database, authService, userService, isProduction)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -87,8 +147,12 @@ func main() {
 	var wg sync.WaitGroup
 
 	if cfg.Telegram.Mode == "webhook" {
-		router.POST("/webhook/telegram/asset", botHandler.WebhookHandler("asset"))
-		router.POST("/webhook/telegram/sentinel", botHandler.WebhookHandler("sentinel"))
+		// One shared limiter instance (not one per route) so the 100
+		// req/min cap applies combined across /webhook/telegram/*, not
+		// 100 for each of asset and sentinel independently.
+		webhookLimiter := middleware.RateLimiter(webhookRateLimitMaxRequests, webhookRateLimitWindowSecs)
+		router.POST("/webhook/telegram/asset", webhookLimiter, botHandler.WebhookHandler("asset"))
+		router.POST("/webhook/telegram/sentinel", webhookLimiter, botHandler.WebhookHandler("sentinel"))
 		log.Println("[INFO] main: telegram webhook routes registered at /webhook/telegram/{asset,sentinel}")
 	} else {
 		log.Println("[INFO] main: starting telegram long-polling (TELEGRAM_MODE=polling)")
@@ -137,16 +201,27 @@ func main() {
 	log.Println("[INFO] main: api stopped gracefully")
 }
 
-func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService) {
+func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService, isProduction bool) {
 	router.GET("/health", healthHandler(database))
 
 	api := router.Group("/api")
 
+	// register/login each get their own rate limiter instance (stricter for
+	// register, since unauthenticated registration is cheaper to abuse for
+	// spam than login is for brute-forcing) rather than sharing the whole
+	// group's limiter, so hammering one endpoint doesn't consume the
+	// other's request budget.
 	authGroup := api.Group("/auth")
-	authGroup.Use(middleware.RateLimiter(authRateLimitMaxRequests, authRateLimitWindowSecs))
-	authGroup.POST("/register", registerHandler(authService))
-	authGroup.POST("/login", loginHandler(authService))
-	authGroup.GET("/me", auth.AuthMiddleware(authService), meHandler(authService))
+	authGroup.POST("/register",
+		middleware.RateLimiter(registerRateLimitMaxRequests, registerRateLimitWindowSecs),
+		registerHandler(authService))
+	authGroup.POST("/login",
+		middleware.RateLimiter(loginRateLimitMaxRequests, loginRateLimitWindowSecs),
+		loginHandler(authService, isProduction))
+	authGroup.GET("/me",
+		middleware.RateLimiter(authRateLimitMaxRequests, authRateLimitWindowSecs),
+		auth.AuthMiddleware(authService), meHandler(authService))
+	authGroup.POST("/logout", logoutHandler(authService))
 
 	protected := api.Group("/")
 	protected.Use(middleware.RateLimiter(apiRateLimitMaxRequests, apiRateLimitWindowSecs))
@@ -300,7 +375,10 @@ type loginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-func loginHandler(authService *auth.Service) gin.HandlerFunc {
+// loginHandler authenticates the request and, on success, has
+// authService.Login set the JWT as an httpOnly cookie directly on c — the
+// response body carries only the user object, never the token itself.
+func loginHandler(authService *auth.Service, isProduction bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req loginRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -308,7 +386,7 @@ func loginHandler(authService *auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		token, err := authService.Login(c.Request.Context(), req.Email, req.Password, c.ClientIP())
+		u, err := authService.Login(c, req.Email, req.Password, isProduction)
 		if err != nil {
 			if errors.Is(err, auth.ErrInvalidCredentials) {
 				respondError(c, http.StatusUnauthorized, "unauthorized", err.Error())
@@ -319,21 +397,18 @@ func loginHandler(authService *auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		claims, err := authService.ValidateToken(token)
-		if err != nil {
-			log.Printf("[ERROR] loginHandler: validate freshly issued token: %v", err)
-			respondError(c, http.StatusInternalServerError, "internal_error", "failed to login")
-			return
-		}
+		c.JSON(http.StatusOK, gin.H{"user": toUserResponse(u)})
+	}
+}
 
-		u, err := authService.GetUserByID(c.Request.Context(), claims.UserID)
-		if err != nil {
-			log.Printf("[ERROR] loginHandler: get user by id: %v", err)
-			respondError(c, http.StatusInternalServerError, "internal_error", "failed to login")
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"token": token, "user": toUserResponse(u)})
+// logoutHandler clears the httpOnly auth cookie. It doesn't require
+// AuthMiddleware — clearing an already-missing/expired cookie is harmless,
+// and gating it behind auth would just mean a client with a stale/invalid
+// cookie can never successfully call it to clean up.
+func logoutHandler(authService *auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authService.Logout(c)
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "logged out successfully"})
 	}
 }
 

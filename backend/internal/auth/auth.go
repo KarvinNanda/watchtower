@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -28,6 +30,15 @@ const (
 	assetBotType            = "asset"
 	sentinelBotType         = "sentinel"
 	tokenIssuer             = "watchtower"
+
+	// authCookieName/authCookiePath identify the httpOnly cookie Login sets
+	// and Logout clears. The JWT itself is never exposed to frontend
+	// JavaScript this way — only sent automatically by the browser on
+	// same-site requests (see AuthMiddleware in middleware.go, which reads
+	// it back via c.Cookie), which is what closes off the XSS-token-theft
+	// risk a localStorage-held token has.
+	authCookieName = "watchtower_token"
+	authCookiePath = "/"
 
 	// failedLoginWindow/failedLoginThreshold configure the brute-force
 	// warning: 5+ failed logins from one IP within 15 minutes gets logged.
@@ -226,10 +237,16 @@ func (s *Service) Register(ctx context.Context, email, password string) error {
 	return nil
 }
 
-// Login verifies an email/password pair and returns a signed JWT for the
-// matching user. ip is the client's source address, used only for security
-// logging (failed-attempt tracking) — never persisted.
-func (s *Service) Login(ctx context.Context, email, password, ip string) (string, error) {
+// Login verifies an email/password pair and, on success, sets a signed JWT
+// as an httpOnly cookie on c's response (see setAuthCookie) instead of
+// returning the token to the caller — the browser then attaches it
+// automatically on subsequent requests, and frontend JavaScript never has
+// direct access to it, closing off the token-theft-via-XSS risk a
+// localStorage-held token has. isProduction controls the cookie's Secure
+// and SameSite attributes (see setAuthCookie); the client's IP is read from
+// c for security logging (failed-attempt tracking) — never persisted.
+func (s *Service) Login(c *gin.Context, email, password string, isProduction bool) (*User, error) {
+	ctx := c.Request.Context()
 	email = normalizeEmail(email)
 
 	u, err := s.getUserByEmail(ctx, email)
@@ -242,25 +259,55 @@ func (s *Service) Login(ctx context.Context, email, password, ip string) (string
 			// non-existent email currently returns almost instantly while
 			// bcrypt itself is deliberately slow.
 			_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
-			s.logFailedLogin(ip, email)
-			return "", ErrInvalidCredentials
+			s.logFailedLogin(c.ClientIP(), email)
+			return nil, ErrInvalidCredentials
 		}
 		log.Printf("[ERROR] Login: get user by email: %v", err)
-		return "", fmt.Errorf("get user by email: %w", err)
+		return nil, fmt.Errorf("get user by email: %w", err)
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-		s.logFailedLogin(ip, email)
-		return "", ErrInvalidCredentials
+		s.logFailedLogin(c.ClientIP(), email)
+		return nil, ErrInvalidCredentials
 	}
 
 	token, err := s.generateToken(u)
 	if err != nil {
 		log.Printf("[ERROR] Login: generate token: %v", err)
-		return "", fmt.Errorf("generate token: %w", err)
+		return nil, fmt.Errorf("generate token: %w", err)
 	}
 
-	return token, nil
+	s.setAuthCookie(c, token, isProduction)
+
+	return u, nil
+}
+
+// setAuthCookie sets the httpOnly JWT cookie Login issues. Secure and
+// SameSite both derive from isProduction rather than being independently
+// configurable: in development (plain HTTP) Secure must be false or
+// browsers refuse to store the cookie at all, and SameSite=Lax is
+// appropriate for that same-origin-ish local setup; in production (HTTPS)
+// Secure=true is required and SameSite=Strict is safe to tighten to, since
+// there's no legitimate cross-site flow that needs the cookie sent. Tying
+// both to the single isProduction flag (rather than adding separate
+// COOKIE_SECURE/COOKIE_SAMESITE env vars) avoids a configuration that could
+// contradict APP_ENV and accidentally ship a non-Secure cookie to
+// production.
+func (s *Service) setAuthCookie(c *gin.Context, token string, isProduction bool) {
+	sameSite := http.SameSiteLaxMode
+	if isProduction {
+		sameSite = http.SameSiteStrictMode
+	}
+	c.SetSameSite(sameSite)
+	c.SetCookie(authCookieName, token, int(s.jwtExpiry.Seconds()), authCookiePath, "", isProduction, true)
+}
+
+// Logout clears the httpOnly auth cookie Login sets. Browsers match
+// cookies for deletion by name/domain/path only (not by Secure/HttpOnly/
+// SameSite), so a fixed maxAge=-1 delete works regardless of which
+// isProduction value the cookie was originally set with.
+func (s *Service) Logout(c *gin.Context) {
+	c.SetCookie(authCookieName, "", -1, authCookiePath, "", false, true)
 }
 
 // logFailedLogin records a failed login attempt for brute-force detection.
@@ -292,23 +339,26 @@ func (s *Service) generateToken(u *User) (string, error) {
 	return signed, nil
 }
 
+// jwtParser rejects "alg: none" and any non-HS256 algorithm outright via
+// WithValidMethods (checked by the library before the key function below is
+// even called, rather than via a manual type assertion on the token's
+// signing method), requires a valid, unexpired exp claim, requires an iat
+// claim, and — since every token this service issues sets one — requires
+// the iss claim to match tokenIssuer.
+var jwtParser = jwt.NewParser(
+	jwt.WithValidMethods([]string{"HS256"}),
+	jwt.WithExpirationRequired(),
+	jwt.WithIssuedAt(),
+	jwt.WithIssuer(tokenIssuer),
+)
+
 // ValidateToken parses and verifies tokenString, returning its claims if
-// valid. It explicitly rejects tokens using the "none" algorithm (via the
-// HMAC-only type assertion in the key function below), requires a valid,
-// unexpired exp claim, and — since every token this service issues sets
-// one — requires the iss claim to match tokenIssuer.
+// valid.
 func (s *Service) ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-		// Rejects "alg: none" and any non-HMAC algorithm outright: a token
-		// signed with SigningMethodNone (or any asymmetric method) is a
-		// different concrete type than *jwt.SigningMethodHMAC, so this
-		// assertion fails before the secret is ever compared.
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
+	token, err := jwtParser.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
 		return []byte(s.jwtSecret), nil
-	}, jwt.WithExpirationRequired(), jwt.WithIssuer(tokenIssuer))
+	})
 	if err != nil || !token.Valid {
 		return nil, ErrInvalidToken
 	}

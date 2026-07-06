@@ -35,21 +35,24 @@ const api = axios.create({
   baseURL,
   timeout: 30000,
   headers: {
+    'Content-Type': 'application/json',
     'X-Requested-With': 'XMLHttpRequest',
   },
-})
-
-api.interceptors.request.use((config) => {
-  const authStore = useAuthStore()
-  if (authStore.token) {
-    config.headers.Authorization = `Bearer ${authStore.token}`
-  }
-  return config
+  // The JWT now lives in an httpOnly cookie set by the backend on login
+  // (see internal/auth.Service.Login), not in a token this client can read
+  // or attach itself — withCredentials makes the browser include that
+  // cookie on every request and accept the Set-Cookie/cleared-cookie on
+  // login/logout responses. The backend's CORS config must list this
+  // origin explicitly and set AllowCredentials for this to work (a
+  // credentialed request can never be paired with an "*" allowed origin).
+  withCredentials: true,
 })
 
 // The backend's response envelope is not uniform across endpoints:
 //   - /auth/register, /auth/login, /auth/me return their payload at the
-//     top level (e.g. {token, user}), with no "data" wrapper.
+//     top level (e.g. {user}), with no "data" wrapper. The JWT itself is
+//     never in this payload — it's set as an httpOnly cookie the browser
+//     handles automatically (see withCredentials above).
 //   - /user/profile, /subscriptions/*, /market/*, /dashboard return
 //     {success, data, message}.
 //   - /notifications additionally returns {success, data, meta} where
@@ -63,7 +66,7 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       const authStore = useAuthStore()
-      const wasLoggedIn = Boolean(authStore.token)
+      const wasLoggedIn = authStore.isAuthenticated
       authStore.clearSession()
       if (wasLoggedIn && router.currentRoute.value.name !== 'login') {
         router.push({ name: 'login', query: { sessionExpired: '1' } })

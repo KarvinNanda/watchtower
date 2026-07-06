@@ -6,7 +6,7 @@ MIGRATIONS_PATH := migrations
 DB_DSN := mysql://$(DB_USER):$(DB_PASSWORD)@tcp($(DB_HOST):$(DB_PORT))/$(DB_NAME)?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=true
 MIGRATE := go run -tags 'mysql' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 
-.PHONY: run-api run-scheduler migrate-up migrate-down migrate-status build tidy install-tools sca security test test-coverage test-race
+.PHONY: run-api run-scheduler migrate-up migrate-down migrate-status build tidy install-tools sca security test test-coverage test-race test-new
 
 run-api:
 	go run ./cmd/api
@@ -40,6 +40,15 @@ test-coverage:
 
 test-race:
 	go test ./... -race -count=1
+
+# Runs just the tests added for the post-Phase-10 RSI/batch-dedup/sentinel
+# structured-output logic, without the full suite's runtime.
+test-new:
+	go test ./internal/asset/... \
+	       ./internal/scheduler/... \
+	       ./internal/sentinel/... \
+	       -v -run "TestCalculate|TestBatch|TestParse" \
+	       -count=1
 
 # Install the Go official vulnerability scanner and gosec static analyzer.
 install-tools:

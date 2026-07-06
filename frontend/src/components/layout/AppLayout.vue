@@ -33,9 +33,11 @@ function handleToggleMenu() {
   mobileDrawerOpen.value = !mobileDrawerOpen.value
 }
 
-// On a hard page reload, the token survives in localStorage but the
-// in-memory user profile does not — refetch it so the header/profile/
-// telegram-setup views always have data to render.
+// On a hard page reload, the router's checkAuth guard (see router/index.js)
+// already restores authStore.user from /auth/me before this layout ever
+// mounts, but only with that endpoint's slimmer shape — fetch the full
+// profile here too so header/profile/telegram-setup views always have
+// complete data to render.
 onMounted(() => {
   if (!authStore.user) {
     authStore.fetchProfile()

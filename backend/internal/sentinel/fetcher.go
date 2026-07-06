@@ -14,11 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 const (
-	fetcherHTTPTimeout = 30 * time.Second
-	lookbackWindow     = 7 * 24 * time.Hour
+	lookbackWindow = 7 * 24 * time.Hour
 
 	nvdAPIURL         = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 	nvdRateLimitDelay = 6 * time.Second
@@ -60,7 +61,7 @@ type SentinelFetcher struct {
 func NewSentinelFetcher(githubToken string) *SentinelFetcher {
 	return &SentinelFetcher{
 		githubToken: githubToken,
-		httpClient:  &http.Client{Timeout: fetcherHTTPTimeout},
+		httpClient:  utils.NewHTTPClient(),
 	}
 }
 
