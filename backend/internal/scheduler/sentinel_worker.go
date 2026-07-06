@@ -23,7 +23,7 @@ const (
 	sentinelItemRetention = 7 * 24 * time.Hour
 	// sentinelTitleTruncateLen bounds how much of an item's title appears in
 	// a batched message section and in the notification_logs summary.
-	sentinelTitleTruncateLen = 80
+	sentinelTitleTruncateLen = 60
 )
 
 // SentinelNotifierInterface is the subset of notifier.Notifier's behavior
@@ -48,12 +48,16 @@ type ProcessCounters struct {
 // collected during a run and rendered as one section of that user's
 // batched message.
 type SentinelBatchItem struct {
-	SourceType string
-	Title      string
-	URL        string
-	AnalysisID string
-	AnalysisEN string
-	Keywords   []string
+	SourceType   string
+	Title        string
+	URL          string
+	StatusBahaya string
+	CVE          string
+	Kategori     string
+	DampakID     string
+	AksiID       string
+	DampakEN     string
+	AksiEN       string
 }
 
 // SentinelBatch accumulates every SentinelBatchItem matched for one user
@@ -263,12 +267,16 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 			batches[u.UserID] = batch
 		}
 		batch.Items = append(batch.Items, SentinelBatchItem{
-			SourceType: item.SourceType,
-			Title:      item.Title,
-			URL:        item.URL,
-			AnalysisID: analysis.AnalysisID,
-			AnalysisEN: analysis.AnalysisEN,
-			Keywords:   u.Keywords,
+			SourceType:   item.SourceType,
+			Title:        item.Title,
+			URL:          item.URL,
+			StatusBahaya: analysis.StatusBahaya,
+			CVE:          analysis.CVE,
+			Kategori:     analysis.Kategori,
+			DampakID:     analysis.DampakID,
+			AksiID:       analysis.AksiID,
+			DampakEN:     analysis.DampakEN,
+			AksiEN:       analysis.AksiEN,
 		})
 	}
 
@@ -427,13 +435,13 @@ func buildAggregateUserContext(matches []matchRow) *sentinel.UserContext {
 	return uc
 }
 
-// userMatchInfo groups every keyword that matched for one specific user, so
-// their batch entry can list only their own matched keywords.
+// userMatchInfo deduplicates matchRow by user, since one item can match
+// several of a user's keyword subscriptions but should only appear once in
+// that user's batch.
 type userMatchInfo struct {
 	UserID         uint64
 	TelegramChatID int64
 	PreferredLang  string
-	Keywords       []string
 }
 
 func groupMatchesByUser(matches []matchRow) []userMatchInfo {
@@ -441,17 +449,16 @@ func groupMatchesByUser(matches []matchRow) []userMatchInfo {
 	byUser := make(map[uint64]*userMatchInfo)
 
 	for _, m := range matches {
-		info, ok := byUser[m.UserID]
-		if !ok {
-			info = &userMatchInfo{
-				UserID:         m.UserID,
-				TelegramChatID: m.TelegramChatID,
-				PreferredLang:  m.PreferredLang,
-			}
-			byUser[m.UserID] = info
-			order = append(order, m.UserID)
+		if _, ok := byUser[m.UserID]; ok {
+			continue
 		}
-		info.Keywords = append(info.Keywords, m.Keyword)
+		info := &userMatchInfo{
+			UserID:         m.UserID,
+			TelegramChatID: m.TelegramChatID,
+			PreferredLang:  m.PreferredLang,
+		}
+		byUser[m.UserID] = info
+		order = append(order, m.UserID)
 	}
 
 	result := make([]userMatchInfo, 0, len(order))
@@ -468,10 +475,16 @@ func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem, analysis *se
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
+	// ai_analysis_id/ai_analysis_en are a plain-text audit record of what
+	// was generated for this item — nothing re-parses them back out — so
+	// the now-structured SentinelAnalysis fields are composed into one
+	// readable line per language rather than needing new columns.
 	var analysisID, analysisEN interface{}
 	if analysis != nil {
-		analysisID = analysis.AnalysisID
-		analysisEN = analysis.AnalysisEN
+		analysisID = fmt.Sprintf("[%s] CVE: %s | DAMPAK: %s | AKSI: %s",
+			analysis.StatusBahaya, analysis.CVE, analysis.DampakID, analysis.AksiID)
+		analysisEN = fmt.Sprintf("[%s] CVE: %s | IMPACT: %s | ACTION: %s",
+			analysis.StatusBahaya, analysis.CVE, analysis.DampakEN, analysis.AksiEN)
 	}
 
 	_, err := w.db.ExecContext(ctx, `
@@ -571,36 +584,39 @@ func (w *SentinelWorker) logNotification(userID uint64, summary string, status n
 	})
 }
 
+// sentinelDivider frames each item's section as a compact, scannable card
+// (see buildSentinelItemBlock) — computed once since EscapeTelegramMarkdown
+// is a pure function of a constant string.
+var sentinelDivider = notifier.EscapeTelegramMarkdown(strings.Repeat("-", 50))
+
 // buildSentinelItemBlock formats a single matched item's section within a
 // batched sentinel report, in the subscriber's preferred language ('en' for
-// English, anything else — including the 'id' default — for Indonesian),
-// listing only that user's own matched keywords for this item. Every
-// dynamic field is escaped for Telegram's MarkdownV2 parse mode — fetched
-// titles/descriptions and AI-generated analysis text routinely contain raw
-// underscores, asterisks, parentheses, etc. that would otherwise break
+// English, anything else — including the 'id' default — for Indonesian).
+// Every dynamic field is escaped for Telegram's MarkdownV2 parse mode —
+// fetched titles/URLs and AI-generated dampak/aksi text routinely contain
+// raw underscores, asterisks, parentheses, etc. that would otherwise break
 // Telegram's entity parser (e.g. an unescaped "_" in "wp_ajax_nopriv_..." is
-// read as an unterminated italic marker). The literal "*" and "\|" around
-// the source type/title are static template characters, not dynamic data —
-// hardcoded with their own required MarkdownV2 backslash escape directly in
-// the format string below.
+// read as an unterminated italic marker).
 func buildSentinelItemBlock(lang string, item SentinelBatchItem) string {
-	sourceType := notifier.EscapeTelegramMarkdown(item.SourceType)
+	statusBahaya := notifier.EscapeTelegramMarkdown(item.StatusBahaya)
+	cve := notifier.EscapeTelegramMarkdown(item.CVE)
 	title := notifier.EscapeTelegramMarkdown(truncateTitle(item.Title))
 	url := notifier.EscapeTelegramMarkdown(item.URL)
-	keywordsText := notifier.EscapeTelegramMarkdown(strings.Join(item.Keywords, ", "))
 
-	analysisText := item.AnalysisID
+	impactLabel, actionLabel := "DAMPAK", "AKSI"
+	impactText, actionText := item.DampakID, item.AksiID
 	if lang == "en" {
-		analysisText = item.AnalysisEN
+		impactLabel, actionLabel = "IMPACT", "ACTION"
+		impactText, actionText = item.DampakEN, item.AksiEN
 	}
 
-	block := fmt.Sprintf("📌 *%s* \\| %s\n🔗 %s", sourceType, title, url)
-	if analysisText != "" {
-		block += "\n" + notifier.EscapeTelegramMarkdown(analysisText)
-	}
-	block += "\n🏷️ " + keywordsText
-
-	return block
+	return fmt.Sprintf(
+		"%s\nSTATUS: %s\nCVE: %s\n%s\n🔗 %s\n%s: %s\n%s: %s\n%s",
+		sentinelDivider, statusBahaya, cve, title, url,
+		impactLabel, notifier.EscapeTelegramMarkdown(impactText),
+		actionLabel, notifier.EscapeTelegramMarkdown(actionText),
+		sentinelDivider,
+	)
 }
 
 // truncateTitle bounds title to sentinelTitleTruncateLen runes, appending an

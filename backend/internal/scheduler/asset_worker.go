@@ -321,6 +321,26 @@ func (w *AssetWorker) processSymbol(
 			}
 			batches[sub.UserID] = batch
 		}
+
+		// asset_subscriptions has no uniqueness constraint on
+		// (user_id, asset_symbol) — a user can end up with two active
+		// subscription rows for the same symbol (e.g. subscribing twice
+		// from the UI), so loadSubscribers can return the same user twice
+		// for this symbol, each independently triggering here. Without
+		// this guard that produces two AlertItems for the same symbol in
+		// one user's batch, i.e. the symbol appears twice in a single
+		// Telegram message.
+		alreadyInBatch := false
+		for _, existing := range batch.Alerts {
+			if existing.Symbol == item.Symbol {
+				alreadyInBatch = true
+				break
+			}
+		}
+		if alreadyInBatch {
+			continue
+		}
+
 		batch.Alerts = append(batch.Alerts, item)
 		triggered++
 	}

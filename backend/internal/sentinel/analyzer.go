@@ -30,11 +30,17 @@ type UserContext struct {
 	Expertise   string
 }
 
-// SentinelAnalysis holds bilingual AI-generated commentary for a sentinel
-// item.
+// SentinelAnalysis holds structured, bilingual AI-generated commentary for a
+// sentinel item, designed to render as a compact scannable card in Telegram
+// rather than a long paragraph.
 type SentinelAnalysis struct {
-	AnalysisID string
-	AnalysisEN string
+	StatusBahaya string
+	CVE          string
+	Kategori     string
+	DampakID     string
+	AksiID       string
+	DampakEN     string
+	AksiEN       string
 }
 
 // SentinelAnalyzer produces bilingual security analysis via the DeepSeek
@@ -82,11 +88,32 @@ type sentinelChatResponse struct {
 }
 
 type sentinelAnalysisJSON struct {
-	AnalysisID string `json:"analysis_id"`
-	AnalysisEN string `json:"analysis_en"`
+	StatusBahaya string `json:"status_bahaya"`
+	CVE          string `json:"cve"`
+	Kategori     string `json:"kategori"`
+	DampakID     string `json:"dampak_id"`
+	AksiID       string `json:"aksi_id"`
+	DampakEN     string `json:"dampak_en"`
+	AksiEN       string `json:"aksi_en"`
 }
 
-const sentinelSystemPrompt = "Kamu adalah security analyst. Analisis item keamanan berikut dan berikan insight yang actionable. Response HANYA dalam format JSON, tanpa markdown, tanpa preamble."
+// sentinelSystemPrompt asks for structured fields rather than a free-form
+// paragraph so the result renders as a compact, scannable card in Telegram
+// (see buildSentinelItemBlock in scheduler/sentinel_worker.go). The fields
+// are requested as JSON — not as raw delimited text — for the same reason
+// the rest of this codebase's DeepSeek prompts use JSON (see
+// asset.DeepSeekAnalyzer.AnalyzeAsset): free-form text parsing is fragile
+// against formatting drift, and dampak/aksi need both an Indonesian and an
+// English version to support this app's per-user preferred_language.
+const sentinelSystemPrompt = `Kamu adalah Senior Security Intelligence Analyst. Analisis item keamanan berikut dan hasilkan laporan singkat yang scannable, dengan field-field berikut:
+
+- status_bahaya: salah satu dari CRITICAL, HIGH, MEDIUM, atau LOW
+- cve: CVE ID yang disebutkan di item, atau "N/A" jika tidak ada
+- kategori: salah satu dari "Layer 1 OS", "Layer 2 Gadget", "Layer 3 Finansial", atau "Layer 4 Social Eng"
+- dampak_id / dampak_en: 1-2 kalimat, apa yang terjadi jika user terkena — spesifik ke context user (devices, OS, expertise) yang diberikan, dalam Bahasa Indonesia dan English
+- aksi_id / aksi_en: 1-2 kalimat, langkah konkret yang bisa dilakukan sekarang — actionable, bukan "update software" tapi contoh "jalankan: sudo apt update && sudo apt upgrade spice-vdagent", dalam Bahasa Indonesia dan English
+
+Response HANYA dalam format JSON, tanpa markdown, tanpa preamble.`
 
 // AnalyzeItem asks DeepSeek to produce bilingual, actionable security
 // analysis for item, grounded in userContext — the aggregated devices/OS/
@@ -110,8 +137,13 @@ func (a *SentinelAnalyzer) AnalyzeItem(item SentinelItem, userContext *UserConte
 	}
 
 	return &SentinelAnalysis{
-		AnalysisID: parsed.AnalysisID,
-		AnalysisEN: parsed.AnalysisEN,
+		StatusBahaya: parsed.StatusBahaya,
+		CVE:          parsed.CVE,
+		Kategori:     parsed.Kategori,
+		DampakID:     parsed.DampakID,
+		AksiID:       parsed.AksiID,
+		DampakEN:     parsed.DampakEN,
+		AksiEN:       parsed.AksiEN,
 	}, nil
 }
 
@@ -163,8 +195,13 @@ User context:
 
 Berikan analisis dalam JSON:
 {
-  "analysis_id": "analisis dalam Bahasa Indonesia, max 150 kata, fokus: dampak spesifik ke devices dan OS user, langkah mitigasi sesuai expertise level, tingkat urgency (LOW/MEDIUM/HIGH/CRITICAL)",
-  "analysis_en": "same analysis in English, max 150 kata"
+  "status_bahaya": "CRITICAL/HIGH/MEDIUM/LOW",
+  "cve": "CVE ID atau N/A",
+  "kategori": "Layer 1 OS / Layer 2 Gadget / Layer 3 Finansial / Layer 4 Social Eng",
+  "dampak_id": "dampak dalam Bahasa Indonesia, spesifik ke devices/OS/expertise user, max 2 kalimat",
+  "aksi_id": "aksi konkret dalam Bahasa Indonesia, max 2 kalimat",
+  "dampak_en": "same impact in English, max 2 sentences",
+  "aksi_en": "same action in English, max 2 sentences"
 }`,
 		item.Title, item.SourceType, item.Description, item.URL,
 		keywords, contextNotes, devices, osList, expertise,
