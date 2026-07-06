@@ -3,7 +3,6 @@ package auth
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,24 +13,26 @@ const (
 	preferredLanguageContextKey = "preferred_language"
 )
 
-// AuthMiddleware returns a Gin middleware that requires a valid "Bearer"
-// JWT in the Authorization header, verified against svc, and stores the
-// authenticated user's claims in the Gin context for downstream handlers.
+// AuthMiddleware returns a Gin middleware that requires a valid JWT in the
+// watchtower_token httpOnly cookie (set by Service.Login), verified against
+// svc, and stores the authenticated user's claims in the Gin context for
+// downstream handlers.
 func AuthMiddleware(svc *Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		header := c.GetHeader("Authorization")
-		parts := strings.SplitN(header, " ", 2)
-		if header == "" || len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		tokenString, err := c.Cookie(authCookieName)
+		if err != nil || tokenString == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"success": false,
 				"error":   "unauthorized",
-				"message": "missing or malformed Authorization header",
+				"message": "authentication required",
 			})
 			return
 		}
 
-		claims, err := svc.ValidateToken(parts[1])
+		claims, err := svc.ValidateToken(tokenString)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"success": false,
 				"error":   "unauthorized",
 				"message": err.Error(),
 			})

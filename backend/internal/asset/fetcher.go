@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/karvin-nanda/watchtower/internal/currency"
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 const (
@@ -28,8 +29,6 @@ const (
 	stockRateLimitRetry  = 60 * time.Second
 
 	stockDailyCallWarningThreshold = 800
-
-	fetcherHTTPTimeout = 30 * time.Second
 )
 
 // CoinGeckoBaseURL defaults to the public CoinGecko API but can be
@@ -74,11 +73,12 @@ type AssetFetcher struct {
 }
 
 // NewAssetFetcher builds an AssetFetcher using twelveDataKey for Twelve
-// Data stock quotes, with a 30-second HTTP timeout.
+// Data stock quotes, with the standard hardened HTTP client (see
+// utils.NewHTTPClient).
 func NewAssetFetcher(twelveDataKey string) *AssetFetcher {
 	return &AssetFetcher{
 		twelveDataKey: twelveDataKey,
-		httpClient:    &http.Client{Timeout: fetcherHTTPTimeout},
+		httpClient:    utils.NewHTTPClient(),
 	}
 }
 
@@ -341,9 +341,36 @@ func extractGoldPriceIDR(body []byte) (float64, error) {
 	return 0, errors.New("gold price not found in harga-emas.org JSON-LD data")
 }
 
+// validSymbols is the whitelist of asset symbols this fetcher will ever
+// call an external API for — mirroring the frontend's ASSET_OPTIONS list
+// (frontend/src/constants/assets.js). Every caller (the scheduler via
+// cache.Cache, cmd/test_fetch) reaches an external API only through
+// FetchAsset, so checking here is a single, low-risk chokepoint that stops
+// an arbitrary/malformed symbol from ever being sent to CoinGecko/Twelve
+// Data, rather than relying solely on the format-only checks upstream in
+// internal/user's subscription validation.
+var validSymbols = map[string]bool{
+	"BTC": true, "ETH": true, "BNB": true, "SOL": true,
+	"XRP": true, "DOGE": true, "ADA": true, "TRX": true,
+	"AVAX": true, "SHIB": true, "TON": true, "LINK": true,
+	"DOT": true, "MATIC": true, "DAI": true, "UNI": true,
+	"ATOM": true, "LTC": true, "BCH": true, "NEAR": true,
+	"AAPL": true, "MSFT": true, "NVDA": true, "GOOGL": true,
+	"AMZN": true, "META": true, "TSLA": true, "NFLX": true,
+	"TSM": true, "AVGO": true, "JPM": true, "LLY": true,
+	"V": true, "UNH": true, "XOM": true, "MA": true,
+	"JNJ": true, "PG": true, "HD": true, "COST": true,
+	"ANTAM": true, "XAU": true,
+}
+
 // FetchAsset routes to the correct fetch method based on assetType
-// ("stock", "crypto", or "gold").
+// ("stock", "crypto", or "gold"), after checking symbol against
+// validSymbols.
 func (f *AssetFetcher) FetchAsset(symbol, assetType string) (*FetchResult, error) {
+	if !validSymbols[strings.ToUpper(symbol)] {
+		return nil, fmt.Errorf("asset: unsupported symbol: %s", symbol)
+	}
+
 	switch assetType {
 	case "crypto":
 		return f.FetchCrypto(symbol)

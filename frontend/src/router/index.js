@@ -44,14 +44,23 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+// Pinia state resets on every hard page load/refresh, but the httpOnly
+// auth cookie survives it — so isAuthenticated alone can't be trusted on
+// first navigation after a reload. checkAuth() probes /auth/me to restore
+// it from the cookie before this guard decides anything; skipped once a
+// session has already been established in this tab (either by an earlier
+// checkAuth or a fresh login), since /auth/me is a real network round trip.
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  const isAuthenticated = authStore.isAuthenticated
 
-  if (to.meta.requiresAuth && !isAuthenticated) {
+  if (!authStore.isAuthenticated) {
+    await authStore.checkAuth()
+  }
+
+  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     return { name: 'login' }
   }
-  if (to.meta.public && isAuthenticated) {
+  if (to.meta.public && authStore.isAuthenticated) {
     return { name: 'dashboard' }
   }
   return true

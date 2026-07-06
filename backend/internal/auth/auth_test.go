@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -17,6 +21,28 @@ import (
 
 	"github.com/karvin-nanda/watchtower/internal/auth"
 )
+
+// newLoginTestContext builds a *gin.Context backed by a real recorder/
+// request, since Login now takes *gin.Context directly (to set the auth
+// cookie on the response) rather than a bare context.Context.
+func newLoginTestContext(remoteAddr string) (*gin.Context, *httptest.ResponseRecorder) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	c.Request.RemoteAddr = remoteAddr
+	return c, w
+}
+
+// readSetCookies parses every Set-Cookie header written to w into a
+// name-keyed map, so tests can assert on a specific cookie's attributes
+// (HttpOnly, Secure, Value) without string-parsing the raw header.
+func readSetCookies(w *httptest.ResponseRecorder) map[string]*http.Cookie {
+	result := make(map[string]*http.Cookie)
+	for _, c := range w.Result().Cookies() {
+		result[c.Name] = c
+	}
+	return result
+}
 
 const testJWTSecret = "test-secret-do-not-use-in-prod"
 
@@ -175,15 +201,48 @@ func TestLogin_Success(t *testing.T) {
 		WithArgs(email).
 		WillReturnRows(userRow(42, email, string(hash)))
 
-	token, err := svc.Login(context.Background(), email, password, "203.0.113.1")
+	c, w := newLoginTestContext("203.0.113.1:12345")
+	u, err := svc.Login(c, email, password, false)
 	require.NoError(t, err)
-	require.NotEmpty(t, token)
+	require.NotNil(t, u)
+	assert.Equal(t, uint64(42), u.ID)
+	assert.Equal(t, email, u.Email)
 
-	claims, err := svc.ValidateToken(token)
-	require.NoError(t, err, "a token issued by Login must be accepted by ValidateToken")
+	cookies := readSetCookies(w)
+	require.Contains(t, cookies, "watchtower_token", "Login must set the watchtower_token cookie")
+	tokenCookie := cookies["watchtower_token"]
+	assert.True(t, tokenCookie.HttpOnly, "auth cookie must be HttpOnly so frontend JS can never read it")
+	assert.False(t, tokenCookie.Secure, "Secure must be false when isProduction=false")
+	assert.NotEmpty(t, tokenCookie.Value)
+
+	claims, err := svc.ValidateToken(tokenCookie.Value)
+	require.NoError(t, err, "the token set as a cookie by Login must be accepted by ValidateToken")
 	assert.Equal(t, uint64(42), claims.UserID)
 	assert.Equal(t, email, claims.Email)
 
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestLogin_SetsSecureCookieInProduction(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockService(t)
+
+	const email = "prod-login@example.com"
+	const password = "Valid1Pass!"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	require.NoError(t, err)
+
+	mock.ExpectQuery(`SELECT (.+) FROM users`).
+		WithArgs(email).
+		WillReturnRows(userRow(7, email, string(hash)))
+
+	c, w := newLoginTestContext("203.0.113.9:12345")
+	_, err = svc.Login(c, email, password, true)
+	require.NoError(t, err)
+
+	cookies := readSetCookies(w)
+	require.Contains(t, cookies, "watchtower_token")
+	assert.True(t, cookies["watchtower_token"].Secure, "Secure must be true when isProduction=true")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -199,11 +258,13 @@ func TestLogin_WrongPassword(t *testing.T) {
 		WithArgs(email).
 		WillReturnRows(userRow(1, email, string(hash)))
 
-	token, err := svc.Login(context.Background(), email, "WrongPassword1!", "203.0.113.2")
+	c, w := newLoginTestContext("203.0.113.2:12345")
+	u, err := svc.Login(c, email, "WrongPassword1!", false)
 
-	assert.Empty(t, token)
+	assert.Nil(t, u)
 	require.ErrorIs(t, err, auth.ErrInvalidCredentials)
 	assert.Equal(t, "invalid email or password", err.Error())
+	assert.Empty(t, w.Result().Cookies(), "no cookie should be set on a failed login")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -215,8 +276,9 @@ func TestLogin_UserNotFound(t *testing.T) {
 		WithArgs("nobody@example.com").
 		WillReturnError(sql.ErrNoRows)
 
-	token, notFoundErr := svc.Login(context.Background(), "nobody@example.com", "WrongPassword1!", "203.0.113.3")
-	assert.Empty(t, token)
+	c, w := newLoginTestContext("203.0.113.3:12345")
+	u, notFoundErr := svc.Login(c, "nobody@example.com", "WrongPassword1!", false)
+	assert.Nil(t, u)
 	require.ErrorIs(t, notFoundErr, auth.ErrInvalidCredentials)
 
 	// Re-derive the "wrong password" error message the same way
@@ -224,6 +286,7 @@ func TestLogin_UserNotFound(t *testing.T) {
 	// byte-for-byte identical — the whole point of this check is
 	// preventing user enumeration via a differing error message.
 	assert.Equal(t, "invalid email or password", notFoundErr.Error())
+	assert.Empty(t, w.Result().Cookies(), "no cookie should be set when the account doesn't exist")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

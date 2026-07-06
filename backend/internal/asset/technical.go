@@ -116,10 +116,13 @@ func (f *AssetFetcher) fetchDailyCloses(symbol string, outputsize int) ([]float6
 }
 
 // computeRSI implements the standard RSI over every day-over-day delta in
-// closes (chronological order).
+// closes (chronological order). Fewer than technicalIndicatorWindow closes
+// is treated as insufficient history for a meaningful RSI(14) and returns a
+// neutral default of 50 rather than an extreme value computed off only a
+// handful of deltas.
 func computeRSI(closes []float64) float64 {
-	if len(closes) < 2 {
-		return 0
+	if len(closes) < technicalIndicatorWindow {
+		return 50
 	}
 
 	var gainSum, lossSum float64

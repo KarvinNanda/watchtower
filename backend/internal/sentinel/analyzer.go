@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
-	"time"
+
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 const (
 	deepSeekAPIURL      = "https://api.deepseek.com/v1/chat/completions"
 	deepSeekMaxTokens   = 600
 	deepSeekTemperature = 0.2
-	analyzerHTTPTimeout = 30 * time.Second
 )
 
 // UserContext aggregates the subscriber context relevant to a sentinel
@@ -55,12 +56,12 @@ type SentinelAnalyzer struct {
 }
 
 // NewSentinelAnalyzer builds a SentinelAnalyzer using deepseekKey/Model,
-// with a 30-second HTTP timeout.
+// with the standard hardened HTTP client (see utils.NewHTTPClient).
 func NewSentinelAnalyzer(deepseekKey, deepseekModel string) *SentinelAnalyzer {
 	return &SentinelAnalyzer{
 		deepseekKey:   deepseekKey,
 		deepseekModel: deepseekModel,
-		httpClient:    &http.Client{Timeout: analyzerHTTPTimeout},
+		httpClient:    utils.NewHTTPClient(),
 	}
 }
 
@@ -131,12 +132,38 @@ func (a *SentinelAnalyzer) AnalyzeItem(item SentinelItem, userContext *UserConte
 		return nil, fmt.Errorf("sentinel: analyze %s: %w", item.Identifier, err)
 	}
 
+	return parseSentinelAnalysis(raw), nil
+}
+
+var validSentinelStatuses = map[string]bool{"CRITICAL": true, "HIGH": true, "MEDIUM": true, "LOW": true}
+
+// normalizeSentinelAnalysis defaults an unrecognized StatusBahaya to
+// "MEDIUM" and an empty CVE to "N/A", so a batched Telegram message never
+// renders a blank or garbage status field.
+func normalizeSentinelAnalysis(a *SentinelAnalysis) *SentinelAnalysis {
+	status := strings.ToUpper(strings.TrimSpace(a.StatusBahaya))
+	if !validSentinelStatuses[status] {
+		status = "MEDIUM"
+	}
+	a.StatusBahaya = status
+	if strings.TrimSpace(a.CVE) == "" {
+		a.CVE = "N/A"
+	}
+	return a
+}
+
+// parseSentinelJSON parses raw as the JSON object sentinelSystemPrompt asks
+// DeepSeek to return.
+func parseSentinelJSON(raw string) (*SentinelAnalysis, error) {
 	var parsed sentinelAnalysisJSON
-	if err := json.Unmarshal([]byte(stripMarkdownFence(raw)), &parsed); err != nil {
-		return nil, fmt.Errorf("sentinel: parse analysis for %s: %w", item.Identifier, err)
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("sentinel: not valid JSON: %w", err)
+	}
+	if parsed.AksiID == "" && parsed.AksiEN == "" {
+		return nil, fmt.Errorf("sentinel: JSON analysis missing required aksi_id/aksi_en field")
 	}
 
-	return &SentinelAnalysis{
+	return normalizeSentinelAnalysis(&SentinelAnalysis{
 		StatusBahaya: parsed.StatusBahaya,
 		CVE:          parsed.CVE,
 		Kategori:     parsed.Kategori,
@@ -144,7 +171,86 @@ func (a *SentinelAnalyzer) AnalyzeItem(item SentinelItem, userContext *UserConte
 		AksiID:       parsed.AksiID,
 		DampakEN:     parsed.DampakEN,
 		AksiEN:       parsed.AksiEN,
-	}, nil
+	}), nil
+}
+
+// sentinelLabelPattern matches "LABEL: value" lines for the delimited text
+// format (STATUS BAHAYA / CVE / KATEGORI / DAMPAK / AKSI) DeepSeek might
+// produce if it ignores the JSON-output instruction in sentinelSystemPrompt.
+var sentinelLabelPattern = regexp.MustCompile(`(?im)^\s*(STATUS[ _]?BAHAYA|CVE|KATEGORI|DAMPAK|AKSI)\s*:\s*(.*)$`)
+
+// parseSentinelLabeledText parses raw as "LABEL: value" delimited text — a
+// fallback for when DeepSeek doesn't return JSON. This format has no
+// separate English fields, so DampakEN/AksiEN are best-effort filled with
+// the same (Indonesian) text as DampakID/AksiID; that loss of translation
+// only happens on this already-degraded path.
+func parseSentinelLabeledText(raw string) (*SentinelAnalysis, error) {
+	matches := sentinelLabelPattern.FindAllStringSubmatch(raw, -1)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("sentinel: no recognizable STATUS BAHAYA/CVE/KATEGORI/DAMPAK/AKSI labels found")
+	}
+
+	fields := make(map[string]string, len(matches))
+	for _, m := range matches {
+		key := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(m[1], " ", ""), "_", ""))
+		fields[key] = strings.TrimSpace(m[2])
+	}
+
+	statusBahaya, hasStatus := fields["STATUSBAHAYA"]
+	if !hasStatus || statusBahaya == "" {
+		return nil, fmt.Errorf("sentinel: labeled text analysis missing required STATUS BAHAYA field")
+	}
+	aksi, hasAksi := fields["AKSI"]
+	if !hasAksi || aksi == "" {
+		return nil, fmt.Errorf("sentinel: labeled text analysis missing required AKSI field")
+	}
+	dampak := fields["DAMPAK"]
+
+	return normalizeSentinelAnalysis(&SentinelAnalysis{
+		StatusBahaya: statusBahaya,
+		CVE:          fields["CVE"],
+		Kategori:     fields["KATEGORI"],
+		DampakID:     dampak,
+		AksiID:       aksi,
+		DampakEN:     dampak,
+		AksiEN:       aksi,
+	}), nil
+}
+
+// fallbackSentinelAnalysis degrades raw (an unstructured paragraph DeepSeek
+// returned instead of the requested JSON or labeled-text format) into a
+// still-useful SentinelAnalysis rather than dropping the item's
+// notification entirely.
+func fallbackSentinelAnalysis(raw string) *SentinelAnalysis {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		text = "Analisis tidak tersedia — DeepSeek tidak mengembalikan format yang dikenali."
+	}
+	return &SentinelAnalysis{
+		StatusBahaya: "MEDIUM",
+		CVE:          "N/A",
+		DampakID:     text,
+		DampakEN:     text,
+		AksiID:       "Tinjau item ini secara manual — analisis otomatis tidak tersedia.",
+		AksiEN:       "Review this item manually — automated analysis is unavailable.",
+	}
+}
+
+// parseSentinelAnalysis parses raw into a SentinelAnalysis, trying the
+// requested JSON format first, then the labeled-text format as a fallback
+// for when DeepSeek ignores the JSON instruction, and finally degrading to
+// fallbackSentinelAnalysis so a malformed response still produces a
+// deliverable (if generic) notification instead of failing the whole item.
+func parseSentinelAnalysis(raw string) *SentinelAnalysis {
+	raw = stripMarkdownFence(raw)
+
+	if parsed, err := parseSentinelJSON(raw); err == nil {
+		return parsed
+	}
+	if parsed, err := parseSentinelLabeledText(raw); err == nil {
+		return parsed
+	}
+	return fallbackSentinelAnalysis(raw)
 }
 
 func buildSentinelPrompt(item SentinelItem, userContext *UserContext) string {

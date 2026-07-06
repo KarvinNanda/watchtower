@@ -12,6 +12,10 @@ export function me() {
   return api.get('/auth/me')
 }
 
+export function logout() {
+  return api.post('/auth/logout')
+}
+
 export function getProfile() {
   return api.get('/user/profile')
 }

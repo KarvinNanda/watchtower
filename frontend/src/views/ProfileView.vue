@@ -116,9 +116,11 @@ async function handleSubmit() {
 onMounted(async () => {
   loading.value = true
   try {
-    if (!authStore.user) {
-      await authStore.fetchProfile()
-    }
+    // Always fetch fresh here rather than reusing authStore.user as-is —
+    // it may only hold the slimmer /auth/me shape (set by the router's
+    // checkAuth session-restore guard) rather than the full profile
+    // (devices/os_list/expertise_level) this form needs.
+    await authStore.fetchProfile()
     if (authStore.user) {
       populateForm(authStore.user)
     }

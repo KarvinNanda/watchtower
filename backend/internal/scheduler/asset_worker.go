@@ -299,11 +299,30 @@ func (w *AssetWorker) processSymbol(
 
 	priceIDR := fetchResult.PriceUSD * usdToIDR
 
+	triggered := w.appendTriggeredAlerts(subscribers, fetchResult, priceIDR, analysis, batches, cooldownHoursByUser)
+	return triggered, nil
+}
+
+// appendTriggeredAlerts evaluates every subscriber in subscribers against
+// fetchResult, appending a triggered AlertItem to that subscriber's entry in
+// batches (creating it on first use) and recording their cooldown hours.
+// batches is intentionally never replaced/reset here — it is created once
+// by Run() before the symbol loop begins, so alerts triggered by different
+// symbols for the same user accumulate into a single UserAlertBatch instead
+// of one batch per symbol.
+func (w *AssetWorker) appendTriggeredAlerts(
+	subscribers []SubscriberData,
+	fetchResult *asset.FetchResult,
+	priceIDR float64,
+	analysis *asset.AnalysisResult,
+	batches map[uint64]*UserAlertBatch,
+	cooldownHoursByUser map[uint64]int,
+) int {
 	triggered := 0
 	for _, sub := range subscribers {
 		item, ok, evalErr := w.evaluateSubscriberSafe(sub, fetchResult, priceIDR, analysis)
 		if evalErr != nil {
-			log.Printf("[ERROR] processSymbol: evaluate alert for user %d symbol %s failed: %v", sub.UserID, symbol.Symbol, evalErr)
+			log.Printf("[ERROR] appendTriggeredAlerts: evaluate alert for user %d symbol %s failed: %v", sub.UserID, fetchResult.Symbol, evalErr)
 			continue
 		}
 		if !ok {
@@ -345,7 +364,7 @@ func (w *AssetWorker) processSymbol(
 		triggered++
 	}
 
-	return triggered, nil
+	return triggered
 }
 
 // loadSubscribers returns every active subscriber for symbol who has an

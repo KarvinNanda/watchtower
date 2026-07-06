@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 // AlertType mirrors the asset_subscriptions.alert_type enum.
@@ -120,7 +122,6 @@ const (
 	deepSeekAPIURL      = "https://api.deepseek.com/v1/chat/completions"
 	deepSeekMaxTokens   = 800
 	deepSeekTemperature = 0.3
-	deepSeekHTTPTimeout = 30 * time.Second
 )
 
 // DeepSeekAnalyzer produces bilingual AI market commentary via the
@@ -134,13 +135,13 @@ type DeepSeekAnalyzer struct {
 	httpClient *http.Client
 }
 
-// NewDeepSeekAnalyzer builds a DeepSeekAnalyzer using apiKey/model, with a
-// 30-second HTTP timeout.
+// NewDeepSeekAnalyzer builds a DeepSeekAnalyzer using apiKey/model, with the
+// standard hardened HTTP client (see utils.NewHTTPClient).
 func NewDeepSeekAnalyzer(apiKey, model string) *DeepSeekAnalyzer {
 	return &DeepSeekAnalyzer{
 		apiKey:     apiKey,
 		model:      model,
-		httpClient: &http.Client{Timeout: deepSeekHTTPTimeout},
+		httpClient: utils.NewHTTPClient(),
 	}
 }
 

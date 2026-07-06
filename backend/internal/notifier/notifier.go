@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/karvin-nanda/watchtower/internal/telegram"
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 // Type mirrors the notification_logs.notif_type enum.
@@ -33,7 +34,6 @@ const (
 
 const (
 	telegramAPIBase  = "https://api.telegram.org/bot"
-	notifierTimeout  = 10 * time.Second
 	sendRetryBackoff = 500 * time.Millisecond
 )
 
@@ -46,12 +46,12 @@ type Notifier struct {
 }
 
 // NewNotifier builds a Notifier for the given asset/sentinel bot tokens,
-// with a 10-second HTTP timeout.
+// with the standard hardened HTTP client (see utils.NewHTTPClient).
 func NewNotifier(assetToken, sentinelToken string) *Notifier {
 	return &Notifier{
 		assetBotToken:    assetToken,
 		sentinelBotToken: sentinelToken,
-		httpClient:       &http.Client{Timeout: notifierTimeout},
+		httpClient:       utils.NewHTTPClient(),
 	}
 }
 
