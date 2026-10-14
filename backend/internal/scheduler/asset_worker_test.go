@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func (m *mockAssetNotifier) SendAssetAlert(chatID int64, message string) error {
 
 // newMockAssetWorker builds an AssetWorker with only the fields exercised
 // by the batching/dispatch logic under test — db (sqlmock-backed), notifier
-// (recording mock), notifLogs, and alertPriceMovePct. cache/redis/analyzer
+// (recording mock), notifLogs, and alertPriceMovePct. cache/redis
 // are left nil since evaluateSubscriber/appendTriggeredAlerts/dispatchBatches
 // never touch them.
 func newMockAssetWorker(t *testing.T, alertPriceMovePct float64) (*AssetWorker, sqlmock.Sqlmock, *mockAssetNotifier) {
@@ -94,7 +95,7 @@ func TestBatchInitializedOnce(t *testing.T) {
 
 	for _, symbol := range []string{"BTC", "ETH", "SOL"} {
 		fetchResult := sampleFetchResultFor(symbol, 150) // breaches PriceUpperUSD=100 for both subscribers
-		triggered := w.appendTriggeredAlerts(subscribers, fetchResult, 150*16000, nil, batches, cooldownHoursByUser)
+		triggered := w.appendTriggeredAlerts(subscribers, fetchResult, 150*16000, batches, cooldownHoursByUser)
 		assert.Equal(t, 2, triggered, "both subscribers should trigger for %s", symbol)
 	}
 
@@ -131,8 +132,8 @@ func TestBatchNoDuplicateUsers(t *testing.T) {
 	sub := sampleSubscriber(1, floatPtr(100))
 
 	// BTC triggers, then NVDA triggers, both for the same user.
-	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("BTC", 150), 150*16000, nil, batches, cooldownHoursByUser)
-	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("NVDA", 150), 150*16000, nil, batches, cooldownHoursByUser)
+	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("BTC", 150), 150*16000, batches, cooldownHoursByUser)
+	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("NVDA", 150), 150*16000, batches, cooldownHoursByUser)
 
 	require.Len(t, batches, 1, "one user triggering on two symbols must produce exactly one map entry, not two")
 	assert.Len(t, batches[1].Alerts, 2, "that one entry must contain both AlertItems")
@@ -152,7 +153,7 @@ func TestBatchEmptyWhenNoTrigger(t *testing.T) {
 	sub := sampleSubscriber(1, floatPtr(200))
 	fetchResult := sampleFetchResultFor("BTC", 150)
 
-	triggered := w.appendTriggeredAlerts([]SubscriberData{sub}, fetchResult, 150*16000, nil, batches, cooldownHoursByUser)
+	triggered := w.appendTriggeredAlerts([]SubscriberData{sub}, fetchResult, 150*16000, batches, cooldownHoursByUser)
 
 	assert.Equal(t, 0, triggered)
 	assert.Empty(t, batches, "no message should be queued when no subscriber's threshold is breached")
@@ -180,7 +181,7 @@ func TestBatchCooldownRespected(t *testing.T) {
 	// cooldown should still suppress it.
 	fetchResult := sampleFetchResultFor("BTC", 50100)
 
-	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 50100*16000, nil)
+	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 50100*16000)
 
 	require.NoError(t, err)
 	assert.False(t, triggered, "cooldown should suppress an alert when price hasn't moved enough to bypass it")
@@ -207,10 +208,25 @@ func TestBatchCooldownBypassedByPriceMove(t *testing.T) {
 	// (5%) -- so the alert should fire despite the active cooldown.
 	fetchResult := sampleFetchResultFor("BTC", 53000)
 
-	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 53000*16000, nil)
+	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 53000*16000)
 
 	require.NoError(t, err)
 	require.True(t, triggered, "a price move beyond alertPriceMovePct should bypass an active cooldown")
 	assert.Equal(t, "BTC", item.Symbol)
 	assert.Equal(t, "upper", item.TriggerType)
+}
+
+func TestBuildAssetItemBlock_HasNoAICommentaryLine(t *testing.T) {
+	t.Parallel()
+	block := buildAssetItemBlock("en", AlertItem{
+		Symbol:      "BTC",
+		PriceUSD:    65000,
+		PriceIDR:    65000 * 16000,
+		ChangePct:   3.2,
+		TriggerType: "upper",
+	})
+
+	assert.Contains(t, block, "BTC")
+	assert.Contains(t, block, "Upper Bound")
+	assert.Equal(t, 3, strings.Count(block, "\n"), "block must be exactly 4 lines: symbol, price, 24h, trigger")
 }

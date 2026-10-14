@@ -31,12 +31,6 @@ type NotifierInterface interface {
 	SendAssetAlert(chatID int64, message string) error
 }
 
-// AssetAnalyzerInterface is the subset of asset.DeepSeekAnalyzer's behavior
-// AssetWorker depends on, allowing tests to inject a mock analyzer.
-type AssetAnalyzerInterface interface {
-	AnalyzeAsset(data *asset.FetchResult, subscribers []asset.SubscriberContext, usdToIDR float64) (*asset.AnalysisResult, error)
-}
-
 // AssetWorker periodically fetches market data (via the Redis/MySQL cache
 // layer), evaluates every active asset subscription for alert conditions,
 // and notifies subscribers whose thresholds are breached. Every triggered
@@ -48,7 +42,6 @@ type AssetWorker struct {
 	db       *sql.DB
 	redis    *redis.Client
 	notifier NotifierInterface
-	analyzer AssetAnalyzerInterface
 
 	cache             *cache.Cache
 	notifLogs         *notifier.LogRepository
@@ -65,7 +58,6 @@ func NewAssetWorker(
 	redisClient *redis.Client,
 	fetcher *asset.AssetFetcher,
 	notif NotifierInterface,
-	analyzer AssetAnalyzerInterface,
 	cacheTTLHours int,
 	maxUniqueSymbols int,
 	alertPriceMovePct float64,
@@ -75,7 +67,6 @@ func NewAssetWorker(
 		db:                db,
 		redis:             redisClient,
 		notifier:          notif,
-		analyzer:          analyzer,
 		cache:             cache.New(redisClient, db, cacheTTLHours, fetcher),
 		notifLogs:         notifier.NewLogRepository(db),
 		maxUniqueSymbols:  maxUniqueSymbols,
@@ -114,8 +105,6 @@ type AlertItem struct {
 	PriceIDR    float64
 	ChangePct   float64
 	TriggerType string
-	AnalysisID  string
-	AnalysisEN  string
 }
 
 // UserAlertBatch accumulates every AlertItem triggered for one user during
@@ -242,11 +231,11 @@ func (w *AssetWorker) processSymbolSafe(
 }
 
 // processSymbol fetches fresh market data for symbol via the cache layer,
-// loads every active subscriber, runs one shared DeepSeek analysis for the
-// symbol, and evaluates each subscriber's alert conditions — appending a
-// triggered alert to that subscriber's UserAlertBatch in batches rather
-// than sending anything directly. Actual delivery happens once per user
-// after every symbol has been processed, via dispatchBatches.
+// loads every active subscriber, and evaluates each subscriber's alert
+// conditions — appending a triggered alert to that subscriber's
+// UserAlertBatch in batches rather than sending anything directly. Actual
+// delivery happens once per user after every symbol has been processed,
+// via dispatchBatches.
 func (w *AssetWorker) processSymbol(
 	symbol SymbolInfo,
 	batches map[uint64]*UserAlertBatch,
@@ -276,31 +265,13 @@ func (w *AssetWorker) processSymbol(
 		FetchedAt:    marketData.LastFetched,
 	}
 
-	subscriberContexts := make([]asset.SubscriberContext, 0, len(subscribers))
-	for _, s := range subscribers {
-		subscriberContexts = append(subscriberContexts, asset.SubscriberContext{
-			AlertType:          s.AlertType,
-			PriceLowerUSD:      s.PriceLowerUSD,
-			PriceUpperUSD:      s.PriceUpperUSD,
-			PctChangeThreshold: s.PctChangeThreshold,
-		})
-	}
-
 	usdToIDR, rateErr := currency.GetUSDToIDR()
 	if rateErr != nil {
 		log.Printf("[ERROR] processSymbol: get USD/IDR rate for %s: %v", symbol.Symbol, rateErr)
 	}
-
-	analysis, err := w.analyzer.AnalyzeAsset(fetchResult, subscriberContexts, usdToIDR)
-	if err != nil {
-		log.Printf("[WARN] processSymbol: AnalyzeAsset failed for %s, alerting without AI commentary: %v", symbol.Symbol, err)
-		analysis = nil
-	}
-
 	priceIDR := fetchResult.PriceUSD * usdToIDR
 
-	triggered := w.appendTriggeredAlerts(subscribers, fetchResult, priceIDR, analysis, batches, cooldownHoursByUser)
-	return triggered, nil
+	return w.appendTriggeredAlerts(subscribers, fetchResult, priceIDR, batches, cooldownHoursByUser), nil
 }
 
 // appendTriggeredAlerts evaluates every subscriber in subscribers against
@@ -314,13 +285,12 @@ func (w *AssetWorker) appendTriggeredAlerts(
 	subscribers []SubscriberData,
 	fetchResult *asset.FetchResult,
 	priceIDR float64,
-	analysis *asset.AnalysisResult,
 	batches map[uint64]*UserAlertBatch,
 	cooldownHoursByUser map[uint64]int,
 ) int {
 	triggered := 0
 	for _, sub := range subscribers {
-		item, ok, evalErr := w.evaluateSubscriberSafe(sub, fetchResult, priceIDR, analysis)
+		item, ok, evalErr := w.evaluateSubscriberSafe(sub, fetchResult, priceIDR)
 		if evalErr != nil {
 			log.Printf("[ERROR] appendTriggeredAlerts: evaluate alert for user %d symbol %s failed: %v", sub.UserID, fetchResult.Symbol, evalErr)
 			continue
@@ -446,7 +416,7 @@ func (w *AssetWorker) loadSubscribers(ctx context.Context, symbol string) ([]Sub
 // evaluateSubscriberSafe wraps evaluateSubscriber with panic recovery so a
 // failure evaluating one subscriber never stops evaluation of the rest.
 func (w *AssetWorker) evaluateSubscriberSafe(
-	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, analysis *asset.AnalysisResult,
+	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64,
 ) (item AlertItem, triggered bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -454,7 +424,7 @@ func (w *AssetWorker) evaluateSubscriberSafe(
 			err = fmt.Errorf("recovered from panic: %v", r)
 		}
 	}()
-	return w.evaluateSubscriber(subscriber, fetchResult, priceIDR, analysis)
+	return w.evaluateSubscriber(subscriber, fetchResult, priceIDR)
 }
 
 // evaluateSubscriber implements the cooldown + threshold evaluation for a
@@ -468,7 +438,7 @@ func (w *AssetWorker) evaluateSubscriberSafe(
 //     delivery and cooldown persistence happen later, once per user, in
 //     dispatchBatches.
 func (w *AssetWorker) evaluateSubscriber(
-	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, analysis *asset.AnalysisResult,
+	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64,
 ) (AlertItem, bool, error) {
 	if subscriber.CooldownUntil != nil && time.Now().Before(*subscriber.CooldownUntil) {
 		priceMovePct := 0.0
@@ -492,11 +462,6 @@ func (w *AssetWorker) evaluateSubscriber(
 		ChangePct:   fetchResult.ChangePct24h,
 		TriggerType: triggerType,
 	}
-	if analysis != nil {
-		item.AnalysisID = analysis.AnalysisID
-		item.AnalysisEN = analysis.AnalysisEN
-	}
-
 	return item, true, nil
 }
 
@@ -644,28 +609,15 @@ func buildAssetItemBlock(lang string, item AlertItem) string {
 
 	priceLabel := "💰 Harga"
 	triggerLabel := triggerLabelID(item.TriggerType)
-	analysisText := item.AnalysisID
 	if lang == "en" {
 		priceLabel = "💰 Price"
 		triggerLabel = triggerLabelEN(item.TriggerType)
-		analysisText = item.AnalysisEN
 	}
 
-	block := fmt.Sprintf(
+	return fmt.Sprintf(
 		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s%%\n⚠️ Trigger: %s",
 		symbol, priceLabel, priceUSDText, priceIDRText, changePctText, notifier.EscapeTelegramMarkdown(triggerLabel),
 	)
-
-	// When AnalyzeAsset fails (DeepSeek down/timed out/rate-limited),
-	// analysisText is empty and the alert still needs to go out — the
-	// price/threshold breach is the important, time-sensitive part; the AI
-	// commentary is a nice-to-have. Omit the AI line entirely instead of
-	// leaving a blank line where it would have gone.
-	if analysisText != "" {
-		block += "\n" + notifier.EscapeTelegramMarkdown(analysisText)
-	}
-
-	return block
 }
 
 func triggerLabelID(triggerType string) string {

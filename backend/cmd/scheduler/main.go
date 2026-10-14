@@ -46,7 +46,6 @@ func main() {
 
 	notif := notifier.NewNotifier(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 	assetFetcher := asset.NewAssetFetcher(cfg.ExternalAPI.TwelveDataAPIKey)
-	deepSeekAnalyzer := asset.NewDeepSeekAnalyzer(cfg.DeepSeek.APIKey, cfg.DeepSeek.Model)
 	sentinelFetcher := sentinel.NewSentinelFetcher(cfg.ExternalAPI.GitHubToken)
 	sentinelAnalyzer := sentinel.NewSentinelAnalyzer(cfg.DeepSeek.APIKey, cfg.DeepSeek.Model)
 
@@ -58,7 +57,6 @@ func main() {
 		database.Redis,
 		assetFetcher,
 		notif,
-		deepSeekAnalyzer,
 		cfg.Scheduler.AssetIntervalHours,
 		cfg.Limits.MaxUniqueSymbols,
 		cfg.Limits.AlertPriceMovePct,
