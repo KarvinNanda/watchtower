@@ -77,8 +77,9 @@ func main() {
 	userService := user.NewUserService(database.SQL, cfg.Limits.MaxUniqueSymbols)
 	botHandler := telegram.NewBotHandler(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 
-	// isProduction only drives gin's release mode. The auth cookie's
-	// Secure/SameSite attributes come from COOKIE_SECURE (see
+	// isProduction drives gin's release mode and drops the Vite dev origin
+	// from CORS (see allowedOrigins). The auth cookie's Secure/SameSite
+	// attributes come from COOKIE_SECURE instead (see
 	// auth.Service.setAuthCookie), because self-hosted installs run in
 	// production mode over plain http://localhost.
 	isProduction := cfg.Server.Env == "production"
@@ -116,13 +117,7 @@ func main() {
 	// origin when nginx proxies /api/) — and per the Fetch/XHR spec,
 	// AllowCredentials can never be paired with a wildcard AllowOrigins, so
 	// every allowed origin is listed explicitly (see allowedOrigins).
-	router.Use(cors.New(cors.Config{
-		AllowOrigins:     allowedOrigins(cfg.Server.FrontendURL),
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Content-Type", "X-Requested-With"},
-		AllowCredentials: true,
-		MaxAge:           86400 * time.Second,
-	}))
+	router.Use(cors.New(corsConfig(cfg.Server.FrontendURL, isProduction)))
 	router.Use(middleware.RequestSizeLimit(maxRequestBodyBytes))
 	router.Use(middleware.SQLInjectionGuard())
 
@@ -188,12 +183,35 @@ func main() {
 	log.Println("[INFO] main: api stopped gracefully")
 }
 
-// allowedOrigins is the CORS allow-list: the Vite dev server plus the
-// configured frontend origin. AllowCredentials forbids a wildcard, and
-// gin-contrib/cors panics on an empty entry, so FRONTEND_URL is only
-// appended when set.
-func allowedOrigins(frontendURL string) []string {
-	origins := []string{"http://localhost:5173"}
+// corsConfig builds the CORS middleware config for the given allow-list.
+// With no allowed origin (production without FRONTEND_URL) every
+// cross-origin request is rejected; gin-contrib/cors would otherwise panic
+// at startup. Same-origin requests through nginx are unaffected.
+func corsConfig(frontendURL string, isProduction bool) cors.Config {
+	cfg := cors.Config{
+		AllowOrigins:     allowedOrigins(frontendURL, isProduction),
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type", "X-Requested-With"},
+		AllowCredentials: true,
+		MaxAge:           86400 * time.Second,
+	}
+	if len(cfg.AllowOrigins) == 0 {
+		cfg.AllowOriginFunc = func(string) bool { return false }
+	}
+	return cfg
+}
+
+// allowedOrigins is the CORS allow-list: the configured frontend origin,
+// plus the Vite dev server outside production. localhost:5173 is the same
+// site as localhost:8080, so in production any page served on Vite's
+// default port would otherwise get credentialed access to the API.
+// AllowCredentials forbids a wildcard, and gin-contrib/cors panics on an
+// empty entry, so FRONTEND_URL is only appended when set.
+func allowedOrigins(frontendURL string, isProduction bool) []string {
+	origins := []string{}
+	if !isProduction {
+		origins = append(origins, "http://localhost:5173")
+	}
 	if frontendURL != "" {
 		origins = append(origins, frontendURL)
 	}
