@@ -242,10 +242,10 @@ func (s *Service) Register(ctx context.Context, email, password string) error {
 // returning the token to the caller — the browser then attaches it
 // automatically on subsequent requests, and frontend JavaScript never has
 // direct access to it, closing off the token-theft-via-XSS risk a
-// localStorage-held token has. isProduction controls the cookie's Secure
-// and SameSite attributes (see setAuthCookie); the client's IP is read from
+// localStorage-held token has. secure controls the cookie's Secure and
+// SameSite attributes (see setAuthCookie); the client's IP is read from
 // c for security logging (failed-attempt tracking) — never persisted.
-func (s *Service) Login(c *gin.Context, email, password string, isProduction bool) (*User, error) {
+func (s *Service) Login(c *gin.Context, email, password string, secure bool) (*User, error) {
 	ctx := c.Request.Context()
 	email = normalizeEmail(email)
 
@@ -277,35 +277,33 @@ func (s *Service) Login(c *gin.Context, email, password string, isProduction boo
 		return nil, fmt.Errorf("generate token: %w", err)
 	}
 
-	s.setAuthCookie(c, token, isProduction)
+	s.setAuthCookie(c, token, secure)
 
 	return u, nil
 }
 
-// setAuthCookie sets the httpOnly JWT cookie Login issues. Secure and
-// SameSite both derive from isProduction rather than being independently
-// configurable: in development (plain HTTP) Secure must be false or
-// browsers refuse to store the cookie at all, and SameSite=Lax is
-// appropriate for that same-origin-ish local setup; in production (HTTPS)
-// Secure=true is required and SameSite=Strict is safe to tighten to, since
-// there's no legitimate cross-site flow that needs the cookie sent. Tying
-// both to the single isProduction flag (rather than adding separate
-// COOKIE_SECURE/COOKIE_SAMESITE env vars) avoids a configuration that could
-// contradict APP_ENV and accidentally ship a non-Secure cookie to
-// production.
-func (s *Service) setAuthCookie(c *gin.Context, token string, isProduction bool) {
+// setAuthCookie sets the httpOnly JWT cookie Login issues. secure comes
+// from COOKIE_SECURE and sets both Secure and SameSite=Strict: over plain
+// HTTP (self-hosting on http://localhost) Secure must be false or some
+// browsers refuse to store the cookie, and SameSite=Lax fits that setup;
+// behind HTTPS, Secure=true is required and Strict is safe because no
+// legitimate cross-site flow needs the cookie. It is a separate setting
+// from APP_ENV because self-hosted installs run APP_ENV=production over
+// HTTP — the cost is that an HTTPS deployment must remember to set
+// COOKIE_SECURE=true.
+func (s *Service) setAuthCookie(c *gin.Context, token string, secure bool) {
 	sameSite := http.SameSiteLaxMode
-	if isProduction {
+	if secure {
 		sameSite = http.SameSiteStrictMode
 	}
 	c.SetSameSite(sameSite)
-	c.SetCookie(authCookieName, token, int(s.jwtExpiry.Seconds()), authCookiePath, "", isProduction, true)
+	c.SetCookie(authCookieName, token, int(s.jwtExpiry.Seconds()), authCookiePath, "", secure, true)
 }
 
 // Logout clears the httpOnly auth cookie Login sets. Browsers match
 // cookies for deletion by name/domain/path only (not by Secure/HttpOnly/
 // SameSite), so a fixed maxAge=-1 delete works regardless of which
-// isProduction value the cookie was originally set with.
+// secure value the cookie was originally set with.
 func (s *Service) Logout(c *gin.Context) {
 	c.SetCookie(authCookieName, "", -1, authCookiePath, "", false, true)
 }

@@ -13,10 +13,13 @@ import (
 type ServerConfig struct {
 	Env  string
 	Port int
-	// FrontendURL is the only origin allowed by CORSMiddleware when
-	// Env == "production". Ignored in development, where all origins are
-	// allowed.
+	// FrontendURL is added to the CORS allow-list (in addition to the Vite
+	// dev origin).
 	FrontendURL string
+	// CookieSecure sets the auth cookie's Secure flag (and SameSite=Strict).
+	// Keep false for self-hosting over http://localhost; set true only
+	// behind HTTPS.
+	CookieSecure bool
 }
 
 type DatabaseConfig struct {
@@ -86,6 +89,7 @@ var envBindings = map[string]string{
 	"app_env":                           "APP_ENV",
 	"app_port":                          "APP_PORT",
 	"frontend_url":                      "FRONTEND_URL",
+	"cookie_secure":                     "COOKIE_SECURE",
 	"db_host":                           "DB_HOST",
 	"db_port":                           "DB_PORT",
 	"db_user":                           "DB_USER",
@@ -142,9 +146,10 @@ func Load(envPath string) (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			Env:         v.GetString("app_env"),
-			Port:        v.GetInt("app_port"),
-			FrontendURL: v.GetString("frontend_url"),
+			Env:          v.GetString("app_env"),
+			Port:         v.GetInt("app_port"),
+			FrontendURL:  v.GetString("frontend_url"),
+			CookieSecure: v.GetBool("cookie_secure"),
 		},
 		Database: DatabaseConfig{
 			Host:     v.GetString("db_host"),

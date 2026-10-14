@@ -20,7 +20,9 @@ func init() { gin.SetMode(gin.TestMode) }
 
 type fakeLinks struct{ linked bool }
 
-func (f fakeLinks) TelegramLinked(context.Context, uint64, string) (bool, error) { return f.linked, nil }
+func (f fakeLinks) TelegramLinked(context.Context, uint64, string) (bool, error) {
+	return f.linked, nil
+}
 
 type testAPI struct {
 	router *gin.Engine
