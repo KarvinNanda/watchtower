@@ -44,6 +44,16 @@ type SentinelItem struct {
 	PublishedAt time.Time
 	Keywords    []string
 	RawContent  string
+
+	// Enrichment taken from the source itself (no AI). Zero values mean
+	// the source did not provide the field.
+	CVEID          string
+	Severity       string // upper-case: CRITICAL, HIGH, MEDIUM, LOW
+	CVSSScore      float64
+	KnownExploited bool // listed in CISA KEV
+	RequiredAction string
+	DueDate        string
+	Ransomware     bool
 }
 
 // SentinelFetcher polls all six WatchTower threat-intel sources: NVD/NIST,
@@ -83,20 +93,7 @@ func (f *SentinelFetcher) FetchNVD() ([]SentinelItem, error) {
 		url.QueryEscape(now.Format(nvdTimeFormat)),
 	)
 
-	var payload struct {
-		Vulnerabilities []struct {
-			CVE struct {
-				ID           string `json:"id"`
-				Published    string `json:"published"`
-				Descriptions []struct {
-					Lang  string `json:"lang"`
-					Value string `json:"value"`
-				} `json:"descriptions"`
-			} `json:"cve"`
-		} `json:"vulnerabilities"`
-	}
-
-	err := f.getJSON(endpoint, nil, &payload)
+	body, err := f.getBody(endpoint, nil)
 
 	// NVD's public (unauthenticated) rate limit is roughly 5 requests per
 	// rolling 30 seconds; pause after every call to stay well within it.
@@ -105,83 +102,17 @@ func (f *SentinelFetcher) FetchNVD() ([]SentinelItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sentinel: fetch nvd: %w", err)
 	}
-
-	items := make([]SentinelItem, 0, len(payload.Vulnerabilities))
-	for _, v := range payload.Vulnerabilities {
-		description := ""
-		for _, d := range v.CVE.Descriptions {
-			if d.Lang == "en" {
-				description = d.Value
-				break
-			}
-		}
-		if description == "" && len(v.CVE.Descriptions) > 0 {
-			description = v.CVE.Descriptions[0].Value
-		}
-
-		title := fmt.Sprintf("%s: %s", v.CVE.ID, truncate(description, 80))
-		rawContent := description
-
-		items = append(items, SentinelItem{
-			SourceType:  "cve",
-			Identifier:  v.CVE.ID,
-			Title:       title,
-			Description: description,
-			URL:         fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", v.CVE.ID),
-			PublishedAt: parseFlexibleTime(v.CVE.Published, now),
-			Keywords:    extractKeywords(title + " " + description + " " + rawContent),
-			RawContent:  rawContent,
-		})
-	}
-
-	return items, nil
+	return parseNVD(body, now)
 }
 
 // FetchCISAKEV retrieves CISA Known Exploited Vulnerabilities added in the
 // last 7 days.
 func (f *SentinelFetcher) FetchCISAKEV() ([]SentinelItem, error) {
-	var payload struct {
-		Vulnerabilities []struct {
-			CveID             string `json:"cveID"`
-			VendorProject     string `json:"vendorProject"`
-			Product           string `json:"product"`
-			VulnerabilityName string `json:"vulnerabilityName"`
-			DateAdded         string `json:"dateAdded"`
-			ShortDescription  string `json:"shortDescription"`
-		} `json:"vulnerabilities"`
-	}
-
-	if err := f.getJSON(cisaKEVFeedURL, nil, &payload); err != nil {
+	body, err := f.getBody(cisaKEVFeedURL, nil)
+	if err != nil {
 		return nil, fmt.Errorf("sentinel: fetch cisa kev: %w", err)
 	}
-
-	cutoff := time.Now().Add(-lookbackWindow)
-
-	items := make([]SentinelItem, 0)
-	for _, v := range payload.Vulnerabilities {
-		dateAdded, err := time.Parse("2006-01-02", v.DateAdded)
-		if err != nil || dateAdded.Before(cutoff) {
-			continue
-		}
-
-		title := v.VulnerabilityName
-		description := v.ShortDescription
-		rawContent := v.ShortDescription
-		keywordText := title + " " + description + " " + rawContent + " " + v.VendorProject + " " + v.Product
-
-		items = append(items, SentinelItem{
-			SourceType:  "cisa_kev",
-			Identifier:  v.CveID,
-			Title:       title,
-			Description: description,
-			URL:         fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", v.CveID),
-			PublishedAt: dateAdded,
-			Keywords:    extractKeywords(keywordText),
-			RawContent:  rawContent,
-		})
-	}
-
-	return items, nil
+	return parseKEV(body, time.Now().Add(-lookbackWindow))
 }
 
 type rssDocument struct {
@@ -407,47 +338,11 @@ func (f *SentinelFetcher) FetchGitHubAdvisories() ([]SentinelItem, error) {
 	endpoint := fmt.Sprintf("%s?type=reviewed&per_page=30&published=%s",
 		githubAdvisoriesURL, url.QueryEscape(">"+cutoff))
 
-	var payload []struct {
-		GHSAID      string `json:"ghsa_id"`
-		Summary     string `json:"summary"`
-		Description string `json:"description"`
-		HTMLURL     string `json:"html_url"`
-		PublishedAt string `json:"published_at"`
-		CWEs        []struct {
-			CWEID string `json:"cwe_id"`
-			Name  string `json:"name"`
-		} `json:"cwes"`
-	}
-
-	if err := f.getJSON(endpoint, f.githubHeaders(), &payload); err != nil {
+	body, err := f.getBody(endpoint, f.githubHeaders())
+	if err != nil {
 		return nil, fmt.Errorf("sentinel: fetch github advisories: %w", err)
 	}
-
-	items := make([]SentinelItem, 0, len(payload))
-	for _, a := range payload {
-		var cweNames []string
-		for _, c := range a.CWEs {
-			cweNames = append(cweNames, c.Name)
-		}
-
-		title := a.Summary
-		description := a.Description
-		rawContent := a.Description
-		keywordText := title + " " + description + " " + rawContent + " " + strings.Join(cweNames, " ")
-
-		items = append(items, SentinelItem{
-			SourceType:  "github_advisory",
-			Identifier:  a.GHSAID,
-			Title:       title,
-			Description: description,
-			URL:         a.HTMLURL,
-			PublishedAt: parseFlexibleTime(a.PublishedAt, time.Now()),
-			Keywords:    extractKeywords(keywordText),
-			RawContent:  rawContent,
-		})
-	}
-
-	return items, nil
+	return parseGitHubAdvisories(body, time.Now())
 }
 
 // FetchAll polls all six sources, isolating failures (and panics) so a

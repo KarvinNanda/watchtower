@@ -1,0 +1,19 @@
+{
+  "vulnerabilities": [
+    {"cve": {"id": "CVE-2024-3094", "published": "2024-03-29T17:15:21.150",
+      "descriptions": [{"lang": "en", "value": "Malicious code was discovered in the upstream tarballs of xz, starting with version 5.6.0."}],
+      "metrics": {"cvssMetricV31": [{"source": "secalert@redhat.com", "type": "Secondary",
+        "cvssData": {"version": "3.1", "baseScore": 10.0, "baseSeverity": "CRITICAL"}}]}}},
+    {"cve": {"id": "CVE-2026-99999", "published": "2026-10-13T08:00:00.000",
+      "descriptions": [{"lang": "en", "value": "A newly published flaw with no score yet."}],
+      "metrics": {}}},
+    {"cve": {"id": "CVE-2026-88888", "published": "2026-10-13T09:00:00.000",
+      "descriptions": [{"lang": "en", "value": "NVD primary score must win over a CNA secondary score."}],
+      "metrics": {"cvssMetricV31": [
+        {"type": "Secondary", "cvssData": {"baseScore": 5.3, "baseSeverity": "MEDIUM"}},
+        {"type": "Primary", "cvssData": {"baseScore": 7.5, "baseSeverity": "HIGH"}}]}}},
+    {"cve": {"id": "CVE-2026-77777", "published": "2026-10-13T10:00:00.000",
+      "descriptions": [{"lang": "en", "value": "Only a CVSS v4.0 score is available."}],
+      "metrics": {"cvssMetricV40": [{"type": "Secondary", "cvssData": {"baseScore": 9.3, "baseSeverity": "CRITICAL"}}]}}}
+  ]
+}
