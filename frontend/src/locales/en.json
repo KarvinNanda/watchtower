@@ -163,5 +163,15 @@
     "back": "Back",
     "required_field": "This field is required",
     "session_expired": "Your session has expired. Please sign in again."
+  },
+  "run": {
+    "check_now": "Check now",
+    "running": "Checking...",
+    "asset_summary": "Checked {rules_checked} rule(s): {triggered} triggered, {sent} sent to Telegram.",
+    "sentinel_summary": "Fetched {items_fetched} item(s), {new_items} new, {sent_to_you} sent to you.",
+    "failed": "Check failed: {reason}",
+    "error_scheduler_offline": "The scheduler is not running. Start it with: docker compose up -d",
+    "error_telegram_not_linked": "Link your Telegram chat for this alert type first (Telegram Setup page).",
+    "error_too_many": "Please wait {seconds} seconds before checking again."
   }
 }

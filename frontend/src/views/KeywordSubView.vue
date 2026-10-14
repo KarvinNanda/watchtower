@@ -15,6 +15,7 @@ import {
 } from 'naive-ui'
 
 import { useSubscriptionsStore } from '@/stores/subscriptions'
+import RunNowButton from '@/components/runs/RunNowButton.vue'
 import { message } from '@/plugins/naive'
 
 const { t } = useI18n()
@@ -131,6 +132,7 @@ onMounted(async () => {
 <template>
   <div class="keyword-view">
     <div class="keyword-view__toolbar">
+      <run-now-button type="sentinel" />
       <n-button type="primary" @click="openCreateModal">{{ t('keyword.add') }}</n-button>
     </div>
 
@@ -169,6 +171,7 @@ onMounted(async () => {
 <style scoped>
 .keyword-view__toolbar {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
   margin-bottom: 16px;
 }
