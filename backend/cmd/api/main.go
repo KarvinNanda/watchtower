@@ -24,6 +24,7 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/config"
 	"github.com/karvin-nanda/watchtower/internal/db"
 	"github.com/karvin-nanda/watchtower/internal/middleware"
+	"github.com/karvin-nanda/watchtower/internal/runs"
 	"github.com/karvin-nanda/watchtower/internal/telegram"
 	"github.com/karvin-nanda/watchtower/internal/user"
 )
@@ -245,6 +246,8 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 	protected.GET("/market/:symbol", marketQuoteHandler(database.SQL))
 
 	protected.GET("/dashboard", dashboardHandler(userService))
+
+	runs.RegisterRoutes(protected, runs.NewStore(database.Redis), runs.SQLTelegramLinkChecker{DB: database.SQL})
 }
 
 // respondData writes a successful {"data": ..., "message": ...} response.
