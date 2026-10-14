@@ -59,7 +59,6 @@ func main() {
 		cfg.Scheduler.AssetIntervalHours,
 		cfg.Limits.MaxUniqueSymbols,
 		cfg.Limits.AlertPriceMovePct,
-		assetInterval,
 	)
 
 	sentinelWorker := scheduler.NewSentinelWorker(
@@ -76,13 +75,13 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		assetWorker.Start(ctx)
+		runEvery(ctx, "asset", assetInterval, assetWorker.Run)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		sentinelWorker.Start(ctx, sentinelInterval)
+		runEvery(ctx, "sentinel", sentinelInterval, sentinelWorker.Run)
 	}()
 
 	<-ctx.Done()
@@ -90,4 +89,24 @@ func main() {
 
 	wg.Wait()
 	log.Println("[INFO] main: scheduler stopped gracefully")
+}
+
+// runEvery is a stop-gap kept only until the persisted due-check loop
+// (scheduler.Pipeline) lands in the next commit.
+func runEvery(ctx context.Context, name string, every time.Duration, fn func() error) {
+	if err := fn(); err != nil {
+		log.Printf("[ERROR] main: %s run failed: %v", name, err)
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := fn(); err != nil {
+				log.Printf("[ERROR] main: %s run failed: %v", name, err)
+			}
+		}
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -83,6 +84,8 @@ type SentinelWorker struct {
 	fetcher  *sentinel.SentinelFetcher
 	notifier SentinelNotifierInterface
 
+	mu sync.Mutex // serializes periodic and manual sentinel runs
+
 	notifLogs *notifier.LogRepository
 }
 
@@ -101,67 +104,63 @@ func NewSentinelWorker(
 	}
 }
 
-// Run is the scheduler entry point: it cleans up expired sentinel_seen_items,
-// fetches and processes every source (collecting matched items per user),
-// then sends each user at most one combined message for the run, and logs
-// a summary. It never panics — any recovered panic is logged and returned
-// as an error.
-func (w *SentinelWorker) Run() (err error) {
+// SentinelRunResult summarizes one sentinel run. SentToUser counts items
+// actually delivered per user (failed sends are not counted).
+type SentinelRunResult struct {
+	Fetched    int
+	New        int
+	Matched    int
+	SentToUser map[uint64]int
+}
+
+// Run is the periodic entry point.
+func (w *SentinelWorker) Run() error {
+	_, err := w.RunWithResult()
+	return err
+}
+
+// RunWithResult runs the global sentinel pipeline (dedup is global, so a
+// manual run cannot be scoped to one user without starving others) and
+// reports per-user delivery. It holds w.mu for its whole duration so
+// periodic and manual runs never overlap, and never panics — any recovered
+// panic is returned as an error.
+func (w *SentinelWorker) RunWithResult() (result SentinelRunResult, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[ERROR] SentinelWorker.Run: recovered from panic: %v", r)
+			log.Printf("[ERROR] SentinelWorker.RunWithResult: recovered from panic: %v", r)
 			err = fmt.Errorf("scheduler: recovered from panic: %v", r)
 		}
 	}()
 
 	start := time.Now()
-	log.Printf("[INFO] SentinelWorker.Run: starting run at %s", start.Format(time.RFC3339))
+	log.Printf("[INFO] SentinelWorker.RunWithResult: starting run at %s", start.Format(time.RFC3339))
 
 	if cleanupErr := w.cleanupExpiredItems(); cleanupErr != nil {
-		log.Printf("[ERROR] SentinelWorker.Run: cleanup expired items: %v", cleanupErr)
+		log.Printf("[ERROR] SentinelWorker.RunWithResult: cleanup expired items: %v", cleanupErr)
 	}
 
 	counters := &ProcessCounters{}
 	batches := make(map[uint64]*SentinelBatch)
 	if procErr := w.fetchAndProcess(counters, batches); procErr != nil {
-		log.Printf("[ERROR] SentinelWorker.Run: fetch and process: %v", procErr)
-		return fmt.Errorf("scheduler: fetch and process: %w", procErr)
+		return result, fmt.Errorf("scheduler: fetch and process: %w", procErr)
 	}
 
-	sent, usersNotified := w.dispatchBatches(batches)
-	counters.Sent = sent
+	sentToUser, usersNotified := w.dispatchBatches(batches)
+	counters.Sent = len(sentToUser)
 
-	log.Printf("[INFO] SentinelWorker.Run: completed in %s — fetched: %d, new: %d, matched: %d, "+
-		"users notified: %d, sent: %d",
+	log.Printf("[INFO] SentinelWorker.RunWithResult: completed in %s — fetched: %d, new: %d, matched: %d, "+
+		"users notified: %d, delivered: %d",
 		time.Since(start), counters.Fetched, counters.New, counters.Matched, usersNotified, counters.Sent)
 
-	return nil
-}
-
-// Start runs Run() immediately, then again on every tick of interval, until
-// ctx is cancelled — at which point it returns, allowing the caller to shut
-// down gracefully.
-func (w *SentinelWorker) Start(ctx context.Context, interval time.Duration) {
-	log.Printf("[INFO] SentinelWorker.Start: running immediately, then every %s", interval)
-
-	if err := w.Run(); err != nil {
-		log.Printf("[ERROR] SentinelWorker.Start: initial run failed: %v", err)
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("[INFO] SentinelWorker.Start: context cancelled, stopping gracefully")
-			return
-		case <-ticker.C:
-			if err := w.Run(); err != nil {
-				log.Printf("[ERROR] SentinelWorker.Start: run failed: %v", err)
-			}
-		}
-	}
+	return SentinelRunResult{
+		Fetched:    counters.Fetched,
+		New:        counters.New,
+		Matched:    counters.Matched,
+		SentToUser: sentToUser,
+	}, nil
 }
 
 // cleanupExpiredItems deletes sentinel_seen_items rows past their
@@ -401,9 +400,10 @@ func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem) error {
 // (splitting into multiple messages only if the combined text would exceed
 // Telegram's 4096-character limit — see buildBatchedMessages), and records
 // exactly one notification_logs entry per user for the run.
-func (w *SentinelWorker) dispatchBatches(batches map[uint64]*SentinelBatch) (sent, usersNotified int) {
+func (w *SentinelWorker) dispatchBatches(batches map[uint64]*SentinelBatch) (sentToUser map[uint64]int, usersNotified int) {
+	sentToUser = make(map[uint64]int)
 	if len(batches) == 0 {
-		return 0, 0
+		return sentToUser, 0
 	}
 
 	timestamp := time.Now().In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
@@ -414,12 +414,11 @@ func (w *SentinelWorker) dispatchBatches(batches map[uint64]*SentinelBatch) (sen
 			continue
 		}
 		if w.dispatchUserBatch(batch, timestampEscaped) {
-			sent++
+			sentToUser[batch.UserID] = len(batch.Items)
 		}
 		usersNotified++
 	}
-
-	return sent, usersNotified
+	return sentToUser, usersNotified
 }
 
 // dispatchUserBatch sends batch as one or more Telegram messages (per

@@ -104,3 +104,22 @@ func TestBuildSentinelItemBlock_RSSHasNoSeverityLine(t *testing.T) {
 	assert.NotContains(t, block, "SEVERITY")
 	assert.Contains(t, block, "SOURCE: RSS")
 }
+
+func TestSentinelDispatch_SentToUserOnlyCountsDelivered(t *testing.T) {
+	w, mock, n := newMockSentinelWorker(t)
+	n.failChatIDs[200] = true
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	batches := map[uint64]*SentinelBatch{
+		1: {UserID: 1, ChatID: 100, Language: "en", Items: []SentinelBatchItem{
+			{SourceType: "rss", Title: "a", URL: "https://a"}, {SourceType: "rss", Title: "b", URL: "https://b"}}},
+		2: {UserID: 2, ChatID: 200, Language: "en", Items: []SentinelBatchItem{
+			{SourceType: "rss", Title: "c", URL: "https://c"}}},
+	}
+
+	sentToUser, usersNotified := w.dispatchBatches(batches)
+	assert.Equal(t, map[uint64]int{1: 2}, sentToUser)
+	assert.Equal(t, 2, usersNotified)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

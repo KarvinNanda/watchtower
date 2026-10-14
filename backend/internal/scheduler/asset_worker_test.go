@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -95,7 +96,7 @@ func TestBatchInitializedOnce(t *testing.T) {
 
 	for _, symbol := range []string{"BTC", "ETH", "SOL"} {
 		fetchResult := sampleFetchResultFor(symbol, 150) // breaches PriceUpperUSD=100 for both subscribers
-		triggered := w.appendTriggeredAlerts(subscribers, fetchResult, 150*16000, batches, cooldownHoursByUser)
+		triggered := w.appendTriggeredAlerts(subscribers, fetchResult, 150*16000, false, batches, cooldownHoursByUser)
 		assert.Equal(t, 2, triggered, "both subscribers should trigger for %s", symbol)
 	}
 
@@ -132,8 +133,8 @@ func TestBatchNoDuplicateUsers(t *testing.T) {
 	sub := sampleSubscriber(1, floatPtr(100))
 
 	// BTC triggers, then NVDA triggers, both for the same user.
-	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("BTC", 150), 150*16000, batches, cooldownHoursByUser)
-	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("NVDA", 150), 150*16000, batches, cooldownHoursByUser)
+	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("BTC", 150), 150*16000, false, batches, cooldownHoursByUser)
+	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("NVDA", 150), 150*16000, false, batches, cooldownHoursByUser)
 
 	require.Len(t, batches, 1, "one user triggering on two symbols must produce exactly one map entry, not two")
 	assert.Len(t, batches[1].Alerts, 2, "that one entry must contain both AlertItems")
@@ -153,7 +154,7 @@ func TestBatchEmptyWhenNoTrigger(t *testing.T) {
 	sub := sampleSubscriber(1, floatPtr(200))
 	fetchResult := sampleFetchResultFor("BTC", 150)
 
-	triggered := w.appendTriggeredAlerts([]SubscriberData{sub}, fetchResult, 150*16000, batches, cooldownHoursByUser)
+	triggered := w.appendTriggeredAlerts([]SubscriberData{sub}, fetchResult, 150*16000, false, batches, cooldownHoursByUser)
 
 	assert.Equal(t, 0, triggered)
 	assert.Empty(t, batches, "no message should be queued when no subscriber's threshold is breached")
@@ -181,7 +182,7 @@ func TestBatchCooldownRespected(t *testing.T) {
 	// cooldown should still suppress it.
 	fetchResult := sampleFetchResultFor("BTC", 50100)
 
-	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 50100*16000)
+	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 50100*16000, false)
 
 	require.NoError(t, err)
 	assert.False(t, triggered, "cooldown should suppress an alert when price hasn't moved enough to bypass it")
@@ -208,7 +209,7 @@ func TestBatchCooldownBypassedByPriceMove(t *testing.T) {
 	// (5%) -- so the alert should fire despite the active cooldown.
 	fetchResult := sampleFetchResultFor("BTC", 53000)
 
-	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 53000*16000)
+	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 53000*16000, false)
 
 	require.NoError(t, err)
 	require.True(t, triggered, "a price move beyond alertPriceMovePct should bypass an active cooldown")
@@ -229,4 +230,66 @@ func TestBuildAssetItemBlock_HasNoAICommentaryLine(t *testing.T) {
 	assert.Contains(t, block, "BTC")
 	assert.Contains(t, block, "Upper Bound")
 	assert.Equal(t, 3, strings.Count(block, "\n"), "block must be exactly 4 lines: symbol, price, 24h, trigger")
+}
+
+func TestRunForUser_WaitsForLockAndHandlesNoSubscriptions(t *testing.T) {
+	w, mock, _ := newMockAssetWorker(t, 5.0)
+	w.maxUniqueSymbols = 100
+	mock.ExpectQuery(`SELECT DISTINCT asset_symbol, asset_type`).
+		WithArgs(7, 100).
+		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type"}))
+
+	w.mu.Lock()
+	done := make(chan AssetRunResult, 1)
+	go func() {
+		res, err := w.RunForUser(7)
+		assert.NoError(t, err)
+		done <- res
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("RunForUser ran while another asset run held the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	w.mu.Unlock()
+
+	select {
+	case res := <-done:
+		assert.Equal(t, AssetRunResult{}, res, "no subscriptions means an all-zero summary, not an error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunForUser never ran after the lock was released")
+	}
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestLoadSubscribers_ScopedToUser(t *testing.T) {
+	w, mock, _ := newMockAssetWorker(t, 5.0)
+	mock.ExpectQuery(`AND sub\.user_id = \?`).
+		WithArgs("BTC", 7).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"user_id", "alert_type", "price_lower_usd", "price_upper_usd", "pct_change_threshold",
+			"telegram_asset_chat_id", "alert_cooldown_hours", "preferred_language",
+			"last_alert_type", "last_alerted_price_usd", "cooldown_until",
+		}))
+
+	subs, err := w.loadSubscribers(context.Background(), "BTC", 7)
+	require.NoError(t, err)
+	assert.Empty(t, subs)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEvaluateSubscriber_SkipCooldownForManualRun(t *testing.T) {
+	t.Parallel()
+	w := &AssetWorker{alertPriceMovePct: 5.0}
+	lastAlertedPrice := 50000.0
+	subscriber := SubscriberData{
+		UserID: 1, AlertType: "price_threshold", PriceUpperUSD: floatPtr(50000),
+		TelegramAssetChatID: 1000, AlertCooldownHours: 4, PreferredLanguage: "id",
+		LastAlertedPriceUSD: &lastAlertedPrice, CooldownUntil: timePtr(time.Now().Add(3 * time.Hour)),
+	}
+
+	_, triggered, err := w.evaluateSubscriber(subscriber, sampleFetchResultFor("BTC", 50100), 50100*16000, true)
+	require.NoError(t, err)
+	assert.True(t, triggered, "a manual run must ignore the cooldown")
 }
