@@ -61,6 +61,13 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/auth/register \
             -H 'Content-Type: application/json' -d '{"email":"ci@watchtower.test","password":"Ci!12345678Ab"}')
           test "$code" = "201"
+          # Browsers send Origin; behind nginx the API must still see these as same-origin.
+          for origin in http://localhost:8080 http://127.0.0.1:8080; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/auth/login \
+              -H "Origin: $origin" -H 'Content-Type: application/json' \
+              -d '{"email":"ci@watchtower.test","password":"Ci!12345678Ab"}')
+            test "$code" = "200" || { echo "login from $origin returned $code"; exit 1; }
+          done
           # SPA route that shares its name with Vite's build directory.
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/assets)" = "200"
       - name: Nothing but the web app is published

@@ -76,7 +76,7 @@ After editing `.env`, run `docker compose up -d --build` (bot usernames are bake
 |---|---|
 | macOS (Apple Silicon) | Full stack |
 | Linux (Ubuntu, CI) | Full stack |
-| Windows | Setup script logic only (CI). The Docker Desktop flow has not been verified on a real Windows machine yet. |
+| Windows | CI runs only `setup.ps1 -NoStart -SkipPrompts` (secret generation, no BOM/CRLF, no overwrite). The token prompts, the start/health-check path and Docker Desktop itself have not been verified on Windows yet. |
 
 ## Development
 
