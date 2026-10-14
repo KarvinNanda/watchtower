@@ -12,7 +12,13 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+# BuildKit sets TARGETARCH to the platform being built (arm64 on Apple
+# Silicon, amd64 on most PCs). A hardcoded amd64 binary fails with
+# "exec format error" in an arm64 runtime image unless the host happens
+# to emulate amd64.
+ARG TARGETOS=linux
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-w -s" \
     -o /app/bin/scheduler ./cmd/scheduler
 

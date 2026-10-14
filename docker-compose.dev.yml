@@ -1,0 +1,9 @@
+# Development overlay: publishes mysql/redis on loopback so `go run` and
+# `npm run dev` on the host can reach them. Used by `make dev-up`.
+services:
+  mysql:
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-3306}:3306"
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
