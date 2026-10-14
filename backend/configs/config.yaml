@@ -21,9 +21,6 @@ redis_password: ""
 jwt_secret: ""
 jwt_expiry_hours: 24
 
-deepseek_api_key: ""
-deepseek_model: deepseek-chat
-
 telegram_asset_bot_token: ""
 telegram_sentinel_bot_token: ""
 telegram_mode: polling

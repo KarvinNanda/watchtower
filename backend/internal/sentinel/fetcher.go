@@ -1,6 +1,6 @@
 // Package sentinel polls threat-intel sources (NVD/NIST, CISA KEV, RSS
-// feeds, GitHub repositories/advisories, Exploit-DB), and produces
-// AI-assisted security analysis per item via DeepSeek.
+// feeds, GitHub repositories/advisories, Exploit-DB) and normalizes every
+// item, including the severity data each source provides, into SentinelItem.
 package sentinel
 
 import (

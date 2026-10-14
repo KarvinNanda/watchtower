@@ -47,7 +47,6 @@ func main() {
 	notif := notifier.NewNotifier(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 	assetFetcher := asset.NewAssetFetcher(cfg.ExternalAPI.TwelveDataAPIKey)
 	sentinelFetcher := sentinel.NewSentinelFetcher(cfg.ExternalAPI.GitHubToken)
-	sentinelAnalyzer := sentinel.NewSentinelAnalyzer(cfg.DeepSeek.APIKey, cfg.DeepSeek.Model)
 
 	assetInterval := time.Duration(cfg.Scheduler.AssetIntervalHours) * time.Hour
 	sentinelInterval := time.Duration(cfg.Scheduler.SentinelIntervalHours) * time.Hour
@@ -66,7 +65,6 @@ func main() {
 	sentinelWorker := scheduler.NewSentinelWorker(
 		database.SQL,
 		sentinelFetcher,
-		sentinelAnalyzer,
 		notif,
 	)
 

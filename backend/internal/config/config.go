@@ -38,11 +38,6 @@ type JWTConfig struct {
 	ExpiryHours int
 }
 
-type DeepSeekConfig struct {
-	APIKey string
-	Model  string
-}
-
 type TelegramConfig struct {
 	AssetBotToken    string
 	SentinelBotToken string
@@ -75,7 +70,6 @@ type Config struct {
 	Database    DatabaseConfig
 	Redis       RedisConfig
 	JWT         JWTConfig
-	DeepSeek    DeepSeekConfig
 	Telegram    TelegramConfig
 	ExternalAPI ExternalAPIConfig
 	Scheduler   SchedulerConfig
@@ -102,8 +96,6 @@ var envBindings = map[string]string{
 	"redis_password":                    "REDIS_PASSWORD",
 	"jwt_secret":                        "JWT_SECRET",
 	"jwt_expiry_hours":                  "JWT_EXPIRY_HOURS",
-	"deepseek_api_key":                  "DEEPSEEK_API_KEY",
-	"deepseek_model":                    "DEEPSEEK_MODEL",
 	"telegram_asset_bot_token":          "TELEGRAM_ASSET_BOT_TOKEN",
 	"telegram_sentinel_bot_token":       "TELEGRAM_SENTINEL_BOT_TOKEN",
 	"telegram_mode":                     "TELEGRAM_MODE",
@@ -169,10 +161,6 @@ func Load(envPath string) (*Config, error) {
 		JWT: JWTConfig{
 			Secret:      v.GetString("jwt_secret"),
 			ExpiryHours: v.GetInt("jwt_expiry_hours"),
-		},
-		DeepSeek: DeepSeekConfig{
-			APIKey: v.GetString("deepseek_api_key"),
-			Model:  v.GetString("deepseek_model"),
 		},
 		Telegram: TelegramConfig{
 			AssetBotToken:    v.GetString("telegram_asset_bot_token"),

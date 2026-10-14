@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -46,18 +45,20 @@ type ProcessCounters struct {
 
 // SentinelBatchItem is one matched sentinel item for a single user,
 // collected during a run and rendered as one section of that user's
-// batched message.
+// batched message. Every field comes from the source feed itself.
 type SentinelBatchItem struct {
-	SourceType   string
-	Title        string
-	URL          string
-	StatusBahaya string
-	CVE          string
-	Kategori     string
-	DampakID     string
-	AksiID       string
-	DampakEN     string
-	AksiEN       string
+	SourceType      string
+	Title           string
+	Description     string
+	URL             string
+	CVEID           string
+	Severity        string
+	CVSSScore       float64
+	KnownExploited  bool
+	RequiredAction  string
+	DueDate         string
+	Ransomware      bool
+	MatchedKeywords []string
 }
 
 // SentinelBatch accumulates every SentinelBatchItem matched for one user
@@ -71,17 +72,15 @@ type SentinelBatch struct {
 }
 
 // SentinelWorker periodically polls all six threat-intel sources,
-// deduplicates items globally via sentinel_seen_items, runs one DeepSeek
-// analysis per new item that matches at least one active keyword
-// subscription (shared across every matching user), and notifies matching
-// users via the Sentinel Telegram bot. Every item matched for a given user
-// within one run is batched into a single Telegram message (see
-// SentinelBatch) rather than sent as separate messages per item, to avoid
-// spamming a user whose keywords match several items in the same run.
+// deduplicates items globally via sentinel_seen_items, and notifies users
+// whose keyword subscriptions match a new item via the Sentinel Telegram
+// bot. Every item matched for a given user within one run is batched into
+// a single Telegram message (see SentinelBatch) rather than sent as
+// separate messages per item, to avoid spamming a user whose keywords
+// match several items in the same run.
 type SentinelWorker struct {
 	db       *sql.DB
 	fetcher  *sentinel.SentinelFetcher
-	analyzer *sentinel.SentinelAnalyzer
 	notifier SentinelNotifierInterface
 
 	notifLogs *notifier.LogRepository
@@ -92,13 +91,11 @@ type SentinelWorker struct {
 func NewSentinelWorker(
 	db *sql.DB,
 	fetcher *sentinel.SentinelFetcher,
-	analyzer *sentinel.SentinelAnalyzer,
 	notif SentinelNotifierInterface,
 ) *SentinelWorker {
 	return &SentinelWorker{
 		db:        db,
 		fetcher:   fetcher,
-		analyzer:  analyzer,
 		notifier:  notif,
 		notifLogs: notifier.NewLogRepository(db),
 	}
@@ -233,7 +230,7 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 	}
 
 	if len(matches) == 0 {
-		if err := w.insertSeenItem(item, nil); err != nil {
+		if err := w.insertSeenItem(item); err != nil {
 			return fmt.Errorf("insert seen item (no match): %w", err)
 		}
 		return nil
@@ -241,18 +238,7 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 
 	counters.Matched++
 
-	userContext := buildAggregateUserContext(matches)
-
-	analysis, analyzeErr := w.analyzer.AnalyzeItem(item, userContext)
-	if analyzeErr != nil {
-		log.Printf("[ERROR] processItem: analyze %s/%s failed: %v", item.SourceType, item.Identifier, analyzeErr)
-		if err := w.insertSeenItem(item, nil); err != nil {
-			log.Printf("[ERROR] processItem: insert seen item after failed analysis: %v", err)
-		}
-		return nil
-	}
-
-	if err := w.insertSeenItem(item, analysis); err != nil {
+	if err := w.insertSeenItem(item); err != nil {
 		return fmt.Errorf("insert seen item: %w", err)
 	}
 
@@ -267,16 +253,18 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 			batches[u.UserID] = batch
 		}
 		batch.Items = append(batch.Items, SentinelBatchItem{
-			SourceType:   item.SourceType,
-			Title:        item.Title,
-			URL:          item.URL,
-			StatusBahaya: analysis.StatusBahaya,
-			CVE:          analysis.CVE,
-			Kategori:     analysis.Kategori,
-			DampakID:     analysis.DampakID,
-			AksiID:       analysis.AksiID,
-			DampakEN:     analysis.DampakEN,
-			AksiEN:       analysis.AksiEN,
+			SourceType:      item.SourceType,
+			Title:           item.Title,
+			Description:     item.Description,
+			URL:             item.URL,
+			CVEID:           item.CVEID,
+			Severity:        item.Severity,
+			CVSSScore:       item.CVSSScore,
+			KnownExploited:  item.KnownExploited,
+			RequiredAction:  item.RequiredAction,
+			DueDate:         item.DueDate,
+			Ransomware:      item.Ransomware,
+			MatchedKeywords: u.Keywords,
 		})
 	}
 
@@ -303,18 +291,12 @@ func (w *SentinelWorker) itemAlreadySeen(item sentinel.SentinelItem) (bool, erro
 	return true, nil
 }
 
-// matchRow is one (user, matched keyword) pair returned by the matching
-// query, joined with the fields needed to notify that user and to
-// aggregate a UserContext for the DeepSeek analysis.
+// matchRow is one (user, matched keyword) pair returned by the matching query.
 type matchRow struct {
 	UserID         uint64
 	Keyword        string
-	ContextNote    sql.NullString
 	TelegramChatID int64
 	PreferredLang  string
-	Devices        sql.NullString
-	OSList         sql.NullString
-	ExpertiseLevel sql.NullString
 }
 
 // findMatchingUsers returns one row per (user, keyword_subscription) whose
@@ -330,15 +312,10 @@ func (w *SentinelWorker) findMatchingUsers(item sentinel.SentinelItem) ([]matchR
 		SELECT
 			ks.user_id,
 			ks.keyword,
-			ks.context_note,
 			u.telegram_sentinel_chat_id,
-			u.preferred_language,
-			up.devices,
-			up.os_list,
-			up.expertise_level
+			u.preferred_language
 		FROM keyword_subscriptions ks
 		JOIN users u ON u.id = ks.user_id
-		LEFT JOIN user_profiles up ON up.user_id = ks.user_id
 		WHERE ks.is_active = true
 			AND u.is_active = true
 			AND u.telegram_sentinel_chat_id IS NOT NULL
@@ -353,10 +330,7 @@ func (w *SentinelWorker) findMatchingUsers(item sentinel.SentinelItem) ([]matchR
 	var matches []matchRow
 	for rows.Next() {
 		var m matchRow
-		if err := rows.Scan(
-			&m.UserID, &m.Keyword, &m.ContextNote, &m.TelegramChatID, &m.PreferredLang,
-			&m.Devices, &m.OSList, &m.ExpertiseLevel,
-		); err != nil {
+		if err := rows.Scan(&m.UserID, &m.Keyword, &m.TelegramChatID, &m.PreferredLang); err != nil {
 			return nil, fmt.Errorf("scan matching user: %w", err)
 		}
 		matches = append(matches, m)
@@ -364,84 +338,14 @@ func (w *SentinelWorker) findMatchingUsers(item sentinel.SentinelItem) ([]matchR
 	return matches, rows.Err()
 }
 
-// buildAggregateUserContext combines every matched subscriber's keywords,
-// per-keyword context notes, devices, OS list, and expertise into a single
-// UserContext. Since AnalyzeItem is called once per item — not once per
-// matched user — this represents the combined audience for the item.
-// Expertise takes the highest level found (advanced > intermediate >
-// beginner), so the analysis can be as technically detailed as the most
-// capable subscriber can use.
-func buildAggregateUserContext(matches []matchRow) *sentinel.UserContext {
-	uc := &sentinel.UserContext{
-		ContextNote: make(map[string]string),
-	}
-
-	keywordSet := make(map[string]struct{})
-	deviceSet := make(map[string]struct{})
-	osSet := make(map[string]struct{})
-	expertiseRank := map[string]int{"beginner": 0, "intermediate": 1, "advanced": 2}
-	highestExpertise := ""
-
-	for _, m := range matches {
-		keywordSet[m.Keyword] = struct{}{}
-		if m.ContextNote.Valid && m.ContextNote.String != "" {
-			if _, exists := uc.ContextNote[m.Keyword]; !exists {
-				uc.ContextNote[m.Keyword] = m.ContextNote.String
-			}
-		}
-
-		if m.Devices.Valid && m.Devices.String != "" {
-			var devices []string
-			if jsonErr := json.Unmarshal([]byte(m.Devices.String), &devices); jsonErr == nil {
-				for _, d := range devices {
-					deviceSet[d] = struct{}{}
-				}
-			}
-		}
-
-		if m.OSList.Valid && m.OSList.String != "" {
-			var osList []string
-			if jsonErr := json.Unmarshal([]byte(m.OSList.String), &osList); jsonErr == nil {
-				for _, o := range osList {
-					osSet[o] = struct{}{}
-				}
-			}
-		}
-
-		expertise := "beginner"
-		if m.ExpertiseLevel.Valid && m.ExpertiseLevel.String != "" {
-			expertise = m.ExpertiseLevel.String
-		}
-		if highestExpertise == "" || expertiseRank[expertise] > expertiseRank[highestExpertise] {
-			highestExpertise = expertise
-		}
-	}
-
-	for kw := range keywordSet {
-		uc.Keywords = append(uc.Keywords, kw)
-	}
-	for d := range deviceSet {
-		uc.Devices = append(uc.Devices, d)
-	}
-	for o := range osSet {
-		uc.OSList = append(uc.OSList, o)
-	}
-
-	uc.Expertise = "beginner"
-	if highestExpertise != "" {
-		uc.Expertise = highestExpertise
-	}
-
-	return uc
-}
-
 // userMatchInfo deduplicates matchRow by user, since one item can match
 // several of a user's keyword subscriptions but should only appear once in
-// that user's batch.
+// that user's batch — with every matched keyword listed.
 type userMatchInfo struct {
 	UserID         uint64
 	TelegramChatID int64
 	PreferredLang  string
+	Keywords       []string
 }
 
 func groupMatchesByUser(matches []matchRow) []userMatchInfo {
@@ -449,16 +353,17 @@ func groupMatchesByUser(matches []matchRow) []userMatchInfo {
 	byUser := make(map[uint64]*userMatchInfo)
 
 	for _, m := range matches {
-		if _, ok := byUser[m.UserID]; ok {
-			continue
+		info, ok := byUser[m.UserID]
+		if !ok {
+			info = &userMatchInfo{
+				UserID:         m.UserID,
+				TelegramChatID: m.TelegramChatID,
+				PreferredLang:  m.PreferredLang,
+			}
+			byUser[m.UserID] = info
+			order = append(order, m.UserID)
 		}
-		info := &userMatchInfo{
-			UserID:         m.UserID,
-			TelegramChatID: m.TelegramChatID,
-			PreferredLang:  m.PreferredLang,
-		}
-		byUser[m.UserID] = info
-		order = append(order, m.UserID)
+		info.Keywords = append(info.Keywords, m.Keyword)
 	}
 
 	result := make([]userMatchInfo, 0, len(order))
@@ -468,32 +373,17 @@ func groupMatchesByUser(matches []matchRow) []userMatchInfo {
 	return result
 }
 
-// insertSeenItem records item in sentinel_seen_items for global dedup.
-// analysis may be nil (no matching subscribers, or analysis failed) — the
-// item is still recorded so it isn't reprocessed on the next run.
-func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem, analysis *sentinel.SentinelAnalysis) error {
+// insertSeenItem records item in sentinel_seen_items for global dedup, so
+// it isn't reprocessed on the next run. The legacy ai_analysis_* columns
+// are left NULL.
+func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
-	// ai_analysis_id/ai_analysis_en are a plain-text audit record of what
-	// was generated for this item — nothing re-parses them back out — so
-	// the now-structured SentinelAnalysis fields are composed into one
-	// readable line per language rather than needing new columns.
-	var analysisID, analysisEN interface{}
-	if analysis != nil {
-		analysisID = fmt.Sprintf("[%s] CVE: %s | DAMPAK: %s | AKSI: %s",
-			analysis.StatusBahaya, analysis.CVE, analysis.DampakID, analysis.AksiID)
-		analysisEN = fmt.Sprintf("[%s] CVE: %s | IMPACT: %s | ACTION: %s",
-			analysis.StatusBahaya, analysis.CVE, analysis.DampakEN, analysis.AksiEN)
-	}
-
 	_, err := w.db.ExecContext(ctx, `
-		INSERT INTO sentinel_seen_items (
-			source_type, item_identifier,
-			ai_analysis_id, ai_analysis_en,
-			first_seen_at, expires_at
-		) VALUES (?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 7 DAY))`,
-		item.SourceType, item.Identifier, analysisID, analysisEN,
+		INSERT INTO sentinel_seen_items (source_type, item_identifier, first_seen_at, expires_at)
+		VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 7 DAY))`,
+		item.SourceType, item.Identifier,
 	)
 	if err != nil {
 		var mysqlErr *mysqldriver.MySQLError
@@ -561,7 +451,7 @@ func (w *SentinelWorker) dispatchUserBatch(batch *SentinelBatch, timestampEscape
 
 	titles := make([]string, 0, len(batch.Items))
 	for _, item := range batch.Items {
-		titles = append(titles, truncateTitle(item.Title))
+		titles = append(titles, truncateRunes(item.Title, sentinelTitleTruncateLen))
 	}
 	summary := strings.Join(titles, ", ") + " sentinel alert triggered"
 
@@ -589,42 +479,85 @@ func (w *SentinelWorker) logNotification(userID uint64, summary string, status n
 // is a pure function of a constant string.
 var sentinelDivider = notifier.EscapeTelegramMarkdown(strings.Repeat("-", 50))
 
-// buildSentinelItemBlock formats a single matched item's section within a
-// batched sentinel report, in the subscriber's preferred language ('en' for
-// English, anything else — including the 'id' default — for Indonesian).
-// Every dynamic field is escaped for Telegram's MarkdownV2 parse mode —
-// fetched titles/URLs and AI-generated dampak/aksi text routinely contain
-// raw underscores, asterisks, parentheses, etc. that would otherwise break
-// Telegram's entity parser (e.g. an unescaped "_" in "wp_ajax_nopriv_..." is
-// read as an unterminated italic marker).
-func buildSentinelItemBlock(lang string, item SentinelBatchItem) string {
-	statusBahaya := notifier.EscapeTelegramMarkdown(item.StatusBahaya)
-	cve := notifier.EscapeTelegramMarkdown(item.CVE)
-	title := notifier.EscapeTelegramMarkdown(truncateTitle(item.Title))
-	url := notifier.EscapeTelegramMarkdown(item.URL)
+const sentinelExcerptLen = 200
 
-	impactLabel, actionLabel := "DAMPAK", "AKSI"
-	impactText, actionText := item.DampakID, item.AksiID
-	if lang == "en" {
-		impactLabel, actionLabel = "IMPACT", "ACTION"
-		impactText, actionText = item.DampakEN, item.AksiEN
-	}
-
-	return fmt.Sprintf(
-		"%s\nSTATUS: %s\nCVE: %s\n%s\n🔗 %s\n%s: %s\n%s: %s\n%s",
-		sentinelDivider, statusBahaya, cve, title, url,
-		impactLabel, notifier.EscapeTelegramMarkdown(impactText),
-		actionLabel, notifier.EscapeTelegramMarkdown(actionText),
-		sentinelDivider,
-	)
+type sentinelLabels struct {
+	Severity, Status, Source, Action, Due, Ransomware, Keyword string
 }
 
-// truncateTitle bounds title to sentinelTitleTruncateLen runes, appending an
-// ellipsis when truncated so it's clear the text was cut off.
-func truncateTitle(title string) string {
-	runes := []rune(title)
-	if len(runes) <= sentinelTitleTruncateLen {
-		return title
+var (
+	sentinelLabelsEN = sentinelLabels{"SEVERITY", "STATUS", "SOURCE", "ACTION", "DUE", "RANSOMWARE", "KEYWORD"}
+	sentinelLabelsID = sentinelLabels{"TINGKAT BAHAYA", "STATUS", "SUMBER", "AKSI", "BATAS WAKTU", "RANSOMWARE", "KEYWORD"}
+)
+
+var sentinelSourceNames = map[string]string{
+	"cve":             "NVD",
+	"cisa_kev":        "CISA KEV",
+	"github_advisory": "GitHub Advisory",
+	"github":          "GitHub",
+	"exploit_db":      "Exploit-DB",
+	"rss":             "RSS",
+}
+
+// buildSentinelItemBlock formats one matched item's section within a
+// batched sentinel report. Labels follow lang ('en' for English, anything
+// else for Indonesian); source content stays as published (English).
+// Every dynamic field is escaped for Telegram MarkdownV2.
+func buildSentinelItemBlock(lang string, item SentinelBatchItem) string {
+	labels := sentinelLabelsID
+	if lang == "en" {
+		labels = sentinelLabelsEN
 	}
-	return string(runes[:sentinelTitleTruncateLen]) + "…"
+	esc := notifier.EscapeTelegramMarkdown
+
+	lines := []string{sentinelDivider}
+
+	switch {
+	case item.KnownExploited:
+		lines = append(lines, labels.Status+": ACTIVELY EXPLOITED")
+	case item.Severity != "" && item.CVSSScore > 0:
+		lines = append(lines, labels.Severity+": "+esc(fmt.Sprintf("%s (%.1f)", item.Severity, item.CVSSScore)))
+	case item.Severity != "":
+		lines = append(lines, labels.Severity+": "+esc(item.Severity))
+	case item.SourceType == "cve" || item.SourceType == "github_advisory":
+		lines = append(lines, labels.Severity+": N/A")
+	}
+
+	source := sentinelSourceNames[item.SourceType]
+	if source == "" {
+		source = item.SourceType
+	}
+	lines = append(lines, labels.Source+": "+esc(source))
+
+	if item.CVEID != "" {
+		lines = append(lines, "CVE: "+esc(item.CVEID))
+	}
+	lines = append(lines, esc(truncateRunes(item.Title, sentinelTitleTruncateLen)))
+	if item.Description != "" && item.Description != item.Title {
+		lines = append(lines, esc(truncateRunes(item.Description, sentinelExcerptLen)))
+	}
+	if item.RequiredAction != "" {
+		lines = append(lines, labels.Action+": "+esc(item.RequiredAction))
+	}
+	if item.DueDate != "" {
+		lines = append(lines, labels.Due+": "+esc(item.DueDate))
+	}
+	if item.Ransomware {
+		lines = append(lines, labels.Ransomware+": known campaign use")
+	}
+	if len(item.MatchedKeywords) > 0 {
+		lines = append(lines, labels.Keyword+": "+esc(strings.Join(item.MatchedKeywords, ", ")))
+	}
+	lines = append(lines, "🔗 "+esc(item.URL), sentinelDivider)
+
+	return strings.Join(lines, "\n")
+}
+
+// truncateRunes bounds s to n runes, appending an ellipsis when truncated.
+func truncateRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "…"
 }
