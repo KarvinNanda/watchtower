@@ -17,6 +17,7 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/currency"
 	"github.com/karvin-nanda/watchtower/internal/db"
 	"github.com/karvin-nanda/watchtower/internal/notifier"
+	"github.com/karvin-nanda/watchtower/internal/runs"
 	"github.com/karvin-nanda/watchtower/internal/scheduler"
 	"github.com/karvin-nanda/watchtower/internal/sentinel"
 )
@@ -92,6 +93,21 @@ func main() {
 	go func() {
 		defer wg.Done()
 		sentinelPipeline.Loop(ctx, scheduler.DueCheckInterval)
+	}()
+
+	runStore := runs.NewStore(database.Redis)
+	consumer := runs.NewConsumer(runStore, scheduler.NewRunExecutor(assetWorker, sentinelWorker, sentinelPipeline))
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		consumer.Start(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runs.StartHeartbeat(ctx, runStore, runs.HeartbeatInterval)
 	}()
 
 	<-ctx.Done()
