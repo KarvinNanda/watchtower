@@ -167,7 +167,7 @@
   "run": {
     "check_now": "Check now",
     "running": "Checking...",
-    "asset_summary": "Checked {rules_checked} rule(s): {triggered} triggered, {sent} sent to Telegram.",
+    "asset_summary": "Checked {rules_checked} rule(s): {triggered} triggered, {sent} sent to Telegram, {errors} error(s) fetching prices (see scheduler logs).",
     "sentinel_summary": "Fetched {items_fetched} item(s), {new_items} new, {sent_to_you} sent to you.",
     "failed": "Check failed: {reason}",
     "error_scheduler_offline": "The scheduler is not running. Start it with: docker compose up -d",

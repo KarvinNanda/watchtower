@@ -167,7 +167,7 @@
   "run": {
     "check_now": "Cek sekarang",
     "running": "Mengecek...",
-    "asset_summary": "{rules_checked} rule dicek: {triggered} terpicu, {sent} terkirim ke Telegram.",
+    "asset_summary": "{rules_checked} rule dicek: {triggered} terpicu, {sent} terkirim ke Telegram, {errors} gagal mengambil harga (lihat log scheduler).",
     "sentinel_summary": "{items_fetched} item diambil, {new_items} baru, {sent_to_you} dikirim ke kamu.",
     "failed": "Pengecekan gagal: {reason}",
     "error_scheduler_offline": "Scheduler tidak berjalan. Jalankan dengan: docker compose up -d",
