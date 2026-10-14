@@ -81,9 +81,10 @@ All routes live directly under `/api` — there is no version prefix. "Cookie" i
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `APP_ENV` | No | `development` | `development` or `production` — also drives the auth cookie's `Secure`/`SameSite` attributes |
+| `APP_ENV` | No | `development` | `development` or `production` (gin release mode; `JWT_SECRET` becomes required) |
 | `APP_PORT` | No | `8080` | Port the API server listens on |
-| `FRONTEND_URL` | Production only | *(empty)* | Additional CORS-allowed origin for the deployed frontend, on top of the fixed local-dev origins |
+| `FRONTEND_URL` | No | *(empty)* | Extra CORS-allowed origin (e.g. `http://localhost:8080`), on top of the Vite dev origin `http://localhost:5173` |
+| `COOKIE_SECURE` | No | `false` | Auth cookie `Secure` flag plus `SameSite=Strict`. Keep `false` on `http://localhost`; `true` only behind HTTPS |
 | `DB_HOST` | Yes | `127.0.0.1` | MySQL host |
 | `DB_PORT` | No | `3306` | MySQL port |
 | `DB_USER` | Yes | `root` | MySQL user |

@@ -1,117 +1,133 @@
 # WatchTower
 
-AI-powered finance & security intelligence platform. Monitors crypto, stocks, and gold prices alongside CVE and security news — then delivers personalized summaries to your Telegram.
+Self-hosted finance and security alerts for Telegram. WatchTower checks crypto, US stock and gold prices against your own rules, and watches vulnerability and security feeds for your keywords. Everything it finds in one check is sent as a single Telegram message.
 
-## The Problem
+You clone it, run one setup script, and the whole thing (database, API, web app, scheduler) runs on your own machine. No paid services and no AI.
 
-Price alerts and security news live in a dozen different places — exchange apps, NVD, CISA's KEV feed, security blogs, GitHub advisories — and none of them know what you personally care about. You end up either checking everything manually or missing the one alert that actually mattered, because generic feeds don't filter for your thresholds, your devices, or your risk tolerance.
+## What it does
 
-## The Solution
-
-WatchTower is a multi-user SaaS: each subscriber picks the assets and security keywords they want watched, sets their own price/percentage thresholds, and fills in a lightweight profile (devices, OS, expertise level). A background scheduler polls market data and threat-intel sources on independent intervals, evaluates every active subscription against fresh data, and — only when something actually crosses a threshold or matches a keyword — asks DeepSeek to turn it into a short, bilingual, context-aware summary. Every triggered alert for a user in a given run is batched into a single Telegram message instead of one message per symbol or item, so an active watchlist doesn't turn into a notification flood.
+- **Asset alerts.** Price above/below a level and 24h % change, per asset, with a cooldown so the same alert is not repeated every check.
+- **Sentinel.** Polls NVD, CISA KEV, GitHub Security Advisories, BleepingComputer, The Hacker News, Exploit-DB and GitHub. Items matching your keywords arrive with CVSS severity, an "actively exploited" flag for CISA KEV entries, and CISA's required action.
+- **Check now.** A button on the web app runs your checks immediately instead of waiting for the schedule.
+- **Laptop friendly.** The schedule is stored in the database. After your machine wakes from sleep, a missed check runs within a minute, once.
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌──────────┐
-│  Vue.js 3   │────▶│   Gin API   │────▶│  MySQL   │
-│  Dashboard  │     │  (Go 1.25)  │     │  Redis   │
-└─────────────┘     └──────┬──────┘     └──────────┘
-                           │
-                    ┌──────▼──────┐
-                    │  Scheduler  │
-                    │ Asset (4h)  │
-                    │Sentinel (6h)│
-                    └──────┬──────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-        ┌──────────┐ ┌──────────┐ ┌──────────┐
-        │ External │ │DeepSeek  │ │ Telegram │
-        │   APIs   │ │    AI    │ │   Bots   │
-        └──────────┘ └──────────┘ └──────────┘
+┌──────────────┐   /api, /health   ┌─────────────┐      ┌─────────┐
+│ Vue 3 web app│──────────────────▶│   Gin API   │─────▶│  MySQL  │
+│  (nginx)     │                   └──────┬──────┘      │  Redis  │
+└──────────────┘                          │ run queue   └────▲────┘
+ 127.0.0.1:8080                           ▼ (Redis)          │
+                                   ┌─────────────┐           │
+                                   │  Scheduler  │───────────┘
+                                   │ asset   4h  │
+                                   │ sentinel 6h │
+                                   └──────┬──────┘
+                      ┌───────────────────┼──────────────────┐
+                      ▼                   ▼                  ▼
+               Market data APIs    Security feeds      Telegram bots
 ```
 
-## Tech Stack
-
-| Layer | Technology | Purpose |
-|---|---|---|
-| Frontend | Vue.js 3, Naive UI, Pinia | Bilingual (EN/ID) SPA dashboard, dark mode by default |
-| API | Go 1.25, Gin | REST API, JWT auth issued via httpOnly cookies |
-| Scheduler | Go | Two independent background workers (asset, sentinel) |
-| Database | MySQL 8 | Durable storage: users, subscriptions, alert state, history |
-| Cache | Redis 7 | Hot read-through cache in front of MySQL for market prices |
-| AI | DeepSeek chat completions API | Bilingual, per-context market and security analysis |
-| Delivery | Telegram Bot API | Two separate bots (asset alerts, sentinel alerts) |
-| Deployment | Docker Compose, Nginx | Containerized stack; Nginx reverse-proxies and terminates TLS in production |
-
-## Key Technical Decisions
-
-- **httpOnly cookie instead of localStorage for the JWT.** A token held in `localStorage` is readable by any script running on the page — one XSS bug anywhere in the dependency tree and every session is stealable. An httpOnly cookie is invisible to JavaScript entirely; the browser attaches it automatically and the backend reads it server-side.
-- **One shared DeepSeek call per symbol/item, not per subscriber.** Both the asset and sentinel pipelines call DeepSeek once per triggered symbol or matched security item, aggregating the relevant subscribers' thresholds (asset) or devices/OS/expertise (sentinel) into that single prompt, rather than one call per (item, user) pair. Cost scales with distinct items, not with subscriber count, at the cost of every affected subscriber seeing analysis grounded in the aggregate audience rather than a fully individual prompt.
-- **Redis + MySQL dual layer for market cache.** Redis serves hot reads fast; MySQL's `market_cache` table is the durable fallback so a Redis restart or cold cache doesn't mean a blank dashboard, and so the price data stays queryable directly with SQL for debugging.
-- **golang-migrate instead of raw SQL scripts.** Every schema change is a numbered, reversible up/down pair, applied automatically on every `api`/`scheduler` container start. That removes the class of bug where dev, staging, and prod databases have quietly diverged because someone ran a one-off script by hand.
-- **Two separate Telegram bots, not one.** Asset alerts and sentinel alerts have different tone, formatting, and (often) target audiences — a user can point sentinel alerts at a security-focused group chat and asset alerts at a personal DM. It also means a compromised bot token only exposes one alert stream, not both.
-
-## Known Tradeoffs
-
-- The JWT used to live in `localStorage`, which is exploitable via XSS — this has since been migrated to an httpOnly cookie (see Key Technical Decisions above), but it's worth naming as a gap that existed and was closed rather than pretending it never happened.
-- The gold price source (`harga-emas.org`) is scraped from JSON-LD structured data on a public page with no official API. If the site changes its markup, gold quotes silently stop updating until the scraper is patched — accepted because there's no free, official Antam gold price API to fall back to.
-- Twelve Data's free tier caps at 800 calls/day, so the asset symbol whitelist is hard-capped at 42 entries and `MAX_UNIQUE_SYMBOLS` defaults conservatively. RSI/volatility enrichment costs one extra Twelve Data call per stock per scheduler run, so this is the first thing that needs a paid plan if the tracked symbol list grows meaningfully.
-
-## Services
-
-| Service | Technology | Port |
-|---|---|---|
-| Frontend | Vue.js 3 + Nginx | 80 |
-| API | Go + Gin | 8080 |
-| Scheduler | Go | — |
-| Database | MySQL 8 | 3306 |
-| Cache | Redis 7 | 6379 |
-
-## Quick Start
+## Self-hosting
 
 ### Prerequisites
 
-- Go 1.25+
-- Node.js 20+
-- MySQL 8.x and Redis 6+ (or let Docker Compose run them for you)
-- Docker + Docker Compose, for the production stack
+- **Docker:** Docker Desktop on macOS or Windows; Docker Engine with the compose plugin on Linux.
+- **Two Telegram bots** from [@BotFather](https://t.me/BotFather): one for asset alerts, one for sentinel. Keep each bot's token and username.
+- **Optional:** a free [Twelve Data](https://twelvedata.com) API key (needed for stock alerts) and a GitHub token (raises sentinel's GitHub rate limit).
 
-### Clone & Setup
+### Setup
 
 ```bash
-git clone <repo-url> watchtower
+git clone https://github.com/KarvinNanda/watchtower.git
 cd watchtower
-cp .env.example .env                     # root: mysql/redis credentials for docker-compose
-cp backend/.env.example backend/.env     # backend: full app config (DB, JWT, DeepSeek, Telegram, ...)
-cp frontend/.env.example frontend/.env   # frontend: API base URL, Telegram bot usernames
 ```
 
-### Development
+| OS | Command |
+|---|---|
+| macOS / Linux | `./scripts/setup.sh` |
+| Windows | `powershell -ExecutionPolicy Bypass -File scripts\setup.ps1` |
+
+The script creates `.env` with random database, Redis and JWT secrets, asks for your bot tokens (press Enter to skip and edit `.env` later), builds the images and starts everything. It never overwrites an existing `.env`.
+
+Open http://localhost:8080, register, then link both bots on the **Telegram Setup** page.
+
+### Everyday use
+
+| Action | Command |
+|---|---|
+| Start | `docker compose up -d` |
+| Stop | `docker compose down` |
+| Update | `git pull && docker compose up -d --build` |
+| Logs | `docker compose logs -f scheduler` |
+
+After editing `.env`, run `docker compose up -d --build` (bot usernames are baked into the web app at build time).
+
+### Security defaults
+
+- Only the web app is published, and only on `127.0.0.1`. MySQL, Redis, the API and the scheduler are reachable only inside the Docker network, so other devices on the same Wi-Fi cannot reach them.
+- The JWT lives in an `HttpOnly` cookie. `COOKIE_SECURE=false` is correct for `http://localhost`; set it to `true` only behind HTTPS.
+- Secrets are generated from the OS random source and stored only in `.env` (gitignored).
+
+### Tested on
+
+| OS | Status |
+|---|---|
+| macOS (Apple Silicon) | Full stack |
+| Linux (Ubuntu, CI) | Full stack |
+| Windows | Setup script logic only (CI). The Docker Desktop flow has not been verified on a real Windows machine yet. |
+
+## Development
 
 ```bash
-make dev-up                                    # starts mysql + redis via Docker
-cd backend && go mod download && make migrate-up
-make run-api                                   # terminal 1
-make run-scheduler                             # terminal 2 — separate terminal
-cd ../frontend && npm install && npm run dev   # terminal 3
+cp .env.example .env                    # or ./scripts/setup.sh --no-start
+cp backend/.env.example backend/.env    # DB_HOST=127.0.0.1, same DB/Redis passwords as .env
+cp frontend/.env.example frontend/.env
+make dev-up                             # mysql/redis on 127.0.0.1 (DB_HOST_PORT / REDIS_HOST_PORT)
+cd backend && make run-api              # terminal 1, migrations run on start
+cd backend && make run-scheduler        # terminal 2
+cd frontend && npm install && npm run dev   # terminal 3, http://localhost:5173
 ```
 
-The API listens on `http://localhost:8080`, the frontend dev server on `http://localhost:5173`.
+Tests: `cd backend && go test ./...` and `cd frontend && npm test`.
 
-## Project Structure
+## Tech stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Frontend | Vue 3, Naive UI, Pinia | Bilingual (EN/ID) dashboard, dark mode by default |
+| API | Go, Gin | REST API, JWT in an httpOnly cookie, run queue endpoints |
+| Scheduler | Go | Asset and sentinel pipelines, manual run consumer |
+| Database | MySQL 8 | Users, subscriptions, alert state, schedule state, history |
+| Cache / queue | Redis 7 | Market price cache, manual run queue, scheduler heartbeat |
+| Delivery | Telegram Bot API | Two bots (asset, sentinel), long polling |
+| Packaging | Docker Compose, nginx | One command to run everything on one machine |
+
+## Key technical decisions
+
+- **No AI in the pipeline.** Alerts are built from the data the sources already provide (CVSS, CISA KEV status and required action, your own thresholds). Nothing to pay for, and an alert can never be lost because a model call failed.
+- **httpOnly cookie for the JWT,** not `localStorage`, so an XSS bug cannot read the session token.
+- **Redis queue for "Check now".** The API and scheduler are separate processes. The API checks the scheduler heartbeat, the user's Telegram link and a per-user 5-minute lock, then queues the job; the scheduler runs it under the same lock as scheduled runs, so the two never overlap.
+- **Persisted schedule.** A one-minute "is it due?" check against the `scheduler_state` table replaces an in-memory ticker, which loses ticks while a laptop sleeps.
+- **golang-migrate.** Numbered, reversible migrations run automatically on every API and scheduler start.
+- **Two Telegram bots.** Asset and sentinel alerts can go to different chats, and a leaked token exposes only one stream.
+
+## Known tradeoffs
+
+- Gold prices are scraped from JSON-LD on `harga-emas.org`; if the page changes, gold quotes stop updating until the scraper is fixed.
+- Twelve Data's free tier allows 800 calls/day, so the stock symbol list stays small.
+- "Check now" for sentinel runs the global sentinel check (deduplication is global), so other users with matching keywords may receive new items at the same time.
+
+## Project structure
 
 ```
 watchtower/
-├── backend/                  # Go + Gin API & scheduler — see backend/README.md
-├── frontend/                 # Vue.js 3 SPA — see frontend/README.md
-├── docker-compose.yml        # Development stack (mysql, redis, api, scheduler, frontend)
+├── backend/                  # Go API and scheduler — see backend/README.md
+├── frontend/                 # Vue 3 web app — see frontend/README.md
+├── scripts/                  # setup.sh (macOS/Linux), setup.ps1 (Windows)
+├── docker-compose.yml        # Self-hosted stack (only the web app is published, on 127.0.0.1)
+├── docker-compose.dev.yml    # Dev overlay: mysql/redis on 127.0.0.1 for go run
 ├── Makefile                  # dev-up / dev-down / dev-logs / db-migrate
-└── .env.example              # Root-level env vars consumed by docker-compose
+└── .env.example              # All settings for docker compose
 ```
-
-## Documentation
-
-- Backend: [`./backend/README.md`](./backend/README.md)
-- Frontend: [`./frontend/README.md`](./frontend/README.md)

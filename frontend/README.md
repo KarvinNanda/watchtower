@@ -71,7 +71,7 @@ npm run audit
 - Input sanitization (`src/utils/security.js`) before values are sent in API calls
 - CSP headers set by Nginx in production
 - `withCredentials: true` on the shared Axios instance, required for the browser to send/accept the auth cookie
-- Cookie `SameSite` is `Lax` in development and `Strict` in production, set server-side alongside `Secure`
+- Cookie `SameSite` is `Lax` by default and `Strict` when the backend runs with `COOKIE_SECURE=true` (which also sets `Secure`)
 
 ## Known Issues
 
