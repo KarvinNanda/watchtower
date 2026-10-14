@@ -212,7 +212,7 @@ func TestLogin_Success(t *testing.T) {
 	require.Contains(t, cookies, "watchtower_token", "Login must set the watchtower_token cookie")
 	tokenCookie := cookies["watchtower_token"]
 	assert.True(t, tokenCookie.HttpOnly, "auth cookie must be HttpOnly so frontend JS can never read it")
-	assert.False(t, tokenCookie.Secure, "Secure must be false when isProduction=false")
+	assert.False(t, tokenCookie.Secure, "Secure must be false when secure=false")
 	assert.NotEmpty(t, tokenCookie.Value)
 
 	claims, err := svc.ValidateToken(tokenCookie.Value)
@@ -242,7 +242,7 @@ func TestLogin_SetsSecureCookieInProduction(t *testing.T) {
 
 	cookies := readSetCookies(w)
 	require.Contains(t, cookies, "watchtower_token")
-	assert.True(t, cookies["watchtower_token"].Secure, "Secure must be true when isProduction=true")
+	assert.True(t, cookies["watchtower_token"].Secure, "Secure must be true when secure=true")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

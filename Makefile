@@ -1,38 +1,21 @@
-# Uses the `docker compose` v2 CLI plugin (installed via the
-# docker-compose-plugin package per docs/oracle-cloud-setup.md), not the
-# deprecated standalone `docker-compose` v1 binary the two commands are
-# not interchangeable, and the v1 binary is no longer packaged on current
-# Ubuntu.
+# Uses the `docker compose` v2 CLI plugin, not the deprecated standalone
+# `docker-compose` v1 binary.
 COMPOSE := docker compose
-PROD_FILES := -f docker-compose.yml -f docker-compose.prod.yml
+DEV_FILES := -f docker-compose.yml -f docker-compose.dev.yml
 
-.PHONY: dev-up dev-down dev-logs prod-build prod-up prod-down db-migrate
+.PHONY: dev-up dev-down dev-logs db-migrate
 
-# Starts only mysql/redis, for running the api/scheduler binaries locally
-# with `go run` against a containerized database during development.
+# Starts only mysql/redis, published on 127.0.0.1, for `go run` / `npm run dev`.
 dev-up:
-	$(COMPOSE) up -d mysql redis
+	$(COMPOSE) $(DEV_FILES) up -d mysql redis
 
 dev-down:
-	$(COMPOSE) down
+	$(COMPOSE) $(DEV_FILES) down
 
 dev-logs:
-	$(COMPOSE) logs -f
-
-prod-build:
-	$(COMPOSE) $(PROD_FILES) build
-
-prod-up:
-	$(COMPOSE) $(PROD_FILES) up -d
-
-prod-down:
-	$(COMPOSE) $(PROD_FILES) down
+	$(COMPOSE) $(DEV_FILES) logs -f
 
 # Optional: migrations already run automatically on every api/scheduler
-# container start (see internal/db.DB.RunMigrations, called from both
-# cmd/api and cmd/scheduler). This target is only useful for running
-# migrations manually from the host — e.g. before the app containers exist
-# — and requires Go to be installed on the host, since it shells out to
-# `go run` (see backend/Makefile's migrate-up).
+# start (see internal/db.DB.RunMigrations). Requires Go on the host.
 db-migrate:
 	cd backend && make migrate-up

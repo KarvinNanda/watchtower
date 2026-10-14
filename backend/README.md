@@ -32,7 +32,7 @@ backend/
 ├── internal/
 │   ├── auth/           # Registration, login, JWT issuance via httpOnly cookie, bcrypt hashing, auth middleware
 │   ├── user/           # User profile, asset/keyword subscriptions, notification history, dashboard queries
-│   ├── asset/           # Market data fetcher (CoinGecko, Twelve Data, harga-emas.org scraping), RSI/volatility/trend calculation, DeepSeek market analyzer
+│   ├── asset/           # Market data fetcher (CoinGecko, Twelve Data, harga-emas.org scraping), RSI/volatility/trend calculation
 │   ├── sentinel/        # Six-source threat-intel fetcher (NVD, CISA KEV, security RSS, GitHub repo search, Exploit-DB, GitHub Security Advisories), keyword matching, structured (JSON) AI output with a labeled-text fallback parser
 │   ├── scheduler/       # asset_worker (4h interval, cooldown + price-move logic, one batched Telegram message per user) and sentinel_worker (6h interval, global item dedup)
 │   ├── currency/        # USD → IDR exchange rate lookup, cached
@@ -81,9 +81,10 @@ All routes live directly under `/api` — there is no version prefix. "Cookie" i
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `APP_ENV` | No | `development` | `development` or `production` — also drives the auth cookie's `Secure`/`SameSite` attributes |
+| `APP_ENV` | No | `development` | `development` or `production` (gin release mode; `JWT_SECRET` becomes required) |
 | `APP_PORT` | No | `8080` | Port the API server listens on |
-| `FRONTEND_URL` | Production only | *(empty)* | Additional CORS-allowed origin for the deployed frontend, on top of the fixed local-dev origins |
+| `FRONTEND_URL` | No | *(empty)* | Extra CORS-allowed origin (e.g. `http://localhost:8080`), on top of the Vite dev origin `http://localhost:5173` |
+| `COOKIE_SECURE` | No | `false` | Auth cookie `Secure` flag plus `SameSite=Strict`. Keep `false` on `http://localhost`; `true` only behind HTTPS |
 | `DB_HOST` | Yes | `127.0.0.1` | MySQL host |
 | `DB_PORT` | No | `3306` | MySQL port |
 | `DB_USER` | Yes | `root` | MySQL user |
@@ -94,8 +95,6 @@ All routes live directly under `/api` — there is no version prefix. "Cookie" i
 | `REDIS_PASSWORD` | No | *(empty)* | Redis password |
 | `JWT_SECRET` | Yes outside development | *(empty)* | HMAC signing secret for issued JWTs |
 | `JWT_EXPIRY_HOURS` | No | `24` | Token lifetime in hours; also the auth cookie's max age |
-| `DEEPSEEK_API_KEY` | Yes, for AI commentary | *(empty)* | DeepSeek chat completions API key — without it, alerts still send but skip AI analysis |
-| `DEEPSEEK_MODEL` | No | `deepseek-chat` | DeepSeek model name |
 | `TELEGRAM_ASSET_BOT_TOKEN` | Yes, for asset alerts | *(empty)* | Bot token for asset price alerts |
 | `TELEGRAM_SENTINEL_BOT_TOKEN` | Yes, for sentinel alerts | *(empty)* | Bot token for security alerts |
 | `TELEGRAM_MODE` | No | `polling` | `polling` (local dev) or `webhook` (production; registers the `/webhook/telegram/*` routes) |
@@ -116,7 +115,7 @@ Eight tables, all InnoDB / `utf8mb4`:
 | Table | Description | Relations |
 |---|---|---|
 | `users` | Core account row: email, bcrypt password hash, per-bot Telegram chat IDs, alert cooldown, preferred language | Referenced by every table below |
-| `user_profiles` | Devices, OS list (JSON arrays), and expertise level, used to ground sentinel AI analysis | 1:1 with `users` |
+| `user_profiles` | Devices, OS list (JSON arrays), and expertise level, edited on the Profile page (no longer used by the alert pipelines) | 1:1 with `users` |
 | `asset_subscriptions` | One row per (user, symbol) the user tracks, with alert type and price/percentage thresholds | N:1 with `users` |
 | `keyword_subscriptions` | One row per keyword a user wants matched against incoming sentinel items | N:1 with `users` |
 | `market_cache` | Latest fetched price per symbol — the MySQL fallback layer behind the Redis cache | Keyed by `symbol`, no foreign keys |
@@ -167,7 +166,7 @@ make test-race         # race detector
 make test-new          # just the RSI/batch-dedup/sentinel-parser tests added post-Phase-10
 ```
 
-Tests never touch a real MySQL/Redis instance or the network — database-backed tests use `go-sqlmock`, HTTP-backed tests (DeepSeek, Twelve Data, currency conversion) use `net/http/httptest` or an injected mock client. Coverage is concentrated in the security-critical and pure-logic packages:
+Tests never touch a real MySQL/Redis instance or the network — database-backed tests use `go-sqlmock`, HTTP-backed tests (Twelve Data, currency conversion) use `net/http/httptest` or an injected mock client. Coverage is concentrated in the security-critical and pure-logic packages:
 
 | Package | Coverage |
 |---|---|

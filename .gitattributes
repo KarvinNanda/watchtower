@@ -1,0 +1,2 @@
+# Keep shell scripts runnable when the repo is cloned on Windows (WSL, Git Bash).
+*.sh text eol=lf

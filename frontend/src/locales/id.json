@@ -163,5 +163,15 @@
     "back": "Kembali",
     "required_field": "Wajib diisi",
     "session_expired": "Sesi Anda telah berakhir. Silakan masuk kembali."
+  },
+  "run": {
+    "check_now": "Cek sekarang",
+    "running": "Mengecek...",
+    "asset_summary": "{rules_checked} rule dicek: {triggered} terpicu, {sent} terkirim ke Telegram, {errors} gagal mengambil harga (lihat log scheduler).",
+    "sentinel_summary": "{items_fetched} item diambil, {new_items} baru, {sent_to_you} dikirim ke kamu.",
+    "failed": "Pengecekan gagal: {reason}",
+    "error_scheduler_offline": "Scheduler tidak berjalan. Jalankan dengan: docker compose up -d",
+    "error_telegram_not_linked": "Hubungkan chat Telegram untuk tipe alert ini dulu (halaman Setup Telegram).",
+    "error_too_many": "Tunggu {seconds} detik sebelum mengecek lagi."
   }
 }

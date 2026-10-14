@@ -1,0 +1,106 @@
+name: Tests and self-host smoke
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Backend tests
+        working-directory: backend
+        run: go test ./... -count=1 -race
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Frontend tests
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+      - name: Production bundle has no eval (the nginx CSP blocks it)
+        working-directory: frontend
+        run: |
+          npx vite build
+          if grep -l "new Function" dist/assets/*.js; then
+            echo "bundle contains new Function; it would render a blank page under the CSP"; exit 1
+          fi
+
+  linux-selfhost:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate .env
+        run: ./scripts/setup.sh --no-start
+      - name: Secrets are 64 hex chars and .env is private
+        run: |
+          for k in DB_ROOT_PASSWORD DB_PASSWORD REDIS_PASSWORD JWT_SECRET; do
+            grep -Eq "^$k=[0-9a-f]{64}$" .env || { echo "$k not generated"; exit 1; }
+          done
+          test "$(stat -c %a .env)" = "600"
+      - name: Second run leaves .env untouched
+        run: |
+          cp .env /tmp/env1
+          ./scripts/setup.sh --no-start
+          cmp .env /tmp/env1
+      - name: Start the full stack
+        run: ./scripts/setup.sh
+      - name: Smoke test through the published port
+        run: |
+          curl -fsS http://127.0.0.1:8080/health | grep -q '"status":"ok"'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/auth/register \
+            -H 'Content-Type: application/json' -d '{"email":"ci@watchtower.test","password":"Ci!12345678Ab"}')
+          test "$code" = "201"
+          # Browsers send Origin; behind nginx the API must still see these as same-origin.
+          for origin in http://localhost:8080 http://127.0.0.1:8080; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/auth/login \
+              -H "Origin: $origin" -H 'Content-Type: application/json' \
+              -d '{"email":"ci@watchtower.test","password":"Ci!12345678Ab"}')
+            test "$code" = "200" || { echo "login from $origin returned $code"; exit 1; }
+          done
+          # SPA route that shares its name with Vite's build directory.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/assets)" = "200"
+      - name: Nothing but the web app is published
+        run: |
+          # `docker compose port` exits 0 even for unpublished ports, so
+          # check the Ports column for host mappings ("->") instead.
+          published=$(docker compose ps --format '{{.Service}} {{.Ports}}' | grep -- '->' || true)
+          echo "$published"
+          test "$(printf '%s\n' "$published" | grep -c .)" = "1"
+          printf '%s\n' "$published" | grep -q '^frontend 127\.0\.0\.1:8080->80/tcp$'
+      - name: Scheduler is up
+        run: |
+          sleep 10
+          docker compose logs scheduler | grep -q "runs.Consumer: waiting for manual runs"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+  windows-setup-script:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup.ps1 generates .env and is idempotent
+        shell: powershell
+        run: |
+          .\scripts\setup.ps1 -NoStart -SkipPrompts
+          $lines = Get-Content .env
+          foreach ($k in 'DB_ROOT_PASSWORD', 'DB_PASSWORD', 'REDIS_PASSWORD', 'JWT_SECRET') {
+            if (-not ($lines -match "^$k=[0-9a-f]{64}$")) { throw "$k not generated" }
+          }
+          $raw = [System.IO.File]::ReadAllBytes((Resolve-Path .env))
+          if ($raw[0] -eq 0xEF) { throw '.env has a BOM' }
+          if ([System.Text.Encoding]::UTF8.GetString($raw).Contains("`r")) { throw '.env has CRLF line endings' }
+          $before = (Get-FileHash .env).Hash
+          .\scripts\setup.ps1 -NoStart -SkipPrompts
+          if ((Get-FileHash .env).Hash -ne $before) { throw '.env was overwritten' }

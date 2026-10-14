@@ -13,10 +13,13 @@ import (
 type ServerConfig struct {
 	Env  string
 	Port int
-	// FrontendURL is the only origin allowed by CORSMiddleware when
-	// Env == "production". Ignored in development, where all origins are
-	// allowed.
+	// FrontendURL is added to the CORS allow-list (in addition to the Vite
+	// dev origin).
 	FrontendURL string
+	// CookieSecure sets the auth cookie's Secure flag (and SameSite=Strict).
+	// Keep false for self-hosting over http://localhost; set true only
+	// behind HTTPS.
+	CookieSecure bool
 }
 
 type DatabaseConfig struct {
@@ -36,11 +39,6 @@ type RedisConfig struct {
 type JWTConfig struct {
 	Secret      string
 	ExpiryHours int
-}
-
-type DeepSeekConfig struct {
-	APIKey string
-	Model  string
 }
 
 type TelegramConfig struct {
@@ -75,7 +73,6 @@ type Config struct {
 	Database    DatabaseConfig
 	Redis       RedisConfig
 	JWT         JWTConfig
-	DeepSeek    DeepSeekConfig
 	Telegram    TelegramConfig
 	ExternalAPI ExternalAPIConfig
 	Scheduler   SchedulerConfig
@@ -92,6 +89,7 @@ var envBindings = map[string]string{
 	"app_env":                           "APP_ENV",
 	"app_port":                          "APP_PORT",
 	"frontend_url":                      "FRONTEND_URL",
+	"cookie_secure":                     "COOKIE_SECURE",
 	"db_host":                           "DB_HOST",
 	"db_port":                           "DB_PORT",
 	"db_user":                           "DB_USER",
@@ -102,8 +100,6 @@ var envBindings = map[string]string{
 	"redis_password":                    "REDIS_PASSWORD",
 	"jwt_secret":                        "JWT_SECRET",
 	"jwt_expiry_hours":                  "JWT_EXPIRY_HOURS",
-	"deepseek_api_key":                  "DEEPSEEK_API_KEY",
-	"deepseek_model":                    "DEEPSEEK_MODEL",
 	"telegram_asset_bot_token":          "TELEGRAM_ASSET_BOT_TOKEN",
 	"telegram_sentinel_bot_token":       "TELEGRAM_SENTINEL_BOT_TOKEN",
 	"telegram_mode":                     "TELEGRAM_MODE",
@@ -150,9 +146,10 @@ func Load(envPath string) (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			Env:         v.GetString("app_env"),
-			Port:        v.GetInt("app_port"),
-			FrontendURL: v.GetString("frontend_url"),
+			Env:          v.GetString("app_env"),
+			Port:         v.GetInt("app_port"),
+			FrontendURL:  v.GetString("frontend_url"),
+			CookieSecure: v.GetBool("cookie_secure"),
 		},
 		Database: DatabaseConfig{
 			Host:     v.GetString("db_host"),
@@ -169,10 +166,6 @@ func Load(envPath string) (*Config, error) {
 		JWT: JWTConfig{
 			Secret:      v.GetString("jwt_secret"),
 			ExpiryHours: v.GetInt("jwt_expiry_hours"),
-		},
-		DeepSeek: DeepSeekConfig{
-			APIKey: v.GetString("deepseek_api_key"),
-			Model:  v.GetString("deepseek_model"),
 		},
 		Telegram: TelegramConfig{
 			AssetBotToken:    v.GetString("telegram_asset_bot_token"),

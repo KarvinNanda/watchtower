@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -31,12 +32,6 @@ type NotifierInterface interface {
 	SendAssetAlert(chatID int64, message string) error
 }
 
-// AssetAnalyzerInterface is the subset of asset.DeepSeekAnalyzer's behavior
-// AssetWorker depends on, allowing tests to inject a mock analyzer.
-type AssetAnalyzerInterface interface {
-	AnalyzeAsset(data *asset.FetchResult, subscribers []asset.SubscriberContext, usdToIDR float64) (*asset.AnalysisResult, error)
-}
-
 // AssetWorker periodically fetches market data (via the Redis/MySQL cache
 // layer), evaluates every active asset subscription for alert conditions,
 // and notifies subscribers whose thresholds are breached. Every triggered
@@ -48,13 +43,13 @@ type AssetWorker struct {
 	db       *sql.DB
 	redis    *redis.Client
 	notifier NotifierInterface
-	analyzer AssetAnalyzerInterface
+
+	mu sync.Mutex // serializes periodic and manual asset runs
 
 	cache             *cache.Cache
 	notifLogs         *notifier.LogRepository
 	maxUniqueSymbols  int
 	alertPriceMovePct float64
-	interval          time.Duration
 }
 
 // NewAssetWorker wires together every dependency needed to run the asset
@@ -65,22 +60,18 @@ func NewAssetWorker(
 	redisClient *redis.Client,
 	fetcher *asset.AssetFetcher,
 	notif NotifierInterface,
-	analyzer AssetAnalyzerInterface,
 	cacheTTLHours int,
 	maxUniqueSymbols int,
 	alertPriceMovePct float64,
-	interval time.Duration,
 ) *AssetWorker {
 	return &AssetWorker{
 		db:                db,
 		redis:             redisClient,
 		notifier:          notif,
-		analyzer:          analyzer,
 		cache:             cache.New(redisClient, db, cacheTTLHours, fetcher),
 		notifLogs:         notifier.NewLogRepository(db),
 		maxUniqueSymbols:  maxUniqueSymbols,
 		alertPriceMovePct: alertPriceMovePct,
-		interval:          interval,
 	}
 }
 
@@ -114,8 +105,6 @@ type AlertItem struct {
 	PriceIDR    float64
 	ChangePct   float64
 	TriggerType string
-	AnalysisID  string
-	AnalysisEN  string
 }
 
 // UserAlertBatch accumulates every AlertItem triggered for one user during
@@ -128,87 +117,110 @@ type UserAlertBatch struct {
 	Alerts   []AlertItem
 }
 
-// Run is the scheduler entry point: it evaluates every distinct active
-// symbol, collecting triggered alerts per user, then sends each user at
-// most one combined message for the run. It never panics — any error or
-// recovered panic is logged and does not stop the run for other symbols.
-func (w *AssetWorker) Run() (err error) {
+// runScope narrows a run to one user (manual "Check now") or leaves it
+// global (userID 0, periodic run).
+type runScope struct {
+	userID       uint64
+	skipCooldown bool
+}
+
+// AssetRunResult summarizes one asset run for the manual-run API.
+type AssetRunResult struct {
+	RulesChecked int
+	Triggered    int
+	Sent         int
+	Errors       int
+}
+
+// Run is the periodic entry point: every active subscription, cooldowns
+// respected. A run where symbols failed and none was checked (typically
+// no network) returns an error so the Pipeline records it as failed and
+// retries soon instead of after a full interval.
+func (w *AssetWorker) Run() error {
+	res, err := w.run(runScope{})
+	if err != nil {
+		return err
+	}
+	if res.Errors > 0 && res.RulesChecked == 0 {
+		return fmt.Errorf("scheduler: all %d asset symbol(s) failed", res.Errors)
+	}
+	return nil
+}
+
+// RunForUser evaluates only userID's subscriptions and ignores their
+// cooldown. alert_states is still updated on send, so the next periodic
+// run does not repeat the same alert.
+func (w *AssetWorker) RunForUser(userID uint64) (AssetRunResult, error) {
+	return w.run(runScope{userID: userID, skipCooldown: true})
+}
+
+// run holds w.mu for its whole duration so a periodic run and a manual run
+// never interleave (which could double-send and race on alert_states). It
+// never panics — any recovered panic is returned as an error.
+func (w *AssetWorker) run(scope runScope) (result AssetRunResult, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[ERROR] AssetWorker.Run: recovered from panic: %v", r)
+			log.Printf("[ERROR] AssetWorker.run: recovered from panic: %v", r)
 			err = fmt.Errorf("scheduler: recovered from panic: %v", r)
 		}
 	}()
 
 	start := time.Now()
-	log.Printf("[INFO] AssetWorker.Run: starting run at %s", start.Format(time.RFC3339))
+	log.Printf("[INFO] AssetWorker.run: starting (user=%d) at %s", scope.userID, start.Format(time.RFC3339))
 
-	symbols, err := w.getUniqueActiveSymbols()
+	symbols, err := w.getUniqueActiveSymbols(scope.userID)
 	if err != nil {
-		log.Printf("[ERROR] AssetWorker.Run: get unique active symbols: %v", err)
-		return fmt.Errorf("scheduler: get unique active symbols: %w", err)
+		return result, fmt.Errorf("scheduler: get unique active symbols: %w", err)
 	}
 
 	batches := make(map[uint64]*UserAlertBatch)
 	cooldownHoursByUser := make(map[uint64]int)
 
-	var totalTriggered, totalErrors int
 	for _, symbol := range symbols {
-		triggered, procErr := w.processSymbolSafe(symbol, batches, cooldownHoursByUser)
+		checked, triggered, procErr := w.processSymbolSafe(symbol, scope, batches, cooldownHoursByUser)
 		if procErr != nil {
-			totalErrors++
-			log.Printf("[ERROR] AssetWorker.Run: process symbol %s failed: %v", symbol.Symbol, procErr)
+			result.Errors++
+			log.Printf("[ERROR] AssetWorker.run: process symbol %s failed: %v", symbol.Symbol, procErr)
 			continue
 		}
-		totalTriggered += triggered
+		result.RulesChecked += checked
+		result.Triggered += triggered
 	}
 
 	alertsSent, usersNotified := w.dispatchBatches(batches, cooldownHoursByUser)
+	result.Sent = alertsSent
 
-	log.Printf("[INFO] AssetWorker.Run: completed in %s — symbols processed: %d, alerts triggered: %d, "+
-		"users notified: %d, alerts sent: %d, errors: %d",
-		time.Since(start), len(symbols), totalTriggered, usersNotified, alertsSent, totalErrors)
+	log.Printf("[INFO] AssetWorker.run: completed in %s (user=%d) — symbols: %d, rules checked: %d, "+
+		"triggered: %d, users notified: %d, alerts sent: %d, errors: %d",
+		time.Since(start), scope.userID, len(symbols), result.RulesChecked, result.Triggered,
+		usersNotified, result.Sent, result.Errors)
 
-	return nil
-}
-
-// Start runs Run() immediately, then again on every tick of the worker's
-// configured interval, until ctx is cancelled — at which point it returns,
-// allowing the caller to shut down gracefully.
-func (w *AssetWorker) Start(ctx context.Context) {
-	log.Printf("[INFO] AssetWorker.Start: running immediately, then every %s", w.interval)
-
-	if err := w.Run(); err != nil {
-		log.Printf("[ERROR] AssetWorker.Start: initial run failed: %v", err)
-	}
-
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("[INFO] AssetWorker.Start: context cancelled, stopping gracefully")
-			return
-		case <-ticker.C:
-			if err := w.Run(); err != nil {
-				log.Printf("[ERROR] AssetWorker.Start: run failed: %v", err)
-			}
-		}
-	}
+	return result, nil
 }
 
 // getUniqueActiveSymbols returns every distinct symbol with at least one
-// active subscription, capped at maxUniqueSymbols.
-func (w *AssetWorker) getUniqueActiveSymbols() ([]SymbolInfo, error) {
+// active subscription (only userID's when userID != 0), capped at
+// maxUniqueSymbols.
+func (w *AssetWorker) getUniqueActiveSymbols(userID uint64) ([]SymbolInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
-	rows, err := w.db.QueryContext(ctx, `
+	query := `
 		SELECT DISTINCT asset_symbol, asset_type
 		FROM asset_subscriptions
-		WHERE is_active = true
-		LIMIT ?`, w.maxUniqueSymbols)
+		WHERE is_active = true`
+	args := []interface{}{}
+	if userID != 0 {
+		query += ` AND user_id = ?`
+		args = append(args, userID)
+	}
+	query += ` LIMIT ?`
+	args = append(args, w.maxUniqueSymbols)
+
+	rows, err := w.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query unique active symbols: %w", err)
 	}
@@ -229,43 +241,45 @@ func (w *AssetWorker) getUniqueActiveSymbols() ([]SymbolInfo, error) {
 // processing one symbol never stops the run for the remaining symbols.
 func (w *AssetWorker) processSymbolSafe(
 	symbol SymbolInfo,
+	scope runScope,
 	batches map[uint64]*UserAlertBatch,
 	cooldownHoursByUser map[uint64]int,
-) (alertsTriggered int, err error) {
+) (checked, triggered int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[ERROR] processSymbolSafe: recovered from panic processing %s: %v", symbol.Symbol, r)
 			err = fmt.Errorf("recovered from panic: %v", r)
 		}
 	}()
-	return w.processSymbol(symbol, batches, cooldownHoursByUser)
+	return w.processSymbol(symbol, scope, batches, cooldownHoursByUser)
 }
 
 // processSymbol fetches fresh market data for symbol via the cache layer,
-// loads every active subscriber, runs one shared DeepSeek analysis for the
-// symbol, and evaluates each subscriber's alert conditions — appending a
-// triggered alert to that subscriber's UserAlertBatch in batches rather
-// than sending anything directly. Actual delivery happens once per user
-// after every symbol has been processed, via dispatchBatches.
+// loads every active subscriber, and evaluates each subscriber's alert
+// conditions — appending a triggered alert to that subscriber's
+// UserAlertBatch in batches rather than sending anything directly. Actual
+// delivery happens once per user after every symbol has been processed,
+// via dispatchBatches.
 func (w *AssetWorker) processSymbol(
 	symbol SymbolInfo,
+	scope runScope,
 	batches map[uint64]*UserAlertBatch,
 	cooldownHoursByUser map[uint64]int,
-) (int, error) {
+) (int, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
 	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType)
 	if err != nil {
-		return 0, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
+		return 0, 0, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
 	}
 
-	subscribers, err := w.loadSubscribers(ctx, symbol.Symbol)
+	subscribers, err := w.loadSubscribers(ctx, symbol.Symbol, scope.userID)
 	if err != nil {
-		return 0, fmt.Errorf("load subscribers for %s: %w", symbol.Symbol, err)
+		return 0, 0, fmt.Errorf("load subscribers for %s: %w", symbol.Symbol, err)
 	}
 	if len(subscribers) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	fetchResult := &asset.FetchResult{
@@ -276,31 +290,13 @@ func (w *AssetWorker) processSymbol(
 		FetchedAt:    marketData.LastFetched,
 	}
 
-	subscriberContexts := make([]asset.SubscriberContext, 0, len(subscribers))
-	for _, s := range subscribers {
-		subscriberContexts = append(subscriberContexts, asset.SubscriberContext{
-			AlertType:          s.AlertType,
-			PriceLowerUSD:      s.PriceLowerUSD,
-			PriceUpperUSD:      s.PriceUpperUSD,
-			PctChangeThreshold: s.PctChangeThreshold,
-		})
-	}
-
 	usdToIDR, rateErr := currency.GetUSDToIDR()
 	if rateErr != nil {
 		log.Printf("[ERROR] processSymbol: get USD/IDR rate for %s: %v", symbol.Symbol, rateErr)
 	}
-
-	analysis, err := w.analyzer.AnalyzeAsset(fetchResult, subscriberContexts, usdToIDR)
-	if err != nil {
-		log.Printf("[WARN] processSymbol: AnalyzeAsset failed for %s, alerting without AI commentary: %v", symbol.Symbol, err)
-		analysis = nil
-	}
-
 	priceIDR := fetchResult.PriceUSD * usdToIDR
 
-	triggered := w.appendTriggeredAlerts(subscribers, fetchResult, priceIDR, analysis, batches, cooldownHoursByUser)
-	return triggered, nil
+	return len(subscribers), w.appendTriggeredAlerts(subscribers, fetchResult, priceIDR, scope.skipCooldown, batches, cooldownHoursByUser), nil
 }
 
 // appendTriggeredAlerts evaluates every subscriber in subscribers against
@@ -314,13 +310,13 @@ func (w *AssetWorker) appendTriggeredAlerts(
 	subscribers []SubscriberData,
 	fetchResult *asset.FetchResult,
 	priceIDR float64,
-	analysis *asset.AnalysisResult,
+	skipCooldown bool,
 	batches map[uint64]*UserAlertBatch,
 	cooldownHoursByUser map[uint64]int,
 ) int {
 	triggered := 0
 	for _, sub := range subscribers {
-		item, ok, evalErr := w.evaluateSubscriberSafe(sub, fetchResult, priceIDR, analysis)
+		item, ok, evalErr := w.evaluateSubscriberSafe(sub, fetchResult, priceIDR, skipCooldown)
 		if evalErr != nil {
 			log.Printf("[ERROR] appendTriggeredAlerts: evaluate alert for user %d symbol %s failed: %v", sub.UserID, fetchResult.Symbol, evalErr)
 			continue
@@ -370,8 +366,8 @@ func (w *AssetWorker) appendTriggeredAlerts(
 // loadSubscribers returns every active subscriber for symbol who has an
 // active account with a Telegram asset chat ID configured, joined with
 // their most recent alert_states row if one exists.
-func (w *AssetWorker) loadSubscribers(ctx context.Context, symbol string) ([]SubscriberData, error) {
-	rows, err := w.db.QueryContext(ctx, `
+func (w *AssetWorker) loadSubscribers(ctx context.Context, symbol string, userID uint64) ([]SubscriberData, error) {
+	query := `
 		SELECT
 			sub.user_id,
 			sub.alert_type,
@@ -392,7 +388,14 @@ func (w *AssetWorker) loadSubscribers(ctx context.Context, symbol string) ([]Sub
 		WHERE sub.asset_symbol = ?
 			AND sub.is_active = true
 			AND u.is_active = true
-			AND u.telegram_asset_chat_id IS NOT NULL`, symbol)
+			AND u.telegram_asset_chat_id IS NOT NULL`
+	args := []interface{}{symbol}
+	if userID != 0 {
+		query += ` AND sub.user_id = ?`
+		args = append(args, userID)
+	}
+
+	rows, err := w.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query subscribers for %s: %w", symbol, err)
 	}
@@ -446,7 +449,7 @@ func (w *AssetWorker) loadSubscribers(ctx context.Context, symbol string) ([]Sub
 // evaluateSubscriberSafe wraps evaluateSubscriber with panic recovery so a
 // failure evaluating one subscriber never stops evaluation of the rest.
 func (w *AssetWorker) evaluateSubscriberSafe(
-	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, analysis *asset.AnalysisResult,
+	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, skipCooldown bool,
 ) (item AlertItem, triggered bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -454,7 +457,7 @@ func (w *AssetWorker) evaluateSubscriberSafe(
 			err = fmt.Errorf("recovered from panic: %v", r)
 		}
 	}()
-	return w.evaluateSubscriber(subscriber, fetchResult, priceIDR, analysis)
+	return w.evaluateSubscriber(subscriber, fetchResult, priceIDR, skipCooldown)
 }
 
 // evaluateSubscriber implements the cooldown + threshold evaluation for a
@@ -468,9 +471,9 @@ func (w *AssetWorker) evaluateSubscriberSafe(
 //     delivery and cooldown persistence happen later, once per user, in
 //     dispatchBatches.
 func (w *AssetWorker) evaluateSubscriber(
-	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, analysis *asset.AnalysisResult,
+	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, skipCooldown bool,
 ) (AlertItem, bool, error) {
-	if subscriber.CooldownUntil != nil && time.Now().Before(*subscriber.CooldownUntil) {
+	if !skipCooldown && subscriber.CooldownUntil != nil && time.Now().Before(*subscriber.CooldownUntil) {
 		priceMovePct := 0.0
 		if subscriber.LastAlertedPriceUSD != nil && *subscriber.LastAlertedPriceUSD != 0 {
 			priceMovePct = math.Abs(fetchResult.PriceUSD-*subscriber.LastAlertedPriceUSD) / *subscriber.LastAlertedPriceUSD * 100
@@ -492,11 +495,6 @@ func (w *AssetWorker) evaluateSubscriber(
 		ChangePct:   fetchResult.ChangePct24h,
 		TriggerType: triggerType,
 	}
-	if analysis != nil {
-		item.AnalysisID = analysis.AnalysisID
-		item.AnalysisEN = analysis.AnalysisEN
-	}
-
 	return item, true, nil
 }
 
@@ -543,8 +541,9 @@ func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch, cooldo
 		if len(batch.Alerts) == 0 {
 			continue
 		}
-		w.dispatchUserBatch(batch, cooldownHoursByUser[batch.UserID], timestampEscaped, now)
-		alertsSent += len(batch.Alerts)
+		if w.dispatchUserBatch(batch, cooldownHoursByUser[batch.UserID], timestampEscaped, now) {
+			alertsSent += len(batch.Alerts)
+		}
 		usersNotified++
 	}
 
@@ -556,7 +555,7 @@ func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch, cooldo
 // successfully — upserts alert_states for each included alert so the next
 // run's cooldown check has the correct baseline. Exactly one
 // notification_logs row is recorded for the whole batch either way.
-func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, cooldownHours int, timestampEscaped string, now time.Time) {
+func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, cooldownHours int, timestampEscaped string, now time.Time) bool {
 	blocks := make([]string, 0, len(batch.Alerts))
 	for _, alert := range batch.Alerts {
 		blocks = append(blocks, buildAssetItemBlock(batch.Language, alert))
@@ -604,6 +603,8 @@ func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, cooldownHours int
 	}); err != nil {
 		log.Printf("[ERROR] dispatchUserBatch: log notification for user %d failed: %v", batch.UserID, err)
 	}
+
+	return allSent
 }
 
 // upsertAlertState records the alert just sent so the next run's cooldown
@@ -644,28 +645,15 @@ func buildAssetItemBlock(lang string, item AlertItem) string {
 
 	priceLabel := "💰 Harga"
 	triggerLabel := triggerLabelID(item.TriggerType)
-	analysisText := item.AnalysisID
 	if lang == "en" {
 		priceLabel = "💰 Price"
 		triggerLabel = triggerLabelEN(item.TriggerType)
-		analysisText = item.AnalysisEN
 	}
 
-	block := fmt.Sprintf(
+	return fmt.Sprintf(
 		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s%%\n⚠️ Trigger: %s",
 		symbol, priceLabel, priceUSDText, priceIDRText, changePctText, notifier.EscapeTelegramMarkdown(triggerLabel),
 	)
-
-	// When AnalyzeAsset fails (DeepSeek down/timed out/rate-limited),
-	// analysisText is empty and the alert still needs to go out — the
-	// price/threshold breach is the important, time-sensitive part; the AI
-	// commentary is a nice-to-have. Omit the AI line entirely instead of
-	// leaving a blank line where it would have gone.
-	if analysisText != "" {
-		block += "\n" + notifier.EscapeTelegramMarkdown(analysisText)
-	}
-
-	return block
 }
 
 func triggerLabelID(triggerType string) string {

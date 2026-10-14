@@ -17,6 +17,7 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/currency"
 	"github.com/karvin-nanda/watchtower/internal/db"
 	"github.com/karvin-nanda/watchtower/internal/notifier"
+	"github.com/karvin-nanda/watchtower/internal/runs"
 	"github.com/karvin-nanda/watchtower/internal/scheduler"
 	"github.com/karvin-nanda/watchtower/internal/sentinel"
 )
@@ -46,9 +47,7 @@ func main() {
 
 	notif := notifier.NewNotifier(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 	assetFetcher := asset.NewAssetFetcher(cfg.ExternalAPI.TwelveDataAPIKey)
-	deepSeekAnalyzer := asset.NewDeepSeekAnalyzer(cfg.DeepSeek.APIKey, cfg.DeepSeek.Model)
 	sentinelFetcher := sentinel.NewSentinelFetcher(cfg.ExternalAPI.GitHubToken)
-	sentinelAnalyzer := sentinel.NewSentinelAnalyzer(cfg.DeepSeek.APIKey, cfg.DeepSeek.Model)
 
 	assetInterval := time.Duration(cfg.Scheduler.AssetIntervalHours) * time.Hour
 	sentinelInterval := time.Duration(cfg.Scheduler.SentinelIntervalHours) * time.Hour
@@ -58,17 +57,14 @@ func main() {
 		database.Redis,
 		assetFetcher,
 		notif,
-		deepSeekAnalyzer,
 		cfg.Scheduler.AssetIntervalHours,
 		cfg.Limits.MaxUniqueSymbols,
 		cfg.Limits.AlertPriceMovePct,
-		assetInterval,
 	)
 
 	sentinelWorker := scheduler.NewSentinelWorker(
 		database.SQL,
 		sentinelFetcher,
-		sentinelAnalyzer,
 		notif,
 	)
 
@@ -77,16 +73,43 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	state := scheduler.NewStateStore(database.SQL)
+	assetPipeline := &scheduler.Pipeline{
+		Name: scheduler.PipelineAsset, Interval: assetInterval,
+		RunFn: assetWorker.Run, State: state, Now: time.Now,
+		RetryAfterFailure: scheduler.RetryAfterFailure,
+	}
+	sentinelPipeline := &scheduler.Pipeline{
+		Name: scheduler.PipelineSentinel, Interval: sentinelInterval,
+		RunFn: sentinelWorker.Run, State: state, Now: time.Now,
+		RetryAfterFailure: scheduler.RetryAfterFailure,
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		assetWorker.Start(ctx)
+		assetPipeline.Loop(ctx, scheduler.DueCheckInterval)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		sentinelWorker.Start(ctx, sentinelInterval)
+		sentinelPipeline.Loop(ctx, scheduler.DueCheckInterval)
+	}()
+
+	runStore := runs.NewStore(database.Redis)
+	consumer := runs.NewConsumer(runStore, scheduler.NewRunExecutor(assetWorker, sentinelWorker, sentinelPipeline))
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		consumer.Start(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runs.StartHeartbeat(ctx, runStore, runs.HeartbeatInterval)
 	}()
 
 	<-ctx.Done()

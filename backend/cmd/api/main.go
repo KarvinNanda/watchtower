@@ -24,6 +24,7 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/config"
 	"github.com/karvin-nanda/watchtower/internal/db"
 	"github.com/karvin-nanda/watchtower/internal/middleware"
+	"github.com/karvin-nanda/watchtower/internal/runs"
 	"github.com/karvin-nanda/watchtower/internal/telegram"
 	"github.com/karvin-nanda/watchtower/internal/user"
 )
@@ -76,11 +77,11 @@ func main() {
 	userService := user.NewUserService(database.SQL, cfg.Limits.MaxUniqueSymbols)
 	botHandler := telegram.NewBotHandler(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 
-	// isProduction drives both gin's own release mode and the auth cookie's
-	// Secure/SameSite attributes (see auth.Service.setAuthCookie) — a
-	// single source of truth so a misconfigured environment can't set
-	// gin to release mode while still issuing a non-Secure cookie, or
-	// vice versa.
+	// isProduction drives gin's release mode and drops the Vite dev origin
+	// from CORS (see allowedOrigins). The auth cookie's Secure/SameSite
+	// attributes come from COOKIE_SECURE instead (see
+	// auth.Service.setAuthCookie), because self-hosted installs run in
+	// production mode over plain http://localhost.
 	isProduction := cfg.Server.Env == "production"
 	if isProduction {
 		gin.SetMode(gin.ReleaseMode)
@@ -113,33 +114,14 @@ func main() {
 	// AllowCredentials is required for the browser to send/accept the
 	// httpOnly auth cookie on cross-origin requests (the SPA is served from
 	// a different origin than the API in local dev, and from the same
-	// origin only in production via nginx's /api/ proxy_pass) — and per the
-	// Fetch/XHR spec, AllowCredentials can never be paired with a wildcard
-	// AllowOrigins, so every allowed origin must be listed explicitly here
-	// rather than falling back to "*" the way the previous CORS middleware
-	// did in non-production environments.
-	allowedOrigins := []string{
-		"http://localhost:5173",
-		"http://192.168.146.128:8888",
-	}
-	// gin-contrib/cors validates every entry looks like a real origin
-	// ("http://..."/"https://..."/"*") and panics at startup otherwise —
-	// FRONTEND_URL is blank in most local dev setups, so it's only
-	// appended when actually configured (e.g. in production).
-	if cfg.Server.FrontendURL != "" {
-		allowedOrigins = append(allowedOrigins, cfg.Server.FrontendURL)
-	}
-	router.Use(cors.New(cors.Config{
-		AllowOrigins:     allowedOrigins,
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Content-Type", "X-Requested-With"},
-		AllowCredentials: true,
-		MaxAge:           86400 * time.Second,
-	}))
+	// origin when nginx proxies /api/) — and per the Fetch/XHR spec,
+	// AllowCredentials can never be paired with a wildcard AllowOrigins, so
+	// every allowed origin is listed explicitly (see allowedOrigins).
+	router.Use(cors.New(corsConfig(cfg.Server.FrontendURL, isProduction)))
 	router.Use(middleware.RequestSizeLimit(maxRequestBodyBytes))
 	router.Use(middleware.SQLInjectionGuard())
 
-	registerRoutes(router, database, authService, userService, isProduction)
+	registerRoutes(router, database, authService, userService, cfg.Server.CookieSecure)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -201,7 +183,42 @@ func main() {
 	log.Println("[INFO] main: api stopped gracefully")
 }
 
-func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService, isProduction bool) {
+// corsConfig builds the CORS middleware config for the given allow-list.
+// With no allowed origin (production without FRONTEND_URL) every
+// cross-origin request is rejected; gin-contrib/cors would otherwise panic
+// at startup. Same-origin requests through nginx are unaffected.
+func corsConfig(frontendURL string, isProduction bool) cors.Config {
+	cfg := cors.Config{
+		AllowOrigins:     allowedOrigins(frontendURL, isProduction),
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type", "X-Requested-With"},
+		AllowCredentials: true,
+		MaxAge:           86400 * time.Second,
+	}
+	if len(cfg.AllowOrigins) == 0 {
+		cfg.AllowOriginFunc = func(string) bool { return false }
+	}
+	return cfg
+}
+
+// allowedOrigins is the CORS allow-list: the configured frontend origin,
+// plus the Vite dev server outside production. localhost:5173 is the same
+// site as localhost:8080, so in production any page served on Vite's
+// default port would otherwise get credentialed access to the API.
+// AllowCredentials forbids a wildcard, and gin-contrib/cors panics on an
+// empty entry, so FRONTEND_URL is only appended when set.
+func allowedOrigins(frontendURL string, isProduction bool) []string {
+	origins := []string{}
+	if !isProduction {
+		origins = append(origins, "http://localhost:5173")
+	}
+	if frontendURL != "" {
+		origins = append(origins, frontendURL)
+	}
+	return origins
+}
+
+func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService, cookieSecure bool) {
 	router.GET("/health", healthHandler(database))
 
 	api := router.Group("/api")
@@ -217,7 +234,7 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 		registerHandler(authService))
 	authGroup.POST("/login",
 		middleware.RateLimiter(loginRateLimitMaxRequests, loginRateLimitWindowSecs),
-		loginHandler(authService, isProduction))
+		loginHandler(authService, cookieSecure))
 	authGroup.GET("/me",
 		middleware.RateLimiter(authRateLimitMaxRequests, authRateLimitWindowSecs),
 		auth.AuthMiddleware(authService), meHandler(authService))
@@ -245,6 +262,8 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 	protected.GET("/market/:symbol", marketQuoteHandler(database.SQL))
 
 	protected.GET("/dashboard", dashboardHandler(userService))
+
+	runs.RegisterRoutes(protected, runs.NewStore(database.Redis), runs.SQLTelegramLinkChecker{DB: database.SQL})
 }
 
 // respondData writes a successful {"data": ..., "message": ...} response.
@@ -378,7 +397,7 @@ type loginRequest struct {
 // loginHandler authenticates the request and, on success, has
 // authService.Login set the JWT as an httpOnly cookie directly on c — the
 // response body carries only the user object, never the token itself.
-func loginHandler(authService *auth.Service, isProduction bool) gin.HandlerFunc {
+func loginHandler(authService *auth.Service, cookieSecure bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req loginRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -386,7 +405,7 @@ func loginHandler(authService *auth.Service, isProduction bool) gin.HandlerFunc 
 			return
 		}
 
-		u, err := authService.Login(c, req.Email, req.Password, isProduction)
+		u, err := authService.Login(c, req.Email, req.Password, cookieSecure)
 		if err != nil {
 			if errors.Is(err, auth.ErrInvalidCredentials) {
 				respondError(c, http.StatusUnauthorized, "unauthorized", err.Error())

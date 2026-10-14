@@ -17,6 +17,7 @@ import {
 } from 'naive-ui'
 
 import { useSubscriptionsStore } from '@/stores/subscriptions'
+import RunNowButton from '@/components/runs/RunNowButton.vue'
 import { message } from '@/plugins/naive'
 import { ASSET_OPTIONS } from '@/constants/assets'
 
@@ -233,6 +234,7 @@ onMounted(async () => {
 <template>
   <div class="asset-view">
     <div class="asset-view__toolbar">
+      <run-now-button type="asset" />
       <n-button type="primary" @click="openCreateModal">{{ t('asset.add') }}</n-button>
     </div>
 
@@ -293,6 +295,7 @@ onMounted(async () => {
 <style scoped>
 .asset-view__toolbar {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
   margin-bottom: 16px;
 }
