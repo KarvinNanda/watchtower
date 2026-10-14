@@ -72,16 +72,26 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	state := scheduler.NewStateStore(database.SQL)
+	assetPipeline := &scheduler.Pipeline{
+		Name: scheduler.PipelineAsset, Interval: assetInterval,
+		RunFn: assetWorker.Run, State: state, Now: time.Now,
+	}
+	sentinelPipeline := &scheduler.Pipeline{
+		Name: scheduler.PipelineSentinel, Interval: sentinelInterval,
+		RunFn: sentinelWorker.Run, State: state, Now: time.Now,
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runEvery(ctx, "asset", assetInterval, assetWorker.Run)
+		assetPipeline.Loop(ctx, scheduler.DueCheckInterval)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runEvery(ctx, "sentinel", sentinelInterval, sentinelWorker.Run)
+		sentinelPipeline.Loop(ctx, scheduler.DueCheckInterval)
 	}()
 
 	<-ctx.Done()
@@ -89,24 +99,4 @@ func main() {
 
 	wg.Wait()
 	log.Println("[INFO] main: scheduler stopped gracefully")
-}
-
-// runEvery is a stop-gap kept only until the persisted due-check loop
-// (scheduler.Pipeline) lands in the next commit.
-func runEvery(ctx context.Context, name string, every time.Duration, fn func() error) {
-	if err := fn(); err != nil {
-		log.Printf("[ERROR] main: %s run failed: %v", name, err)
-	}
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if err := fn(); err != nil {
-				log.Printf("[ERROR] main: %s run failed: %v", name, err)
-			}
-		}
-	}
 }
