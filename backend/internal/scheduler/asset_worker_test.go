@@ -293,3 +293,17 @@ func TestEvaluateSubscriber_SkipCooldownForManualRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, triggered, "a manual run must ignore the cooldown")
 }
+
+func TestRun_ReturnsErrorWhenEverySymbolFailed(t *testing.T) {
+	w, mock, _ := newMockAssetWorker(t, 5.0)
+	w.maxUniqueSymbols = 100
+	mock.ExpectQuery(`SELECT DISTINCT asset_symbol, asset_type`).
+		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type"}).AddRow("BTC", "crypto"))
+
+	// cache is nil, so fetching market data fails for the only symbol —
+	// the same outcome as running with no network.
+	err := w.Run()
+
+	assert.Error(t, err, "a periodic run where nothing could be fetched must be recorded as failed so it is retried")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

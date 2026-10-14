@@ -77,10 +77,12 @@ func main() {
 	assetPipeline := &scheduler.Pipeline{
 		Name: scheduler.PipelineAsset, Interval: assetInterval,
 		RunFn: assetWorker.Run, State: state, Now: time.Now,
+		RetryAfterFailure: scheduler.RetryAfterFailure,
 	}
 	sentinelPipeline := &scheduler.Pipeline{
 		Name: scheduler.PipelineSentinel, Interval: sentinelInterval,
 		RunFn: sentinelWorker.Run, State: state, Now: time.Now,
+		RetryAfterFailure: scheduler.RetryAfterFailure,
 	}
 
 	wg.Add(1)

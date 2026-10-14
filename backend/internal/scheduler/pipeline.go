@@ -16,6 +16,11 @@ const (
 	// DueCheckInterval is how often a Pipeline asks "am I due?". It bounds
 	// how late a catch-up run can start after the machine wakes up.
 	DueCheckInterval = time.Minute
+
+	// RetryAfterFailure is how soon a run that failed outright (for example
+	// a catch-up run right after wake, before Wi-Fi reconnects) is retried,
+	// instead of waiting a full interval.
+	RetryAfterFailure = 10 * time.Minute
 )
 
 // StateStore persists when each pipeline last ran (table scheduler_state),
@@ -28,24 +33,28 @@ func NewStateStore(db *sql.DB) *StateStore {
 	return &StateStore{db: db}
 }
 
-// LastStarted returns when pipeline last started, and false if it never has.
-func (s *StateStore) LastStarted(ctx context.Context, pipeline string) (time.Time, bool, error) {
+// LastRun returns when pipeline last started and that run's status
+// ("ok", "failed", or "" while unfinished), and false if it never ran.
+func (s *StateStore) LastRun(ctx context.Context, pipeline string) (time.Time, string, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, dbQueryTimeout)
 	defer cancel()
 
-	var t sql.NullTime
+	var (
+		t      sql.NullTime
+		status sql.NullString
+	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT last_started_at FROM scheduler_state WHERE pipeline = ?`, pipeline).Scan(&t)
+		`SELECT last_started_at, last_status FROM scheduler_state WHERE pipeline = ?`, pipeline).Scan(&t, &status)
 	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, false, nil
+		return time.Time{}, "", false, nil
 	}
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("read scheduler_state for %s: %w", pipeline, err)
+		return time.Time{}, "", false, fmt.Errorf("read scheduler_state for %s: %w", pipeline, err)
 	}
 	if !t.Valid {
-		return time.Time{}, false, nil
+		return time.Time{}, "", false, nil
 	}
-	return t.Time, true, nil
+	return t.Time, status.String, true, nil
 }
 
 func (s *StateStore) RecordStart(ctx context.Context, pipeline string, at time.Time) error {
@@ -84,19 +93,27 @@ type Pipeline struct {
 	RunFn    func() error
 	State    *StateStore
 	Now      func() time.Time
+
+	// RetryAfterFailure, when > 0, makes a failed run due again after this
+	// long rather than after Interval.
+	RetryAfterFailure time.Duration
 }
 
 // Due reports whether the pipeline should run now. A pipeline that has
-// never run is due.
+// never run is due; a failed run is due again after RetryAfterFailure.
 func (p *Pipeline) Due(ctx context.Context) (bool, error) {
-	last, ok, err := p.State.LastStarted(ctx, p.Name)
+	last, status, ok, err := p.State.LastRun(ctx, p.Name)
 	if err != nil {
 		return false, err
 	}
 	if !ok {
 		return true, nil
 	}
-	return p.Now().Sub(last) >= p.Interval, nil
+	wait := p.Interval
+	if status == "failed" && p.RetryAfterFailure > 0 && p.RetryAfterFailure < wait {
+		wait = p.RetryAfterFailure
+	}
+	return p.Now().Sub(last) >= wait, nil
 }
 
 // RunAndRecord runs RunFn and records it in scheduler_state.

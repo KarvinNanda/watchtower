@@ -113,10 +113,18 @@ type SentinelRunResult struct {
 	SentToUser map[uint64]int
 }
 
-// Run is the periodic entry point.
+// Run is the periodic entry point. A run that fetched nothing from any
+// source (typically no network) returns an error so the Pipeline records
+// it as failed and retries soon instead of after a full interval.
 func (w *SentinelWorker) Run() error {
-	_, err := w.RunWithResult()
-	return err
+	res, err := w.RunWithResult()
+	if err != nil {
+		return err
+	}
+	if res.Fetched == 0 {
+		return errors.New("scheduler: no sentinel items fetched from any source")
+	}
+	return nil
 }
 
 // RunWithResult runs the global sentinel pipeline (dedup is global, so a

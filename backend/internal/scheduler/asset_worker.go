@@ -133,10 +133,18 @@ type AssetRunResult struct {
 }
 
 // Run is the periodic entry point: every active subscription, cooldowns
-// respected.
+// respected. A run where symbols failed and none was checked (typically
+// no network) returns an error so the Pipeline records it as failed and
+// retries soon instead of after a full interval.
 func (w *AssetWorker) Run() error {
-	_, err := w.run(runScope{})
-	return err
+	res, err := w.run(runScope{})
+	if err != nil {
+		return err
+	}
+	if res.Errors > 0 && res.RulesChecked == 0 {
+		return fmt.Errorf("scheduler: all %d asset symbol(s) failed", res.Errors)
+	}
+	return nil
 }
 
 // RunForUser evaluates only userID's subscriptions and ignores their

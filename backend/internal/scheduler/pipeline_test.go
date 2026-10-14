@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const lastStartedQuery = `SELECT last_started_at FROM scheduler_state WHERE pipeline = \?`
+const lastRunQuery = `SELECT last_started_at, last_status FROM scheduler_state WHERE pipeline = \?`
 
 var pipelineNow = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 
@@ -26,15 +26,21 @@ func newTestPipeline(t *testing.T, runs *int) (*Pipeline, sqlmock.Sqlmock) {
 		RunFn:    func() error { *runs++; return nil },
 		State:    NewStateStore(db),
 		Now:      func() time.Time { return pipelineNow },
+
+		RetryAfterFailure: 10 * time.Minute,
 	}, mock
 }
 
 func expectLastStarted(mock sqlmock.Sqlmock, at *time.Time) {
-	rows := sqlmock.NewRows([]string{"last_started_at"})
+	expectLastRun(mock, at, "ok")
+}
+
+func expectLastRun(mock sqlmock.Sqlmock, at *time.Time, status string) {
+	rows := sqlmock.NewRows([]string{"last_started_at", "last_status"})
 	if at != nil {
-		rows.AddRow(*at)
+		rows.AddRow(*at, status)
 	}
-	mock.ExpectQuery(lastStartedQuery).WithArgs(PipelineAsset).WillReturnRows(rows)
+	mock.ExpectQuery(lastRunQuery).WithArgs(PipelineAsset).WillReturnRows(rows)
 }
 
 func expectRecordedRun(mock sqlmock.Sqlmock) {
@@ -119,5 +125,30 @@ func TestPipelineRunAndRecordWith_RecordsFailure(t *testing.T) {
 	err := p.RunAndRecordWith(context.Background(), func() error { return errors.New("boom") })
 
 	assert.EqualError(t, err, "boom")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPipelineTick_FailedRunRetriesAfterBackoff(t *testing.T) {
+	runs := 0
+	p, mock := newTestPipeline(t, &runs)
+	failedAt := pipelineNow.Add(-11 * time.Minute) // e.g. woke up before Wi-Fi reconnected
+	expectLastRun(mock, &failedAt, "failed")
+	expectRecordedRun(mock)
+
+	p.tick(context.Background())
+
+	assert.Equal(t, 1, runs, "a failed catch-up run is retried after the backoff, not after a full interval")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPipelineTick_FailedRunWaitsForBackoff(t *testing.T) {
+	runs := 0
+	p, mock := newTestPipeline(t, &runs)
+	failedAt := pipelineNow.Add(-5 * time.Minute)
+	expectLastRun(mock, &failedAt, "failed")
+
+	p.tick(context.Background())
+
+	assert.Equal(t, 0, runs)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
