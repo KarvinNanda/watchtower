@@ -50,11 +50,6 @@ frontend/retire-report.json
 frontend/coverage/
 
 # =========================================
-# Docker / TLS
-# =========================================
-nginx/ssl/
-
-# =========================================
 # Editor / OS
 # =========================================
 .vscode/
@@ -62,3 +57,8 @@ nginx/ssl/
 .idea/
 .DS_Store
 Thumbs.db
+
+# =========================================
+# Local design docs (specs/plans), not committed
+# =========================================
+docs/

@@ -100,27 +100,14 @@ cd ../frontend && npm install && npm run dev   # terminal 3
 
 The API listens on `http://localhost:8080`, the frontend dev server on `http://localhost:5173`.
 
-### Production (Docker)
-
-```bash
-cp .env.example .env      # fill in DB_ROOT_PASSWORD, DB_PASSWORD, REDIS_PASSWORD, DOMAIN, SSL_EMAIL
-make prod-build
-make prod-up
-```
-
-This builds and starts every service — `mysql`, `redis`, `api`, `scheduler`, `frontend`, plus `nginx` and `certbot` for TLS termination — behind a single reverse proxy. See [`docs/oracle-cloud-setup.md`](./docs/oracle-cloud-setup.md) for the full walkthrough, including the DNS and firewall steps and the self-signed-cert bootstrap needed before certbot can issue a real one.
-
 ## Project Structure
 
 ```
 watchtower/
 ├── backend/                  # Go + Gin API & scheduler — see backend/README.md
 ├── frontend/                 # Vue.js 3 SPA — see frontend/README.md
-├── nginx/                    # Production Nginx config (TLS termination, reverse proxy)
-├── docs/                     # Deployment guides
 ├── docker-compose.yml        # Development stack (mysql, redis, api, scheduler, frontend)
-├── docker-compose.prod.yml   # Production overlay (adds nginx + certbot)
-├── Makefile                  # dev-up / dev-down / prod-build / prod-up / prod-down / db-migrate
+├── Makefile                  # dev-up / dev-down / dev-logs / db-migrate
 └── .env.example              # Root-level env vars consumed by docker-compose
 ```
 
@@ -128,4 +115,3 @@ watchtower/
 
 - Backend: [`./backend/README.md`](./backend/README.md)
 - Frontend: [`./frontend/README.md`](./frontend/README.md)
-- Deployment: [`./docs/oracle-cloud-setup.md`](./docs/oracle-cloud-setup.md)
