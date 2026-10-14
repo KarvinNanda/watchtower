@@ -108,3 +108,29 @@ func TestStartHeartbeat_BeatsAndClearsOnShutdown(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, alive, "a clean shutdown must report the scheduler offline immediately")
 }
+
+type countingExecutor struct{ calls int }
+
+func (c *countingExecutor) Execute(context.Context, *Run) (map[string]int, error) {
+	c.calls++
+	return map[string]int{}, nil
+}
+
+func TestConsumer_SkipsRunThatAlreadyTimedOut(t *testing.T) {
+	s, mr, clock := newTestStore(t)
+	run, err := s.Enqueue(context.Background(), 7, TypeAsset)
+	require.NoError(t, err)
+
+	// Scheduler was down; it comes back after the UI already showed "timed out".
+	*clock = storeNow.Add(16 * time.Minute)
+	exec := &countingExecutor{}
+	runConsumer(t, s, exec)
+
+	// Read the stored status, not Get's synthesized "timed out" view.
+	require.Eventually(t, func() bool {
+		return mr.HGet(runKeyPrefix+run.ID, "status") != StatusQueued
+	}, 3*time.Second, 20*time.Millisecond)
+	assert.Equal(t, StatusFailed, mr.HGet(runKeyPrefix+run.ID, "status"))
+	assert.Equal(t, "timed out", mr.HGet(runKeyPrefix+run.ID, "error"))
+	assert.Equal(t, 0, exec.calls, "a run the user was told timed out must never execute later")
+}

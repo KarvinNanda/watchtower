@@ -60,6 +60,18 @@ func (c *Consumer) process(ctx context.Context, run *Run) {
 	// Status writes must land even if shutdown starts mid-run.
 	bg := context.WithoutCancel(ctx)
 
+	// The web UI already reported a run this old as "timed out" (see
+	// Store.Get). Running it now — e.g. after a scheduler restart, since
+	// Redis keeps the queue — would send an alert the user no longer
+	// expects and could duplicate a retry they started meanwhile.
+	if c.store.now().Sub(run.CreatedAt) > staleAfter {
+		log.Printf("[WARN] runs.Consumer: skipping run %s queued at %s: older than %s", run.ID, run.CreatedAt.Format(time.RFC3339), staleAfter)
+		if err := c.store.MarkFailed(bg, run.ID, "timed out"); err != nil {
+			log.Printf("[ERROR] runs.Consumer: mark %s failed: %v", run.ID, err)
+		}
+		return
+	}
+
 	if err := c.store.MarkRunning(bg, run.ID); err != nil {
 		log.Printf("[ERROR] runs.Consumer: mark %s running: %v", run.ID, err)
 	}
