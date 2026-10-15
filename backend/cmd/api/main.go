@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -259,8 +258,7 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 
 	protected.GET("/notifications", notificationHistoryHandler(userService))
 
-	protected.GET("/market/snapshot", marketSnapshotHandler(userService))
-	protected.GET("/market/:symbol", marketQuoteHandler(database.SQL))
+	registerMarketRoutes(protected, userService)
 
 	protected.GET("/dashboard", dashboardHandler(userService))
 
@@ -986,9 +984,22 @@ func toMarketDataResponse(m user.MarketData) marketDataResponse {
 	}
 }
 
+// registerMarketRoutes serves market data scoped to the caller's own rules.
+// There is deliberately no per-symbol endpoint: answering 200/404 for any
+// symbol reveals which symbols other users track (#53).
+func registerMarketRoutes(g *gin.RouterGroup, svc *user.UserService) {
+	g.GET("/market/snapshot", marketSnapshotHandler(svc))
+}
+
 func marketSnapshotHandler(userService *user.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		data, err := userService.GetMarketSnapshot()
+		userID, err := auth.GetCurrentUserID(c)
+		if err != nil {
+			respondFail(c, http.StatusUnauthorized, "unauthorized", err.Error())
+			return
+		}
+
+		data, err := userService.GetMarketSnapshot(userID)
 		if err != nil {
 			respondUserServiceError(c, err)
 			return
@@ -1057,7 +1068,7 @@ func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 			return
 		}
 
-		snapshot, err := userService.GetMarketSnapshot()
+		snapshot, err := userService.GetMarketSnapshot(userID)
 		if err != nil {
 			respondUserServiceError(c, err)
 			return
@@ -1085,47 +1096,6 @@ func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 			MarketSnapshot:      snapshotResult,
 			RecentNotifications: recentResult,
 		}, "dashboard data retrieved")
-	}
-}
-
-type marketQuoteResponse struct {
-	Symbol       string    `json:"symbol"`
-	PriceUSD     float64   `json:"price_usd"`
-	PriceIDR     *float64  `json:"price_idr"`
-	ChangePct24h *float64  `json:"change_pct_24h"`
-	LastFetched  time.Time `json:"last_fetched"`
-	Source       string    `json:"source"`
-}
-
-func marketQuoteHandler(sqlDB *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		symbol := c.Param("symbol")
-
-		var (
-			q        marketQuoteResponse
-			change   sql.NullFloat64
-			priceIDR float64
-		)
-		err := sqlDB.QueryRowContext(c.Request.Context(), `
-			SELECT symbol, price_usd, price_idr, change_pct_24h, last_fetched, source
-			FROM market_cache
-			WHERE symbol = ?`, symbol,
-		).Scan(&q.Symbol, &q.PriceUSD, &priceIDR, &change, &q.LastFetched, &q.Source)
-		q.PriceIDR = idrOrNil(priceIDR)
-		if change.Valid {
-			q.ChangePct24h = &change.Float64
-		}
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				respondError(c, http.StatusNotFound, "not_found", "symbol not found in cache")
-				return
-			}
-			log.Printf("[ERROR] marketQuoteHandler: %v", err)
-			respondError(c, http.StatusInternalServerError, "internal_error", "failed to load market data")
-			return
-		}
-
-		respondData(c, http.StatusOK, q, "market data retrieved")
 	}
 }
 
