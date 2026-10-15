@@ -139,3 +139,19 @@ func TestLinkLine(t *testing.T) {
 		assert.Equal(t, want, linkLine(in), in)
 	}
 }
+
+func TestLinkLine_LongURLLinksToTheHostOnly(t *testing.T) {
+	long := "https://example.com/track?id=" + strings.Repeat("a", 5000)
+	assert.Equal(t, "🔗 [example\\.com](https://example.com/)", linkLine(long))
+	assert.Equal(t, "🔗 [example\\.com](https://example.com:8443/)", linkLine("https://u:p@example.com:8443/"+strings.Repeat("b", 1200)),
+		"userinfo is dropped, the port is kept")
+}
+
+// One huge tracking URL must not make a part that Telegram rejects (#43).
+func TestSentinelMessages_LongURLStaysUnderTheLimit(t *testing.T) {
+	msgs := SentinelMessages("en", jakartaAt(t), []SentinelEntry{
+		{SourceType: "rss", Title: "news", URL: "https://example.com/track?id=" + strings.Repeat("a", 5000)},
+	})
+	require.Len(t, msgs, 1)
+	assert.LessOrEqual(t, len(msgs[0]), telegramMaxMessageLen)
+}

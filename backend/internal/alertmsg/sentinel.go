@@ -13,6 +13,10 @@ import (
 const (
 	titleMaxRunes   = 60
 	excerptMaxRunes = 200
+	// maxLinkURLBytes bounds the URL inside a link. Longer URLs (usually
+	// tracking links) are replaced by the site root so one item cannot push
+	// its message part past Telegram's limit.
+	maxLinkURLBytes = 1000
 )
 
 var sourceNames = map[string]string{
@@ -238,6 +242,7 @@ func tagLine(e SentinelEntry) string {
 // would auto-link a plain-text URL anyway, and a homograph such as a
 // Cyrillic "а" must not look like the real domain. Anything that is not
 // http(s), or whose host is not a valid domain, gets no link at all.
+// A URL over maxLinkURLBytes links to the site root instead.
 func linkLine(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
@@ -249,7 +254,11 @@ func linkLine(raw string) string {
 			return ""
 		}
 	}
-	return "🔗 [" + esc(host) + "](" + escapeLinkURL(raw) + ")"
+	target := raw
+	if len(target) > maxLinkURLBytes {
+		target = u.Scheme + "://" + u.Host + "/"
+	}
+	return "🔗 [" + esc(host) + "](" + escapeLinkURL(target) + ")"
 }
 
 func isASCII(s string) bool {
