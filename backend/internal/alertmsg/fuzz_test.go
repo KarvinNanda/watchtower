@@ -1,6 +1,8 @@
 package alertmsg
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -52,6 +54,42 @@ func FuzzSentinelMessages(f *testing.F) {
 				if err := checkMarkdownV2(m); err != nil {
 					t.Fatalf("%s part %d: %v\n%s", lang, i+1, err, m)
 				}
+			}
+		}
+	})
+}
+
+// FuzzPack checks the splitting contract on blocks of random sizes: every
+// block appears exactly once and in order, and a part is over the limit
+// only when it holds a single block that is itself too big.
+func FuzzPack(f *testing.F) {
+	f.Add(uint8(6), uint16(1000), uint16(37), "id")
+	f.Add(uint8(40), uint16(120), uint16(4000), "en")
+	f.Add(uint8(3), uint16(5000), uint16(10), "id")
+	f.Fuzz(func(t *testing.T, n uint8, base, spread uint16, lang string) {
+		h := header{first: "🔔 *Alert aset* · X", lines: []string{"⏰ now"}}
+		blocks := make([]string, int(n)%60+1)
+		for i := range blocks {
+			size := int(base)%6000 + (i*int(spread))%700
+			blocks[i] = fmt.Sprintf("<<%d>>", i) + strings.Repeat("x", size)
+		}
+		msgs := pack(lang, h, blocks)
+		joined := strings.Join(msgs, "")
+		last := -1
+		for i := range blocks {
+			marker := fmt.Sprintf("<<%d>>", i)
+			if c := strings.Count(joined, marker); c != 1 {
+				t.Fatalf("block %d appears %d times", i, c)
+			}
+			at := strings.Index(joined, marker)
+			if at < last {
+				t.Fatalf("block %d out of order", i)
+			}
+			last = at
+		}
+		for i, m := range msgs {
+			if len(m) > telegramMaxMessageLen && strings.Count(m, "<<") != 1 {
+				t.Fatalf("part %d is %d bytes with %d blocks", i+1, len(m), strings.Count(m, "<<"))
 			}
 		}
 	})

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/karvin-nanda/watchtower/internal/telegram"
 	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
@@ -53,24 +52,6 @@ func NewNotifier(assetToken, sentinelToken string) *Notifier {
 		sentinelBotToken: sentinelToken,
 		httpClient:       utils.NewHTTPClient(),
 	}
-}
-
-// EscapeTelegramMarkdown escapes every MarkdownV2 special character in
-// text. Without this, dynamic content containing stray underscores,
-// asterisks, or other formatting characters (e.g. "wp_ajax_nopriv_..." in a
-// CVE description) breaks Telegram's entity parser with errors like
-// "can't parse entities: Can't find end of the entity starting at byte
-// offset N". Callers must run every dynamically-inserted field (titles,
-// descriptions, URLs, AI-generated analysis text, timestamps, etc.)
-// through this before interpolating it into a message — literal formatting
-// characters in the message template itself (e.g. the `*` around a bold
-// header) must NOT be escaped, only the dynamic values.
-//
-// The actual implementation lives in internal/telegram (shared with the
-// bot /start handler); this is a thin re-export so existing callers in
-// internal/scheduler don't need to import internal/telegram directly.
-func EscapeTelegramMarkdown(text string) string {
-	return telegram.EscapeTelegramMarkdown(text)
 }
 
 type telegramSendMessageRequest struct {

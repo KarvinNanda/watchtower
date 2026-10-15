@@ -78,11 +78,15 @@ func TestAssetMessages_Golden(t *testing.T) {
 		{"asset_id_basic", "id", testRate, basicAlerts()},
 		{"asset_en_basic", "en", testRate, basicAlerts()},
 		{"asset_id_rate_unavailable", "id", Rate{}, append(basicAlerts(), antam)},
+		{"asset_en_rate_unavailable", "en", Rate{}, append(basicAlerts(), antam)},
 		{"asset_en_antam_native_idr", "en", testRate, []AssetAlert{antam}},
+		{"asset_id_antam_native_idr", "id", testRate, []AssetAlert{antam}},
 		{"asset_en_all_trigger_types", "en", Rate{Value: 17908}, allTypes},
 		{"asset_id_all_trigger_types", "id", Rate{Value: 17908}, allTypes},
 		{"asset_en_many_symbols", "en", testRate, many},
+		{"asset_id_many_symbols", "id", testRate, many},
 		{"asset_id_split", "id", testRate, split},
+		{"asset_en_split", "en", testRate, split},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
