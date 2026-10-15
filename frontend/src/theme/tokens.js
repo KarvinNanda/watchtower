@@ -3,8 +3,9 @@
 // anywhere else: guards.test.js rejects them in .vue files.
 //
 // Text tokens are checked for 4.5:1 contrast on surface, bg, surfaceRaised
-// and the highlighted row (firedTint over surface) in tokens.test.js. The dark primary is lighter than before (#7c6af7 → #8f80f8)
-// so it is readable as link text, with dark text on primary buttons.
+// and the highlighted row (firedTint over surface) in tokens.test.js. The
+// dark primary is lighter than before (#7c6af7 → #8f80f8) so it is readable
+// as link text, with dark text on primary buttons.
 export const tokens = {
   dark: {
     bg: '#0f1117',

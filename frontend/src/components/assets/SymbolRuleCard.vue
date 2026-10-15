@@ -14,6 +14,9 @@ const props = defineProps({
   group: { type: Object, required: true }, // from groupRulesBySymbol
   highlightIds: { type: Set, default: () => new Set() },
   staleAfterHours: { type: Number, default: null },
+  // Current time in ms, ticking (from the page), so the data age stays true
+  // while the page is open.
+  now: { type: Number, required: true },
 })
 const emit = defineEmits(['edit', 'delete', 'toggle', 'rearm'])
 
@@ -21,8 +24,10 @@ const { t, locale } = useI18n()
 
 const market = computed(() => props.group.market)
 const change = computed(() => market.value?.change_pct_24h ?? null)
-const age = computed(() => (market.value ? formatAge(market.value.last_fetched, locale.value) : ''))
-const stale = computed(() => !!market.value && isOlderThanHours(market.value.last_fetched, props.staleAfterHours))
+const age = computed(() => (market.value ? formatAge(market.value.last_fetched, locale.value, props.now) : ''))
+const stale = computed(
+  () => !!market.value && isOlderThanHours(market.value.last_fetched, props.staleAfterHours, props.now),
+)
 
 function levelText(rule) {
   switch (rule.rule_type) {

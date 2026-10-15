@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useNow } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
   NAlert, NButton, NEmpty, NForm, NFormItem, NInputNumber, NModal, NSelect, NSpace, NSpin, NText, useDialog,
@@ -39,6 +40,8 @@ const runResult = ref(null)
 const highlightIds = ref(new Set())
 
 const groups = computed(() => groupRulesBySymbol(store.assets, marketStore.snapshot))
+// One ticking clock for every card's "Updated … ago" label.
+const now = useNow({ interval: 60_000 })
 
 const ERROR_FIELD = {
   'asset.rules.error_level': 'level',
@@ -216,7 +219,11 @@ function closeRunResult() {
   highlightIds.value = new Set()
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  loadAll()
+  marketStore.startAutoRefresh()
+})
+onUnmounted(() => marketStore.stopAutoRefresh())
 </script>
 
 <template>
@@ -244,6 +251,7 @@ onMounted(loadAll)
         :group="group"
         :highlight-ids="highlightIds"
         :stale-after-hours="store.assetIntervalHours"
+        :now="now.getTime()"
         @edit="openEditModal"
         @delete="confirmDelete"
         @toggle="handleToggleActive"
