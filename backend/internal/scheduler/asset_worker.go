@@ -7,13 +7,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/karvin-nanda/watchtower/internal/alertmsg"
 	"github.com/karvin-nanda/watchtower/internal/asset"
 	"github.com/karvin-nanda/watchtower/internal/cache"
 	"github.com/karvin-nanda/watchtower/internal/currency"
@@ -22,9 +22,8 @@ import (
 )
 
 const (
-	dbQueryTimeout   = 30 * time.Second
-	telegramSendGap  = 50 * time.Millisecond
-	wibOffsetSeconds = 7 * 60 * 60
+	dbQueryTimeout  = 30 * time.Second
+	telegramSendGap = 50 * time.Millisecond
 )
 
 // NotifierInterface is the subset of notifier.Notifier's behavior
@@ -55,6 +54,11 @@ type AssetWorker struct {
 	notifLogs         *notifier.LogRepository
 	maxUniqueSymbols  int
 	alertPriceMovePct float64
+
+	// loc is the instance timezone (APP_TIMEZONE) for message timestamps.
+	loc *time.Location
+	// rateFn returns the USD/IDR rate; currency.Current outside tests.
+	rateFn func() currency.Rate
 }
 
 // NewAssetWorker wires together every dependency needed to run the asset
@@ -68,6 +72,7 @@ func NewAssetWorker(
 	cacheTTLHours int,
 	maxUniqueSymbols int,
 	alertPriceMovePct float64,
+	loc *time.Location,
 ) *AssetWorker {
 	return &AssetWorker{
 		db:                db,
@@ -77,6 +82,8 @@ func NewAssetWorker(
 		notifLogs:         notifier.NewLogRepository(db),
 		maxUniqueSymbols:  maxUniqueSymbols,
 		alertPriceMovePct: alertPriceMovePct,
+		loc:               loc,
+		rateFn:            currency.Current,
 	}
 }
 
@@ -96,10 +103,11 @@ type AlertItem struct {
 	ParamsVersion uint32
 	Symbol        string
 	PriceUSD      float64
-	PriceIDR      float64
-	ChangePct     *float64
-	Trigger       rules.Trigger
-	OnSent        rules.Patch
+	// NativeIDR is the source's own IDR price (gold only); 0 otherwise.
+	NativeIDR float64
+	ChangePct *float64
+	Trigger   rules.Trigger
+	OnSent    rules.Patch
 }
 
 // UserAlertBatch accumulates every AlertItem fired for one user during a
@@ -290,16 +298,14 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 		}
 	}
 
-	priceIDR := marketData.PriceIDR
-	if priceIDR == 0 {
-		if rate, rateErr := currency.GetUSDToIDR(); rateErr == nil {
-			priceIDR = marketData.PriceUSD * rate
-		} else {
-			log.Printf("[ERROR] processSymbol: get USD/IDR rate for %s: %v", symbol.Symbol, rateErr)
-		}
+	// Only gold is quoted in IDR by its source. Every other IDR amount is
+	// converted at send time with one rate for the whole message.
+	nativeIDR := 0.0
+	if symbol.AssetType == "gold" {
+		nativeIDR = marketData.PriceIDR
 	}
 
-	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, priceIDR, scope, batches)
+	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, nativeIDR, scope, batches)
 	return res, nil
 }
 
@@ -312,7 +318,7 @@ func (w *AssetWorker) evaluateRules(
 	rows []ruleRow,
 	symbol string,
 	market rules.Market,
-	priceIDR float64,
+	nativeIDR float64,
 	scope runScope,
 	batches map[uint64]*UserAlertBatch,
 ) int {
@@ -345,7 +351,7 @@ func (w *AssetWorker) evaluateRules(
 			ParamsVersion: row.ParamsVersion,
 			Symbol:        symbol,
 			PriceUSD:      market.PriceUSD,
-			PriceIDR:      priceIDR,
+			NativeIDR:     nativeIDR,
 			ChangePct:     market.ChangePct24h,
 			Trigger:       out.Trigger,
 			OnSent:        out.OnSent,
@@ -366,7 +372,7 @@ func evaluateRuleSafe(r rules.Rule, m rules.Market, now time.Time, opt rules.Opt
 }
 
 // dispatchBatches sends one combined Telegram message per user (split only
-// past Telegram's 4096-character limit — see buildBatchedMessages), applies
+// past Telegram's 4096-character limit — see alertmsg.AssetMessages), applies
 // OnSent for every delivered alert, and records one notification_logs
 // entry per user for the run.
 func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch) (alertsSent, usersNotified int) {
@@ -374,14 +380,14 @@ func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch) (alert
 		return 0, 0
 	}
 
-	timestamp := time.Now().In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
-	timestampEscaped := notifier.EscapeTelegramMarkdown(timestamp)
+	at := time.Now().In(w.loc)
+	rate := w.messageRate()
 
 	for _, batch := range batches {
 		if len(batch.Alerts) == 0 {
 			continue
 		}
-		if w.dispatchUserBatch(batch, timestampEscaped) {
+		if w.dispatchUserBatch(batch, at, rate) {
 			alertsSent += len(batch.Alerts)
 		}
 		usersNotified++
@@ -389,16 +395,30 @@ func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch) (alert
 	return alertsSent, usersNotified
 }
 
+// messageRate is the one USD/IDR rate used for every message of a run.
+// The currency package's hardcoded fallback is never shown: it becomes
+// "rate unavailable" and IDR amounts are hidden.
+func (w *AssetWorker) messageRate() alertmsg.Rate {
+	r := w.rateFn()
+	if r.Fallback {
+		log.Printf("[WARN] AssetWorker: no real USD/IDR rate available; IDR amounts are hidden in this run's messages")
+		return alertmsg.Rate{}
+	}
+	return alertmsg.Rate{Value: r.Value, UpdatedAt: r.UpdatedAt}
+}
+
 // dispatchUserBatch sends batch, then — only if every message part was
 // delivered — applies each alert's OnSent state. A failed send leaves the
 // rules untouched, so the next run fires them again.
-func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, timestampEscaped string) bool {
-	blocks := make([]string, 0, len(batch.Alerts))
-	for _, alert := range batch.Alerts {
-		blocks = append(blocks, buildAssetItemBlock(batch.Language, alert))
+func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, at time.Time, rate alertmsg.Rate) bool {
+	alerts := make([]alertmsg.AssetAlert, 0, len(batch.Alerts))
+	for _, a := range batch.Alerts {
+		alerts = append(alerts, alertmsg.AssetAlert{
+			RuleID: a.RuleID, Symbol: a.Symbol, PriceUSD: a.PriceUSD,
+			NativeIDR: a.NativeIDR, ChangePct: a.ChangePct, Trigger: a.Trigger,
+		})
 	}
-
-	messages := buildBatchedMessages("🔔 *WATCHTOWER ASSET ALERT*", timestampEscaped, blocks)
+	messages := alertmsg.AssetMessages(batch.Language, at, rate, alerts)
 
 	allSent := true
 	for _, msg := range messages {
@@ -444,79 +464,4 @@ func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, timestampEscaped 
 	}
 
 	return allSent
-}
-
-// buildAssetItemBlock formats one fired rule as a 4-line block in the
-// user's language ('en' for English, anything else — including the 'id'
-// default — for Indonesian). Every dynamic field is escaped for Telegram's
-// MarkdownV2 via notifier.EscapeTelegramMarkdown; the "*" bold markers and
-// the escaped "(", ")" around the IDR amount are static template text.
-func buildAssetItemBlock(lang string, item AlertItem) string {
-	symbol := notifier.EscapeTelegramMarkdown(item.Symbol)
-	priceUSDText := notifier.EscapeTelegramMarkdown(formatUSD(item.PriceUSD))
-	priceIDRText := notifier.EscapeTelegramMarkdown(formatIDR(item.PriceIDR))
-
-	changeText := "n/a"
-	if item.ChangePct != nil {
-		changeText = fmt.Sprintf("%.2f%%", *item.ChangePct)
-	}
-
-	priceLabel := "💰 Harga"
-	if lang == "en" {
-		priceLabel = "💰 Price"
-	}
-
-	return fmt.Sprintf(
-		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s\n⚠️ Trigger: %s",
-		symbol, priceLabel, priceUSDText, priceIDRText,
-		notifier.EscapeTelegramMarkdown(changeText),
-		notifier.EscapeTelegramMarkdown(triggerLine(lang, item.Trigger)),
-	)
-}
-
-// triggerLine describes why a rule fired. Intent wording repeats the
-// user's own plan; it is never advice (spec §6.4).
-func triggerLine(lang string, t rules.Trigger) string {
-	en := lang == "en"
-	pick := func(enText, idText string) string {
-		if en {
-			return enText
-		}
-		return idText
-	}
-	level := formatUSD(t.LevelUSD)
-	pct := formatPct(t.Pct)
-
-	switch t.Type {
-	case rules.TypePriceLevel:
-		switch t.Intent {
-		case rules.IntentBuyTarget:
-			return pick("Reached your buy target ("+level+")", "Mencapai buy target kamu ("+level+")")
-		case rules.IntentTakeProfit:
-			return pick("Reached your take-profit level ("+level+")", "Mencapai level take-profit kamu ("+level+")")
-		case rules.IntentStopLoss:
-			return pick("Reached your stop-loss level ("+level+")", "Mencapai level stop-loss kamu ("+level+")")
-		}
-		if t.Direction == rules.DirectionAbove {
-			return pick("Above "+level, "Di atas "+level)
-		}
-		return pick("Below "+level, "Di bawah "+level)
-	case rules.TypePctChange24h:
-		return pick("24h change beyond ±"+pct, "Perubahan 24 jam melewati ±"+pct)
-	case rules.TypeTrailingStop:
-		peak := formatUSD(t.PeakPriceUSD)
-		return pick("Down "+pct+" or more from peak "+peak, "Turun "+pct+" atau lebih dari peak "+peak)
-	case rules.TypeWeek52Break:
-		prev := formatUSD(t.PrevRefUSD)
-		if t.Direction == rules.DirectionBelow {
-			return pick("New 52-week low (previous "+prev+")", "52-week low baru (sebelumnya "+prev+")")
-		}
-		return pick("New 52-week high (previous "+prev+")", "52-week high baru (sebelumnya "+prev+")")
-	}
-	return string(t.Type)
-}
-
-// formatPct renders a threshold without trailing zeros: 5 -> "5%", 2.5 -> "2.5%".
-func formatPct(v float64) string {
-	return strconv.FormatFloat(v, 'f', -1, 64) + "%"
 }

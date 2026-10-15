@@ -60,12 +60,14 @@ func main() {
 		cfg.Scheduler.AssetIntervalHours,
 		cfg.Limits.MaxUniqueSymbols,
 		cfg.Limits.AlertPriceMovePct,
+		cfg.Scheduler.Timezone,
 	)
 
 	sentinelWorker := scheduler.NewSentinelWorker(
 		database.SQL,
 		sentinelFetcher,
 		notif,
+		cfg.Scheduler.Timezone,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

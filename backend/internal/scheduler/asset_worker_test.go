@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/karvin-nanda/watchtower/internal/alertmsg"
 	"github.com/karvin-nanda/watchtower/internal/cache"
+	"github.com/karvin-nanda/watchtower/internal/currency"
 	"github.com/karvin-nanda/watchtower/internal/notifier"
 	"github.com/karvin-nanda/watchtower/internal/rules"
 )
@@ -69,6 +70,8 @@ func newMockAssetWorker(t *testing.T, alertPriceMovePct float64) (*AssetWorker, 
 		notifLogs:         notifier.NewLogRepository(db),
 		alertPriceMovePct: alertPriceMovePct,
 		maxUniqueSymbols:  100,
+		loc:               time.UTC,
+		rateFn:            func() currency.Rate { return currency.Rate{Value: 16000} },
 	}
 	return w, mock, mockNotif
 }
@@ -156,7 +159,7 @@ func TestDispatchUserBatch_AppliesOnSentAfterSuccess(t *testing.T) {
 	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?, last_alerted_at`).WithArgs(true, sqlmock.AnyArg(), 150.0, sqlmock.AnyArg(), 2, 1).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	ok := w.dispatchUserBatch(batches[1], "01 Jan 2026 00:00 WIB")
+	ok := w.dispatchUserBatch(batches[1], time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), alertmsg.Rate{Value: 16000})
 
 	assert.True(t, ok)
 	require.Len(t, notif.calls, 1, "two rules for one user go into one message")
@@ -177,7 +180,7 @@ func TestDispatchUserBatch_FailedSendKeepsState(t *testing.T) {
 	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	ok := w.dispatchUserBatch(batches[1], "01 Jan 2026 00:00 WIB")
+	ok := w.dispatchUserBatch(batches[1], time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), alertmsg.Rate{Value: 16000})
 
 	assert.False(t, ok)
 	err := mock.ExpectationsWereMet()
@@ -200,6 +203,7 @@ func TestProcessSymbol_CryptoWeek52FailureDoesNotBlockPriceRules(t *testing.T) {
 	res, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto", NeedsWeek52: true}, runScope{}, batches)
 
 	require.NoError(t, err)
+	assert.Zero(t, batches[1].Alerts[0].NativeIDR, "crypto IDR is converted at send time, never taken from the cache")
 	assert.Equal(t, symbolResult{checked: 2, triggered: 1, dataErrors: 1}, res)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -262,61 +266,6 @@ func TestRun_ReturnsErrorWhenEverySymbolFailed(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestBuildAssetItemBlock_FourLines(t *testing.T) {
-	t.Parallel()
-	block := buildAssetItemBlock("en", AlertItem{
-		Symbol: "BTC", PriceUSD: 65000, PriceIDR: 65000 * 16000, ChangePct: floatPtr(-3.2),
-		Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, Intent: rules.IntentTakeProfit, LevelUSD: 64000},
-	})
-	assert.Contains(t, block, "BTC")
-	assert.Contains(t, block, `\-3\.20%`)
-	// "$" is not a MarkdownV2 special character; "-", "(", ")" and "." are.
-	assert.Contains(t, block, `Reached your take\-profit level \($64,000\.00\)`)
-	assert.Equal(t, 3, strings.Count(block, "\n"), "symbol, price, 24h, trigger")
-}
-
-func TestBuildAssetItemBlock_UnknownChangeIsNA(t *testing.T) {
-	t.Parallel()
-	block := buildAssetItemBlock("id", AlertItem{Symbol: "ANTAM", PriceUSD: 146, PriceIDR: 2392157,
-		Trigger: rules.Trigger{Type: rules.TypePctChange24h, Pct: 2}})
-	assert.Contains(t, block, "24h: n/a")
-}
-
-func TestTriggerLine(t *testing.T) {
-	cases := []struct {
-		lang string
-		trig rules.Trigger
-		want string
-	}{
-		{"en", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentBuyTarget, LevelUSD: 90000}, "Reached your buy target ($90,000.00)"},
-		{"id", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentStopLoss, LevelUSD: 85000}, "Mencapai level stop-loss kamu ($85,000.00)"},
-		{"en", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: 120000}, "Above $120,000.00"},
-		{"id", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, LevelUSD: 1}, "Di bawah $1.00"},
-		{"en", rules.Trigger{Type: rules.TypePctChange24h, Pct: 5}, "24h change beyond ±5%"},
-		{"id", rules.Trigger{Type: rules.TypePctChange24h, Pct: 2.5}, "Perubahan 24 jam melewati ±2.5%"},
-		{"en", rules.Trigger{Type: rules.TypeTrailingStop, Pct: 10, PeakPriceUSD: 126080}, "Down 10% or more from peak $126,080.00"},
-		{"id", rules.Trigger{Type: rules.TypeTrailingStop, Pct: 10, PeakPriceUSD: 100}, "Turun 10% atau lebih dari peak $100.00"},
-		{"en", rules.Trigger{Type: rules.TypeWeek52Break, Direction: rules.DirectionAbove, PrevRefUSD: 348.15}, "New 52-week high (previous $348.15)"},
-		{"id", rules.Trigger{Type: rules.TypeWeek52Break, Direction: rules.DirectionBelow, PrevRefUSD: 243.42}, "52-week low baru (sebelumnya $243.42)"},
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.want, triggerLine(tc.lang, tc.trig))
-	}
-}
-
-func TestFormatUSD_SmallPrices(t *testing.T) {
-	assert.Equal(t, "$61,633.00", formatUSD(61633))
-	assert.Equal(t, "$0.5", formatUSD(0.5))
-	assert.Equal(t, "$0.00001234", formatUSD(0.00001234))
-	assert.Equal(t, "$0.12345679", formatUSD(0.123456789), "at most 8 decimals, like the UI")
-}
-
-func TestFormatIDR_SmallPrices(t *testing.T) {
-	assert.Equal(t, "Rp 1,108,743,364", formatIDR(1108743364))
-	assert.Equal(t, "Rp 0.1966", formatIDR(0.19663), "SHIB in IDR must not read as Rp 0")
-	assert.Equal(t, "Rp 0", formatIDR(0))
-}
-
 func TestProcessSymbol_ZeroPriceIsAnError(t *testing.T) {
 	t.Parallel()
 	w, mock, _ := newMockAssetWorker(t, 3)
@@ -332,4 +281,61 @@ func TestProcessSymbol_ZeroPriceIsAnError(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, batches, "a zero price must never fire a rule")
 	assert.Error(t, mock.ExpectationsWereMet(), "rules must not even be loaded for an invalid price")
+}
+
+func TestProcessSymbol_GoldKeepsNativeIDR(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"ANTAM": {Symbol: "ANTAM", PriceUSD: 140, PriceIDR: 2392157}}}
+	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(ruleColumns).
+		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, int64(1000), int64(4), "en"))
+	batches := make(map[uint64]*UserAlertBatch)
+
+	_, err := w.processSymbol(SymbolInfo{Symbol: "ANTAM", AssetType: "gold"}, runScope{}, batches)
+
+	require.NoError(t, err)
+	require.Len(t, batches[1].Alerts, 1)
+	assert.Equal(t, 2392157.0, batches[1].Alerts[0].NativeIDR)
+}
+
+func TestDispatchBatches_FetchesRateOnceAndHidesFallback(t *testing.T) {
+	t.Parallel()
+	w, mock, notif := newMockAssetWorker(t, 3)
+	calls := 0
+	w.rateFn = func() currency.Rate { calls++; return currency.Rate{Value: 16000, Fallback: true} }
+	batches := make(map[uint64]*UserAlertBatch)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100), levelRow(2, 2, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
+	mock.MatchExpectationsInOrder(false)
+	for i := 0; i < 2; i++ {
+		mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+	}
+
+	sent, users := w.dispatchBatches(batches)
+
+	assert.Equal(t, 2, sent)
+	assert.Equal(t, 2, users)
+	assert.Equal(t, 1, calls, "one rate for the whole run")
+	require.Len(t, notif.calls, 2)
+	for _, c := range notif.calls {
+		assert.Contains(t, c.Message, "USD/IDR rate unavailable")
+		assert.NotContains(t, c.Message, "16\\.000", "the hardcoded fallback must never be shown")
+		assert.NotContains(t, c.Message, "Rp")
+	}
+}
+
+func TestDispatchBatches_UsesInstanceTimezone(t *testing.T) {
+	t.Parallel()
+	w, mock, notif := newMockAssetWorker(t, 3)
+	w.loc = time.FixedZone("TST", 3*60*60)
+	batches := make(map[uint64]*UserAlertBatch)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
+	mock.MatchExpectationsInOrder(false)
+	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	w.dispatchBatches(batches)
+
+	require.Len(t, notif.calls, 1)
+	assert.Regexp(t, `⏰ \d{2} \w{3} \d{4} \d{2}:\d{2} TST\n`, notif.calls[0].Message)
 }

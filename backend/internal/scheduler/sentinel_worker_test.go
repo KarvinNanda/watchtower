@@ -1,7 +1,9 @@
 package scheduler
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +32,7 @@ func newMockSentinelWorker(t *testing.T) (*SentinelWorker, sqlmock.Sqlmock, *moc
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	n := &mockSentinelNotifier{failChatIDs: map[int64]bool{}}
-	return &SentinelWorker{db: db, notifier: n, notifLogs: notifier.NewLogRepository(db)}, mock, n
+	return &SentinelWorker{db: db, notifier: n, notifLogs: notifier.NewLogRepository(db), loc: time.UTC}, mock, n
 }
 
 func TestProcessItem_MatchedItemIsAlwaysBatched(t *testing.T) {
@@ -66,45 +68,6 @@ func TestProcessItem_MatchedItemIsAlwaysBatched(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestBuildSentinelItemBlock_KEV(t *testing.T) {
-	block := buildSentinelItemBlock("en", SentinelBatchItem{
-		SourceType: "cisa_kev", Title: "Ivanti Connect Secure Auth Bypass", Description: "Remote unauthenticated attacker.",
-		URL: "https://nvd.nist.gov/vuln/detail/CVE-2026-104935", CVEID: "CVE-2026-104935",
-		KnownExploited: true, RequiredAction: "Apply mitigations.", DueDate: "2026-10-16", Ransomware: true,
-		MatchedKeywords: []string{"ivanti"},
-	})
-	assert.Contains(t, block, "ACTIVELY EXPLOITED")
-	assert.Contains(t, block, "CVE\\-2026\\-104935")
-	assert.Contains(t, block, "ACTION: Apply mitigations\\.")
-	assert.Contains(t, block, "RANSOMWARE")
-	assert.Contains(t, block, "KEYWORD: ivanti")
-	assert.NotContains(t, block, "DAMPAK")
-}
-
-func TestBuildSentinelItemBlock_UnscoredCVEShowsNA(t *testing.T) {
-	block := buildSentinelItemBlock("en", SentinelBatchItem{
-		SourceType: "cve", Title: "CVE-2026-99999: new flaw", URL: "https://nvd.nist.gov/vuln/detail/CVE-2026-99999",
-		CVEID: "CVE-2026-99999", MatchedKeywords: []string{"flaw"},
-	})
-	assert.Contains(t, block, "SEVERITY: N/A")
-}
-
-func TestBuildSentinelItemBlock_ScoredAndIndonesianLabels(t *testing.T) {
-	block := buildSentinelItemBlock("id", SentinelBatchItem{
-		SourceType: "cve", Title: "xz backdoor", URL: "https://example.com", CVEID: "CVE-2024-3094",
-		Severity: "CRITICAL", CVSSScore: 10, MatchedKeywords: []string{"xz"},
-	})
-	assert.Contains(t, block, "TINGKAT BAHAYA: CRITICAL \\(10\\.0\\)")
-}
-
-func TestBuildSentinelItemBlock_RSSHasNoSeverityLine(t *testing.T) {
-	block := buildSentinelItemBlock("en", SentinelBatchItem{
-		SourceType: "rss", Title: "Some news", URL: "https://example.com/a", MatchedKeywords: []string{"news"},
-	})
-	assert.NotContains(t, block, "SEVERITY")
-	assert.Contains(t, block, "SOURCE: RSS")
-}
-
 func TestSentinelDispatch_SentToUserOnlyCountsDelivered(t *testing.T) {
 	w, mock, n := newMockSentinelWorker(t)
 	n.failChatIDs[200] = true
@@ -121,5 +84,24 @@ func TestSentinelDispatch_SentToUserOnlyCountsDelivered(t *testing.T) {
 	sentToUser, usersNotified := w.dispatchBatches(batches)
 	assert.Equal(t, map[uint64]int{1: 2}, sentToUser)
 	assert.Equal(t, 2, usersNotified)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSentinelDispatch_RendersWithAlertmsgInInstanceTimezone(t *testing.T) {
+	w, mock, n := newMockSentinelWorker(t)
+	w.loc = time.FixedZone("TST", 3*60*60)
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	w.dispatchBatches(map[uint64]*SentinelBatch{
+		1: {UserID: 1, ChatID: 100, Language: "en", Items: []SentinelBatchItem{
+			{SourceType: "rss", Title: "a", URL: "https://a.example"},
+			{SourceType: "cisa_kev", Title: "b", CVEID: "CVE-2026-1", KnownExploited: true, URL: "https://b.example"}}},
+	})
+
+	require.Len(t, n.calls, 1)
+	msg := n.calls[0].Message
+	assert.True(t, strings.HasPrefix(msg, "🛡️ *Sentinel* · 2 items \\(1 actively exploited\\)\n"), msg)
+	assert.Regexp(t, `⏰ \d{2} \w{3} \d{4} \d{2}:\d{2} TST\n`, msg)
+	assert.Less(t, strings.Index(msg, "CVE\\-2026\\-1"), strings.Index(msg, "*a*"), "KEV first")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
