@@ -1,0 +1,27 @@
+🛡️ *Sentinel* · 5 item
+⏰ 15 Okt 2026 09:30 WIB
+━━━━━━━━━━━━━━━
+
+🟠 *CVE\-2026\-0101* · HIGH 7\.8
+Path traversal in C:\\Windows\\\.
+Writes to C:\\Windows\\System32\\ via \.\.\\\.\.\\ sequences\.
+🏷️ NVD
+🔗 [example\.com](https://example.com/a_(b\))
+
+🟠 *CVE\-2026\-0102* · HIGH 7\.5
+userinfo link
+🏷️ NVD
+🔗 [evil\.com](https://nvd.nist.gov@evil.com/x)
+
+🟠 *CVE\-2026\-0103* · HIGH 7\.4
+homograph link
+🏷️ NVD
+🔗 [xn\-\-pple\-43d\.com](https://аpple.com/login)
+
+🟠 *CVE\-2026\-0104* · HIGH 7\.3
+script link
+🏷️ NVD
+
+🟠 *CVE\-2026\-0105* · HIGH 7\.2
+no link
+🏷️ NVD

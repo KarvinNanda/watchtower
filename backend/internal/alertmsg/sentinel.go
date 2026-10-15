@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -210,8 +212,10 @@ func tagLine(e SentinelEntry) string {
 
 // linkLine renders "🔗 [host](url)". The link text is the host parsed from
 // the same URL (userinfo is not part of it), so it cannot claim a different
-// site. A non-ASCII host (possible homograph) is shown as the full URL in
-// plain text instead; anything that is not http(s) gets no link at all.
+// site. Non-ASCII hosts are shown in their punycode (xn--) form: Telegram
+// would auto-link a plain-text URL anyway, and a homograph such as a
+// Cyrillic "а" must not look like the real domain. Anything that is not
+// http(s), or whose host is not a valid domain, gets no link at all.
 func linkLine(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
@@ -219,7 +223,9 @@ func linkLine(raw string) string {
 	}
 	host := strings.ToLower(u.Hostname())
 	if !isASCII(host) {
-		return "🔗 " + esc(raw)
+		if host, err = idna.Lookup.ToASCII(host); err != nil {
+			return ""
+		}
 	}
 	return "🔗 [" + esc(host) + "](" + escapeLinkURL(raw) + ")"
 }

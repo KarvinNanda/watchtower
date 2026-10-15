@@ -33,6 +33,20 @@ func orderingEntries() []SentinelEntry {
 	}
 }
 
+// linkEntries covers the link and escaping edge cases so they also reach
+// the real-Telegram E2E run: a backslash in fetched text, ")" in a URL,
+// userinfo, an IDN host, a non-http scheme and an empty URL.
+func linkEntries() []SentinelEntry {
+	return []SentinelEntry{
+		{SourceType: "cve", CVEID: "CVE-2026-0101", Severity: "HIGH", CVSSScore: 7.8, Title: `Path traversal in C:\Windows\.`,
+			Description: `Writes to C:\Windows\System32\ via ..\..\ sequences.`, URL: "https://example.com/a_(b)"},
+		{SourceType: "cve", CVEID: "CVE-2026-0102", Severity: "HIGH", CVSSScore: 7.5, Title: "userinfo link", URL: "https://nvd.nist.gov@evil.com/x"},
+		{SourceType: "cve", CVEID: "CVE-2026-0103", Severity: "HIGH", CVSSScore: 7.4, Title: "homograph link", URL: "https://аpple.com/login"},
+		{SourceType: "cve", CVEID: "CVE-2026-0104", Severity: "HIGH", CVSSScore: 7.3, Title: "script link", URL: "javascript:alert(1)"},
+		{SourceType: "cve", CVEID: "CVE-2026-0105", Severity: "HIGH", CVSSScore: 7.2, Title: "no link", URL: ""},
+	}
+}
+
 func TestSentinelMessages_Golden(t *testing.T) {
 	at := jakartaAt(t)
 	cases := []struct {
@@ -44,6 +58,8 @@ func TestSentinelMessages_Golden(t *testing.T) {
 		{"sentinel_id_basic", "id", basicEntries()},
 		{"sentinel_en_ordering", "en", orderingEntries()},
 		{"sentinel_id_ordering", "id", orderingEntries()},
+		{"sentinel_en_links", "en", linkEntries()},
+		{"sentinel_id_links", "id", linkEntries()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +119,11 @@ func TestLinkLine(t *testing.T) {
 		"https://nvd.nist.gov@evil.com/x":        "🔗 [evil\\.com](https://nvd.nist.gov@evil.com/x)",
 		"HTTPS://Example.COM/x":                  "🔗 [example\\.com](HTTPS://Example.COM/x)",
 		"https://example.com/a_(b)":              "🔗 [example\\.com](https://example.com/a_(b\\))",
-		"https://exämple.com/a":                  "🔗 https://exämple\\.com/a",
+		// Non-ASCII hosts show their punycode form, so a homograph such as a
+		// Cyrillic "а" cannot look like the real domain.
+		"https://exämple.com/a":                  "🔗 [xn\\-\\-exmple\\-cua\\.com](https://exämple.com/a)",
+		"https://аpple.com/login":                "🔗 [xn\\-\\-pple\\-43d\\.com](https://аpple.com/login)",
+		"https://nvd.nist.gov%E3%80%82evil.com/": "🔗 [nvd\\.nist\\.gov\\.evil\\.com](https://nvd.nist.gov%E3%80%82evil.com/)",
 		"javascript:alert(1)":                    "",
 		"ftp://example.com/file":                 "",
 		"not a url":                              "",
