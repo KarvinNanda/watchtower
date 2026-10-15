@@ -9,6 +9,7 @@ export const useMarketStore = defineStore('market', () => {
   const snapshot = ref([])
   const lastUpdated = ref(null)
   const loading = ref(false)
+  const autoRefreshing = ref(false)
   let refreshTimer = null
 
   async function fetchSnapshot() {
@@ -25,6 +26,7 @@ export const useMarketStore = defineStore('market', () => {
   function startAutoRefresh() {
     if (refreshTimer) return
     refreshTimer = setInterval(fetchSnapshot, AUTO_REFRESH_INTERVAL_MS)
+    autoRefreshing.value = true
   }
 
   function stopAutoRefresh() {
@@ -32,7 +34,15 @@ export const useMarketStore = defineStore('market', () => {
       clearInterval(refreshTimer)
       refreshTimer = null
     }
+    autoRefreshing.value = false
   }
 
-  return { snapshot, lastUpdated, loading, fetchSnapshot, startAutoRefresh, stopAutoRefresh }
+  // reset forgets the current user's symbols (logout, expired session).
+  function reset() {
+    stopAutoRefresh()
+    snapshot.value = []
+    lastUpdated.value = null
+  }
+
+  return { snapshot, lastUpdated, loading, autoRefreshing, fetchSnapshot, startAutoRefresh, stopAutoRefresh, reset }
 })
