@@ -45,3 +45,12 @@ describe('stale prices message', () => {
     expect(messages.run.stale_prices).toContain('{stale}')
   })
 })
+
+describe('run result panel', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s finished-at text shows the time', (_, messages) => {
+    expect(messages.run.finished_at).toContain('{time}')
+  })
+})

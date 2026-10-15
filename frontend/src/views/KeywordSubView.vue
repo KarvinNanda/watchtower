@@ -16,6 +16,7 @@ import {
 
 import { useSubscriptionsStore } from '@/stores/subscriptions'
 import RunNowButton from '@/components/runs/RunNowButton.vue'
+import RunResultPanel from '@/components/runs/RunResultPanel.vue'
 import { message } from '@/plugins/naive'
 
 const { t } = useI18n()
@@ -23,6 +24,8 @@ const store = useSubscriptionsStore()
 const dialog = useDialog()
 
 const loading = ref(false)
+// Last Check now result, shown until closed.
+const runResult = ref(null)
 const formVisible = ref(false)
 const submitting = ref(false)
 const formRef = ref(null)
@@ -132,9 +135,11 @@ onMounted(async () => {
 <template>
   <div class="keyword-view">
     <div class="keyword-view__toolbar">
-      <run-now-button type="sentinel" />
+      <run-now-button type="sentinel" @started="runResult = null" @finished="runResult = $event" />
       <n-button type="primary" @click="openCreateModal">{{ t('keyword.add') }}</n-button>
     </div>
+
+    <run-result-panel :result="runResult" @close="runResult = null" />
 
     <n-data-table
       :columns="columns"

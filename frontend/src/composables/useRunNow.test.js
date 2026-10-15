@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { useRunNow } from './useRunNow'
 
-const t = (key, params) => (params ? `${key}|${JSON.stringify(params)}` : key)
 const noSleep = async () => {}
+const doneRun = { status: 'done', summary: { sent: 1 }, started_at: '2026-10-15T03:00:00Z' }
 
 function deferred() {
   let resolve
@@ -13,16 +13,12 @@ function deferred() {
 }
 
 function setup({ createRun, getRun, sleep = noSleep } = {}) {
-  const notify = { success: vi.fn(), error: vi.fn() }
-  const runNow = useRunNow({
+  return useRunNow({
     type: 'asset',
     createRun: createRun ?? vi.fn(async () => ({ data: { run_id: 'r1' } })),
-    getRun: getRun ?? vi.fn(async () => ({ data: { status: 'done', summary: { sent: 1 } } })),
-    notify,
-    t,
+    getRun: getRun ?? vi.fn(async () => ({ data: doneRun })),
     pollOptions: { sleep },
   })
-  return { ...runNow, notify }
 }
 
 describe('useRunNow', () => {
@@ -43,58 +39,53 @@ describe('useRunNow', () => {
     expect(running.value).toBe(false)
   })
 
-  it('reports the summary of a finished run', async () => {
-    const { start, notify } = setup()
+  it('a finished run gives a done result with the run record', async () => {
+    const { start, result } = setup()
     await start()
-    expect(notify.success).toHaveBeenCalledWith('run.asset_summary|{"sent":1}')
+    expect(result.value).toEqual({ status: 'done', type: 'asset', summary: { sent: 1 }, run: doneRun })
   })
 
-  it('adds the stale sentence when some prices came from cache', async () => {
-    const { start, notify } = setup({
-      getRun: async () => ({ data: { status: 'done', summary: { sent: 1, stale: 2 } } }),
-    })
+  it('a missing summary becomes {}', async () => {
+    const { start, result } = setup({ getRun: async () => ({ data: { status: 'done' } }) })
     await start()
-    expect(notify.success).toHaveBeenCalledWith(
-      'run.asset_summary|{"sent":1,"stale":2} run.stale_prices|{"stale":2}',
-    )
+    expect(result.value.summary).toEqual({})
   })
 
-  it('omits the stale sentence when every price was fresh', async () => {
-    const { start, notify } = setup({
-      getRun: async () => ({ data: { status: 'done', summary: { sent: 1, stale: 0 } } }),
-    })
+  it('a failed run keeps the raw reason', async () => {
+    const { start, result } = setup({ getRun: async () => ({ data: { status: 'failed', error: 'timed out' } }) })
     await start()
-    expect(notify.success).toHaveBeenCalledWith('run.asset_summary|{"sent":1,"stale":0}')
+    expect(result.value).toEqual({ status: 'failed', type: 'asset', reason: 'timed out' })
   })
 
-  it('translates a known failure reason', async () => {
-    const { start, notify } = setup({ getRun: async () => ({ data: { status: 'failed', error: 'timed out' } }) })
+  it('a refused start gives an error result', async () => {
+    const createRun = async () => {
+      throw { response: { status: 429, data: { retry_after: 120 } } }
+    }
+    const { start, result } = setup({ createRun })
     await start()
-    expect(notify.error).toHaveBeenCalledWith('run.failed|{"reason":"run.reason_timed_out"}')
+    expect(result.value).toEqual({ status: 'error', type: 'asset', key: 'run.error_too_many', params: { seconds: 120 } })
   })
 
-  it('shows an unknown failure reason as sent', async () => {
-    const { start, notify } = setup({ getRun: async () => ({ data: { status: 'failed', error: 'disk full' } }) })
+  it('starting a new run clears the previous result', async () => {
+    const created = deferred()
+    let calls = 0
+    const createRun = vi.fn(() => (++calls === 1 ? Promise.resolve({ data: { run_id: 'r1' } }) : created.promise))
+    const { start, result } = setup({ createRun })
     await start()
-    expect(notify.error).toHaveBeenCalledWith('run.failed|{"reason":"disk full"}')
+    expect(result.value).not.toBeNull()
+
+    const second = start()
+    expect(result.value).toBeNull()
+    created.resolve({ data: { run_id: 'r2' } })
+    await second
   })
 
-  it('stays silent when the page is left during polling', async () => {
+  it('sets no result when the page is left during polling', async () => {
     let runNow
     const sleep = async () => runNow.stop()
     runNow = setup({ getRun: async () => ({ data: { status: 'running' } }), sleep })
     await runNow.start()
-    expect(runNow.notify.success).not.toHaveBeenCalled()
-    expect(runNow.notify.error).not.toHaveBeenCalled()
+    expect(runNow.result.value).toBeNull()
     expect(runNow.running.value).toBe(false)
-  })
-
-  it('maps a refused start to its message', async () => {
-    const createRun = async () => {
-      throw { response: { status: 429, data: { retry_after: 120 } } }
-    }
-    const { start, notify } = setup({ createRun })
-    await start()
-    expect(notify.error).toHaveBeenCalledWith('run.error_too_many|{"seconds":120}')
   })
 })

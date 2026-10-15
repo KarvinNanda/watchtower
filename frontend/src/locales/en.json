@@ -210,6 +210,7 @@
     "error_telegram_not_linked": "Link your Telegram chat for this alert type first (Telegram Setup page).",
     "error_too_many": "Please wait {seconds} seconds before checking again.",
     "reason_timed_out": "it timed out",
-    "reason_failed": "the run failed; check the scheduler logs"
+    "reason_failed": "the run failed; check the scheduler logs",
+    "finished_at": "Finished at {time}"
   }
 }
