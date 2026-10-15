@@ -308,6 +308,13 @@ func TestFormatUSD_SmallPrices(t *testing.T) {
 	assert.Equal(t, "$61,633.00", formatUSD(61633))
 	assert.Equal(t, "$0.5", formatUSD(0.5))
 	assert.Equal(t, "$0.00001234", formatUSD(0.00001234))
+	assert.Equal(t, "$0.12345679", formatUSD(0.123456789), "at most 8 decimals, like the UI")
+}
+
+func TestFormatIDR_SmallPrices(t *testing.T) {
+	assert.Equal(t, "Rp 1,108,743,364", formatIDR(1108743364))
+	assert.Equal(t, "Rp 0.1966", formatIDR(0.19663), "SHIB in IDR must not read as Rp 0")
+	assert.Equal(t, "Rp 0", formatIDR(0))
 }
 
 func TestProcessSymbol_ZeroPriceIsAnError(t *testing.T) {

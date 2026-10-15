@@ -68,6 +68,19 @@ export function formatUSD(value) {
   }).format(value)
 }
 
+// formatIDR keeps up to 4 decimals below Rp 1 so small crypto prices do
+// not read as "Rp 0".
+export function formatIDR(value) {
+  if (value == null) return '—'
+  const small = value !== 0 && Math.abs(value) < 1
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: small ? 4 : 0,
+  }).format(value)
+}
+
 export function ruleSummary(rule, t) {
   const level = formatUSD(rule.level_usd)
   switch (rule.rule_type) {

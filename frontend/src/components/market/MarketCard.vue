@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { NCard, NTag } from 'naive-ui'
 
+import { formatUSD, formatIDR } from '@/utils/assetRules'
+
 const props = defineProps({
   data: {
     type: Object,
@@ -12,15 +14,9 @@ const props = defineProps({
 const hasChange = computed(() => props.data.change_pct_24h != null)
 const isPositive = computed(() => hasChange.value && props.data.change_pct_24h >= 0)
 
-const formattedUSD = computed(() =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(props.data.price_usd),
-)
+const formattedUSD = computed(() => formatUSD(props.data.price_usd))
 
-const formattedIDR = computed(() =>
-  new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(
-    props.data.price_idr,
-  ),
-)
+const formattedIDR = computed(() => formatIDR(props.data.price_idr))
 
 const formattedPct = computed(() => {
   if (!hasChange.value) return 'n/a'

@@ -7,6 +7,7 @@ import {
   ruleState,
   sortRulesBySymbol,
   formatUSD,
+  formatIDR,
   emptyRuleForm,
 } from './assetRules'
 
@@ -71,6 +72,14 @@ describe('formatUSD', () => {
     expect(formatUSD(0.00001234)).toBe('$0.00001234')
     expect(formatUSD(61633)).toBe('$61,633.00')
     expect(formatUSD(null)).toBe('—')
+  })
+})
+
+describe('formatIDR', () => {
+  it('keeps small crypto prices readable in rupiah', () => {
+    expect(formatIDR(0.19663)).toContain('0,1966')
+    expect(formatIDR(2392990)).toContain('2.392.990')
+    expect(formatIDR(2392990)).not.toContain(',')
   })
 })
 
