@@ -175,7 +175,11 @@ func severityEmoji(e SentinelEntry) string {
 	if e.KnownExploited {
 		return "🚨"
 	}
-	switch strings.ToUpper(e.Severity) {
+	sev := strings.ToUpper(e.Severity)
+	if sev == "" {
+		sev = cvssBand(e.CVSSScore)
+	}
+	switch sev {
 	case "CRITICAL":
 		return "🔴"
 	case "HIGH":
@@ -188,6 +192,22 @@ func severityEmoji(e SentinelEntry) string {
 	return "⚪"
 }
 
+// cvssBand maps a CVSS v3 base score to its qualitative rating, for items
+// whose source gives a score but no severity label.
+func cvssBand(score float64) string {
+	switch {
+	case score >= 9.0:
+		return "CRITICAL"
+	case score >= 7.0:
+		return "HIGH"
+	case score >= 4.0:
+		return "MEDIUM"
+	case score > 0:
+		return "LOW"
+	}
+	return ""
+}
+
 func severityText(e SentinelEntry) string {
 	sev := strings.ToUpper(e.Severity)
 	switch {
@@ -197,6 +217,8 @@ func severityText(e SentinelEntry) string {
 		return fmt.Sprintf("%s %.1f", sev, e.CVSSScore)
 	case sev != "":
 		return sev
+	case e.CVSSScore > 0:
+		return fmt.Sprintf("%.1f", e.CVSSScore)
 	case e.SourceType == "cve" || e.SourceType == "github_advisory":
 		return "N/A"
 	}

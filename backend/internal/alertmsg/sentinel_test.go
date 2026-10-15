@@ -98,6 +98,12 @@ func TestSentinelMessages_SeverityLabels(t *testing.T) {
 		"⚪ *CVE\\-2* · N/A":             {SourceType: "cve", CVEID: "CVE-2"},
 		"🔴 *CVE\\-3* · CRITICAL 10\\.0": {SourceType: "cve", CVEID: "CVE-3", Severity: "CRITICAL", CVSSScore: 10},
 		"🟢 *CVE\\-4* · LOW 3\\.1":       {SourceType: "cve", CVEID: "CVE-4", Severity: "low", CVSSScore: 3.1},
+		// A score without a severity label shows the score, with the emoji
+		// taken from the standard CVSS v3 bands (#44).
+		"🔴 *CVE\\-5* · 9\\.8": {SourceType: "cve", CVEID: "CVE-5", CVSSScore: 9.8},
+		"🟠 *CVE\\-6* · 7\\.0": {SourceType: "cve", CVEID: "CVE-6", CVSSScore: 7.0},
+		"🟡 *CVE\\-7* · 4\\.0": {SourceType: "github_advisory", CVEID: "CVE-7", CVSSScore: 4.0},
+		"🟢 *CVE\\-8* · 0\\.1": {SourceType: "rss", CVEID: "CVE-8", CVSSScore: 0.1},
 	}
 	for want, e := range cases {
 		assert.Contains(t, SentinelMessages("en", jakartaAt(t), []SentinelEntry{e})[0], want)
