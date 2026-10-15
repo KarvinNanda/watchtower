@@ -13,6 +13,10 @@ import (
 const (
 	titleMaxRunes   = 60
 	excerptMaxRunes = 200
+	// maxLinkURLBytes bounds the URL inside a link. Longer URLs (usually
+	// tracking links) are replaced by the site root so one item cannot push
+	// its message part past Telegram's limit.
+	maxLinkURLBytes = 1000
 )
 
 var sourceNames = map[string]string{
@@ -175,7 +179,11 @@ func severityEmoji(e SentinelEntry) string {
 	if e.KnownExploited {
 		return "🚨"
 	}
-	switch strings.ToUpper(e.Severity) {
+	sev := strings.ToUpper(e.Severity)
+	if sev == "" {
+		sev = cvssBand(e.CVSSScore)
+	}
+	switch sev {
 	case "CRITICAL":
 		return "🔴"
 	case "HIGH":
@@ -188,6 +196,22 @@ func severityEmoji(e SentinelEntry) string {
 	return "⚪"
 }
 
+// cvssBand maps a CVSS v3 base score to its qualitative rating, for items
+// whose source gives a score but no severity label.
+func cvssBand(score float64) string {
+	switch {
+	case score >= 9.0:
+		return "CRITICAL"
+	case score >= 7.0:
+		return "HIGH"
+	case score >= 4.0:
+		return "MEDIUM"
+	case score > 0:
+		return "LOW"
+	}
+	return ""
+}
+
 func severityText(e SentinelEntry) string {
 	sev := strings.ToUpper(e.Severity)
 	switch {
@@ -197,6 +221,8 @@ func severityText(e SentinelEntry) string {
 		return fmt.Sprintf("%s %.1f", sev, e.CVSSScore)
 	case sev != "":
 		return sev
+	case e.CVSSScore > 0:
+		return fmt.Sprintf("%.1f", e.CVSSScore)
 	case e.SourceType == "cve" || e.SourceType == "github_advisory":
 		return "N/A"
 	}
@@ -216,6 +242,7 @@ func tagLine(e SentinelEntry) string {
 // would auto-link a plain-text URL anyway, and a homograph such as a
 // Cyrillic "а" must not look like the real domain. Anything that is not
 // http(s), or whose host is not a valid domain, gets no link at all.
+// A URL over maxLinkURLBytes links to the site root instead.
 func linkLine(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
@@ -227,7 +254,11 @@ func linkLine(raw string) string {
 			return ""
 		}
 	}
-	return "🔗 [" + esc(host) + "](" + escapeLinkURL(raw) + ")"
+	target := raw
+	if len(target) > maxLinkURLBytes {
+		target = u.Scheme + "://" + u.Host + "/"
+	}
+	return "🔗 [" + esc(host) + "](" + escapeLinkURL(target) + ")"
 }
 
 func isASCII(s string) bool {

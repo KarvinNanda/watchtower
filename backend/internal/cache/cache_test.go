@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/karvin-nanda/watchtower/internal/asset"
+	"github.com/karvin-nanda/watchtower/internal/currency"
 )
 
 var now = time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)
@@ -140,4 +141,12 @@ func TestGetMarketData_IgnoresPreUpgradeRedisEntries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, d.ChangePct24h, "the legacy Redis entry's fake 0% must not be served")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// #41: the hardcoded fallback rate must never become a stored IDR price.
+func TestDisplayIDR(t *testing.T) {
+	assert.Equal(t, 2392157.0, displayIDR(2392157, 133.58, currency.Rate{Value: 16000, Fallback: true}), "native IDR (gold) is always real")
+	assert.Equal(t, 150*17908.0, displayIDR(0, 150, currency.Rate{Value: 17908}))
+	assert.Zero(t, displayIDR(0, 150, currency.Rate{Value: 16000, Fallback: true}), "fallback rate: IDR unknown")
+	assert.Zero(t, displayIDR(0, 150, currency.Rate{}), "no rate: IDR unknown")
 }

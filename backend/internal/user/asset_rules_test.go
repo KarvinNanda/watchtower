@@ -36,6 +36,25 @@ func TestCreateAssetRule_InsertsNormalizedRule(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// A negative insert id (driver bug or wrap) must be an error, never a huge
+// uint64 rule id (gosec G115, code scanning alert #1).
+func TestCreateAssetRule_NegativeInsertIDIsAnError(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockUserService(t, 100)
+	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1 FROM asset_rules\s*WHERE user_id = \?`).
+		WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(false))
+	mock.ExpectQuery(`asset_symbol = \? AND is_active = true\)`).WithArgs("BTC").
+		WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(true))
+	mock.ExpectExec(`INSERT INTO asset_rules`).WillReturnResult(sqlmock.NewResult(-1, 1))
+
+	id, err := svc.CreateAssetRule(7, user.AssetRuleInput{
+		AssetType: "crypto", AssetSymbol: "btc", RuleType: "price_level", Direction: strPtr("above"), LevelUSD: floatPtr(1),
+	})
+
+	require.Error(t, err)
+	assert.Zero(t, id)
+}
+
 func TestCreateAssetRule_Duplicate(t *testing.T) {
 	t.Parallel()
 	svc, mock := newMockUserService(t, 100)

@@ -960,17 +960,26 @@ func notificationHistoryHandler(userService *user.UserService) gin.HandlerFunc {
 type marketDataResponse struct {
 	Symbol       string    `json:"symbol"`
 	PriceUSD     float64   `json:"price_usd"`
-	PriceIDR     float64   `json:"price_idr"`
+	PriceIDR     *float64  `json:"price_idr"`
 	ChangePct24h *float64  `json:"change_pct_24h"`
 	LastFetched  time.Time `json:"last_fetched"`
 	Source       string    `json:"source"`
+}
+
+// idrOrNil maps a stored IDR price of 0 (unknown: no real USD/IDR rate when
+// it was fetched) to null, so the UI shows "—" instead of "Rp 0".
+func idrOrNil(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 func toMarketDataResponse(m user.MarketData) marketDataResponse {
 	return marketDataResponse{
 		Symbol:       m.Symbol,
 		PriceUSD:     m.PriceUSD,
-		PriceIDR:     m.PriceIDR,
+		PriceIDR:     idrOrNil(m.PriceIDR),
 		ChangePct24h: m.ChangePct24h,
 		LastFetched:  m.LastFetched,
 		Source:       m.Source,
@@ -1082,7 +1091,7 @@ func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 type marketQuoteResponse struct {
 	Symbol       string    `json:"symbol"`
 	PriceUSD     float64   `json:"price_usd"`
-	PriceIDR     float64   `json:"price_idr"`
+	PriceIDR     *float64  `json:"price_idr"`
 	ChangePct24h *float64  `json:"change_pct_24h"`
 	LastFetched  time.Time `json:"last_fetched"`
 	Source       string    `json:"source"`
@@ -1093,14 +1102,16 @@ func marketQuoteHandler(sqlDB *sql.DB) gin.HandlerFunc {
 		symbol := c.Param("symbol")
 
 		var (
-			q      marketQuoteResponse
-			change sql.NullFloat64
+			q        marketQuoteResponse
+			change   sql.NullFloat64
+			priceIDR float64
 		)
 		err := sqlDB.QueryRowContext(c.Request.Context(), `
 			SELECT symbol, price_usd, price_idr, change_pct_24h, last_fetched, source
 			FROM market_cache
 			WHERE symbol = ?`, symbol,
-		).Scan(&q.Symbol, &q.PriceUSD, &q.PriceIDR, &change, &q.LastFetched, &q.Source)
+		).Scan(&q.Symbol, &q.PriceUSD, &priceIDR, &change, &q.LastFetched, &q.Source)
+		q.PriceIDR = idrOrNil(priceIDR)
 		if change.Valid {
 			q.ChangePct24h = &change.Float64
 		}

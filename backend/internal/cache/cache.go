@@ -110,12 +110,11 @@ func (c *Cache) GetMarketData(ctx context.Context, symbol, assetType string) (*M
 		return nil, fmt.Errorf("cache: refresh %s from external api: %w", symbol, err)
 	}
 
-	priceIDR := result.PriceIDR
-	if priceIDR == 0 {
-		if priceIDR, err = currency.ConvertToIDR(result.PriceUSD); err != nil {
-			log.Printf("[ERROR] GetMarketData: convert to IDR for %s: %v", symbol, err)
-		}
+	rate := currency.Current()
+	if result.PriceIDR == 0 && rate.Fallback {
+		log.Printf("[WARN] GetMarketData: no real USD/IDR rate for %s; IDR price stored as unknown (0)", symbol)
 	}
+	priceIDR := displayIDR(result.PriceIDR, result.PriceUSD, rate)
 
 	freshData := &MarketData{
 		// The requested symbol, not result.Symbol, so the cache key always
@@ -347,4 +346,17 @@ func (c *Cache) GetAllCachedSymbols(ctx context.Context) ([]string, error) {
 	}
 
 	return symbols, nil
+}
+
+// displayIDR is the IDR price stored for the UI: the source's own IDR price
+// when there is one (gold), otherwise the USD price at a real rate, and 0
+// (unknown, shown as "—") when only the hardcoded fallback rate exists.
+func displayIDR(nativeIDR, priceUSD float64, rate currency.Rate) float64 {
+	if nativeIDR > 0 {
+		return nativeIDR
+	}
+	if rate.Fallback || rate.Value <= 0 {
+		return 0
+	}
+	return priceUSD * rate.Value
 }
