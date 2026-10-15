@@ -37,6 +37,19 @@ function Read-Value([string]$Prompt, [bool]$Secret) {
     return Read-Host -Prompt $Prompt
 }
 
+# Check Docker before writing anything, so a missing Docker does not leave
+# a .env behind that makes the next run skip the prompts.
+if (-not $NoStart) {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        throw 'Docker is not installed. Get Docker Desktop: https://docs.docker.com/desktop/setup/install/windows-install/'
+    }
+    # Through cmd: in Windows PowerShell 5.1, redirecting a native command's
+    # stderr turns it into an error record, which $ErrorActionPreference=Stop
+    # would throw on before we can check the exit code.
+    cmd /c "docker info >nul 2>&1"
+    if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is installed but not running. Start it and run this script again.' }
+}
+
 if (Test-Path $envPath) {
     Write-Host '.env already exists; leaving it untouched.'
 } else {
@@ -71,15 +84,6 @@ if ($NoStart) {
     Write-Host 'Skipping start (-NoStart). Start later with: docker compose up -d --build'
     exit 0
 }
-
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw 'Docker is not installed. Get Docker Desktop: https://docs.docker.com/desktop/setup/install/windows-install/'
-}
-# Through cmd: in Windows PowerShell 5.1, redirecting a native command's
-# stderr turns it into an error record, which $ErrorActionPreference=Stop
-# would throw on before we can check the exit code.
-cmd /c "docker info >nul 2>&1"
-if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is installed but not running. Start it and run this script again.' }
 
 Write-Host 'Building and starting WatchTower (first build takes a few minutes)...'
 docker compose up -d --build
