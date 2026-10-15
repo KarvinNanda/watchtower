@@ -1,7 +1,8 @@
-// Package quota guards shared external API quotas. Budget keeps the
-// instance-wide daily allowance for Twelve Data credits spent by manual
-// "Check now" runs, so one user cannot exhaust the free tier for everyone
-// and periodic runs always keep the rest.
+// Package quota guards shared external API quotas. Budget caps the Twelve
+// Data credits that manual "Check now" runs may spend per UTC day, so
+// clicking cannot exhaust the free tier for everyone. Periodic runs spend
+// stock symbols x runs per day on top of it; keeping the sum under the
+// provider's daily limit is the operator's job (see README).
 package quota
 
 import (

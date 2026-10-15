@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -23,7 +24,9 @@ func TestDecodeCoinGeckoMarkets_HighCoversTheLast24Hours(t *testing.T) {
 	require.NotNil(t, res.HighUSD)
 	assert.Equal(t, 84025.0, *res.HighUSD)
 	require.NotNil(t, res.HighSince)
-	assert.Equal(t, now.Add(-24*time.Hour), *res.HighSince)
+	// 25 h, not 24 h: CoinGecko's window is relative to its own (possibly
+	// lagging) last_updated, so start a margin earlier, on the safe side.
+	assert.Equal(t, now.Add(-25*time.Hour), *res.HighSince)
 	assert.Equal(t, now, res.FetchedAt)
 }
 
@@ -59,4 +62,31 @@ func TestDecodeTwelveDataQuote_MissingHighOrTimestampIsUnknown(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, res.HighUSD, "a high without its window start cannot be used safely")
 	assert.Nil(t, res.HighSince)
+}
+
+// A day's quota cannot come back in 60 s: retrying only holds the run
+// (and its lock) for a minute per symbol (final review, Important 1).
+func TestDecodeTwelveDataQuote_DailyQuotaIsNotTheMinuteLimit(t *testing.T) {
+	_, err := decodeTwelveDataQuote(strings.NewReader(`{"code":429,"message":"You have run out of API credits for the day. 801 API credits were used, with the current limit being 800.","status":"error"}`), "AAPL")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errTwelveDataDailyLimit)
+	assert.NotErrorIs(t, err, errTwelveDataRateLimit)
+
+	_, err = decodeTwelveDataQuote(strings.NewReader(`{"code":429,"message":"You have run out of API credits for the current minute. 9 API credits were used, with the current limit being 8.","status":"error"}`), "AAPL")
+	assert.ErrorIs(t, err, errTwelveDataRateLimit, "the per-minute limit is still retried")
+}
+
+func TestFetchStock_DoesNotRetryTheDailyQuota(t *testing.T) {
+	rt := &recordingTransport{body: []byte(`{"code":429,"message":"You have run out of API credits for the day.","status":"error"}`)}
+	f := NewAssetFetcher("k")
+	f.SetHTTPClient(&http.Client{Transport: rt})
+	done := make(chan error, 1)
+	go func() { _, err := f.FetchStock("AAPL"); done <- err }()
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, errTwelveDataDailyLimit)
+		assert.Len(t, rt.urls, 1)
+	case <-time.After(5 * time.Second):
+		t.Fatal("FetchStock retried (slept) on the daily quota")
+	}
 }

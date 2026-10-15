@@ -121,8 +121,8 @@ Tests: `cd backend && go test ./...` and `cd frontend && npm test`.
 - Asset alerts are information only, not financial advice. Buy, take-profit and stop-loss wording only repeats the labels you gave your own rules.
 - IDR amounts in Telegram messages use the free open.er-api.com USD/IDR rate, which updates once a day. Each message shows the rate and when it was updated; rules are always evaluated in USD. If no real rate is available, IDR amounts are hidden and ANTAM is skipped for that run.
 - All timestamps in Telegram messages use one timezone per installation (`APP_TIMEZONE`, default `Asia/Jakarta`).
-- "Check now" refreshes prices older than 15 minutes. Stock refreshes spend a daily share of the Twelve Data free tier (`TWELVE_DATA_MANUAL_DAILY_CREDITS`, default 400 of 800); when it is used up, Check now uses cached prices and says so. The count only covers this installation, so sharing the API key elsewhere uses the same quota.
-- Trailing stops also count the source's recent high (24 h for crypto, the trading session for stocks), but only highs from after the rule was created or re-armed.
+- "Check now" refreshes prices older than 15 minutes. Stock refreshes spend a daily share of the Twelve Data free tier (`TWELVE_DATA_MANUAL_DAILY_CREDITS`, default 400 of 800); when it is used up, Check now uses cached prices and says so. Periodic runs need about `stock symbols × 24 / ASSET_SCHEDULER_INTERVAL_HOURS` credits a day on top of that, so keep the sum under 800. If the provider's daily quota still runs out, stock prices are not retried until 00:00 UTC. The count only covers this installation, so sharing the API key elsewhere uses the same quota.
+- Trailing stops also count the source's recent high (about 24 h for crypto, the trading session for stocks), but only highs whose window starts after the rule was created or re-armed: about 25 h later for crypto, the next session for stocks.
 
 ## Project structure
 

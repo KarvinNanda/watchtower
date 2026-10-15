@@ -132,7 +132,7 @@ func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
 }
 
 // decodeCoinGeckoMarkets parses a /coins/markets response. high_24h covers
-// the 24 h before now, so its window starts at now - 24 h.
+// about the 24 h before now; its window is taken to start at now - 25 h.
 func decodeCoinGeckoMarkets(r io.Reader, symbol string, now time.Time) (*FetchResult, error) {
 	var results []struct {
 		CurrentPrice             float64  `json:"current_price"`
@@ -154,13 +154,20 @@ func decodeCoinGeckoMarkets(r io.Reader, symbol string, now time.Time) (*FetchRe
 		FetchedAt:    now,
 	}
 	if h := results[0].High24h; h != nil && *h > 0 {
-		since := now.Add(-24 * time.Hour)
+		// The window is relative to CoinGecko's own last_updated, which can
+		// lag our clock; start it an hour earlier so a spike from just
+		// before a rule was created can never count (#21).
+		since := now.Add(-25 * time.Hour)
 		res.HighUSD, res.HighSince = h, &since
 	}
 	return res, nil
 }
 
 var errTwelveDataRateLimit = errors.New("twelve data rate limit exceeded")
+
+// errTwelveDataDailyLimit is the daily quota running out. Unlike the
+// per-minute limit it is not retried: it only comes back at 00:00 UTC.
+var errTwelveDataDailyLimit = errors.New("twelve data daily credits used up")
 
 var (
 	stockCallMu    sync.Mutex
@@ -244,7 +251,11 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 	}
 
 	if raw.Status == "error" {
-		if raw.Code == http.StatusTooManyRequests || strings.Contains(strings.ToLower(raw.Message), "rate limit") {
+		msg := strings.ToLower(raw.Message)
+		if strings.Contains(msg, "for the day") {
+			return nil, fmt.Errorf("asset: %w: %s", errTwelveDataDailyLimit, raw.Message)
+		}
+		if raw.Code == http.StatusTooManyRequests || strings.Contains(msg, "rate limit") {
 			return nil, fmt.Errorf("asset: %w: %s", errTwelveDataRateLimit, raw.Message)
 		}
 		return nil, fmt.Errorf("asset: twelve data error for %s: %s", symbol, raw.Message)
