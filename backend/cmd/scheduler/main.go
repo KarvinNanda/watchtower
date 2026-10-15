@@ -61,6 +61,7 @@ func main() {
 		cfg.Limits.MaxUniqueSymbols,
 		cfg.Limits.AlertPriceMovePct,
 		cfg.Scheduler.Timezone,
+		cfg.Limits.TwelveDataManualDailyCredits,
 	)
 
 	sentinelWorker := scheduler.NewSentinelWorker(

@@ -18,6 +18,7 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/cache"
 	"github.com/karvin-nanda/watchtower/internal/currency"
 	"github.com/karvin-nanda/watchtower/internal/notifier"
+	"github.com/karvin-nanda/watchtower/internal/quota"
 	"github.com/karvin-nanda/watchtower/internal/rules"
 )
 
@@ -73,12 +74,13 @@ func NewAssetWorker(
 	maxUniqueSymbols int,
 	alertPriceMovePct float64,
 	loc *time.Location,
+	manualDailyCredits int,
 ) *AssetWorker {
 	return &AssetWorker{
 		db:                db,
 		redis:             redisClient,
 		notifier:          notif,
-		cache:             cache.New(redisClient, db, cacheTTLHours, fetcher, nil),
+		cache:             cache.New(redisClient, db, cacheTTLHours, fetcher, quota.NewBudget(redisClient, manualDailyCredits)),
 		notifLogs:         notifier.NewLogRepository(db),
 		maxUniqueSymbols:  maxUniqueSymbols,
 		alertPriceMovePct: alertPriceMovePct,
@@ -132,13 +134,17 @@ type AssetRunResult struct {
 	Triggered    int
 	Sent         int
 	Errors       int
+	// Stale counts symbols evaluated on cached data because a manual
+	// refresh was refused or failed.
+	Stale int
 }
 
 // symbolResult is processSymbol's per-symbol tally. dataErrors counts
 // optional data that could not be fetched (crypto 52-week range) while the
-// symbol's other rules were still evaluated.
+// symbol's other rules were still evaluated. stale counts a symbol
+// evaluated on cached data (manual runs only).
 type symbolResult struct {
-	checked, triggered, dataErrors int
+	checked, triggered, dataErrors, stale int
 }
 
 // Run is the periodic entry point: every active rule, cooldowns respected.
@@ -196,15 +202,16 @@ func (w *AssetWorker) run(scope runScope) (result AssetRunResult, err error) {
 		result.RulesChecked += res.checked
 		result.Triggered += res.triggered
 		result.Errors += res.dataErrors
+		result.Stale += res.stale
 	}
 
 	alertsSent, usersNotified := w.dispatchBatches(batches)
 	result.Sent = alertsSent
 
 	log.Printf("[INFO] AssetWorker.run: completed in %s (user=%d) — symbols: %d, rules checked: %d, "+
-		"triggered: %d, users notified: %d, alerts sent: %d, errors: %d",
+		"triggered: %d, users notified: %d, alerts sent: %d, errors: %d, stale: %d",
 		time.Since(start), scope.userID, len(symbols), result.RulesChecked, result.Triggered,
-		usersNotified, result.Sent, result.Errors)
+		usersNotified, result.Sent, result.Errors, result.Stale)
 
 	return result, nil
 }
@@ -263,7 +270,13 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
-	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType, cache.FetchOptions{})
+	// Periodic runs accept the cache TTL; a user's Check now wants prices
+	// at most cache.ManualMaxAge old (#20).
+	opts := cache.FetchOptions{}
+	if scope.userID != 0 {
+		opts = cache.FetchOptions{MaxAge: cache.ManualMaxAge, Manual: true}
+	}
+	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType, opts)
 	if err != nil {
 		return symbolResult{}, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
 	}
@@ -282,11 +295,16 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	}
 
 	res := symbolResult{checked: len(rows)}
+	if marketData.Stale {
+		res.stale = 1
+	}
 	market := rules.Market{
 		PriceUSD:     marketData.PriceUSD,
 		ChangePct24h: marketData.ChangePct24h,
 		Week52High:   marketData.Week52HighUSD,
 		Week52Low:    marketData.Week52LowUSD,
+		HighUSD:      marketData.HighUSD,
+		HighSince:    marketData.HighSince,
 	}
 	if symbol.NeedsWeek52 && symbol.AssetType == "crypto" {
 		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
