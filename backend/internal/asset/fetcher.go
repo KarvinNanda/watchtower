@@ -68,6 +68,7 @@ type FetchResult struct {
 type AssetFetcher struct {
 	twelveDataKey string
 	httpClient    *http.Client
+	stockPacer    *pacer
 }
 
 // NewAssetFetcher builds an AssetFetcher using twelveDataKey for Twelve
@@ -77,6 +78,7 @@ func NewAssetFetcher(twelveDataKey string) *AssetFetcher {
 	return &AssetFetcher{
 		twelveDataKey: twelveDataKey,
 		httpClient:    utils.NewHTTPClient(),
+		stockPacer:    newPacer(twelveDataMinGap),
 	}
 }
 
@@ -200,6 +202,7 @@ func (f *AssetFetcher) FetchStock(symbol string) (*FetchResult, error) {
 }
 
 func (f *AssetFetcher) fetchStockOnce(symbol string) (*FetchResult, error) {
+	f.stockPacer.wait()
 	recordStockAPICall()
 
 	endpoint := fmt.Sprintf("%s?symbol=%s&apikey=%s",
