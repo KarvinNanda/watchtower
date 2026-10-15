@@ -108,3 +108,15 @@ export function ruleState(rule) {
 export function sortRulesBySymbol(rules) {
   return [...rules].sort((a, b) => a.asset_symbol.localeCompare(b.asset_symbol) || a.id - b.id)
 }
+
+const pctFormat = new Intl.NumberFormat('en-US', {
+  signDisplay: 'exceptZero',
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+})
+
+// formatPct shows a signed percentage with one decimal ("+14.3%").
+export function formatPct(value) {
+  if (value == null) return '—'
+  return `${pctFormat.format(value)}%`
+}

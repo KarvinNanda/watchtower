@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  formatPct,
   buildRulePayload,
   validateRuleForm,
   ruleToForm,
@@ -91,5 +92,17 @@ describe('sortRulesBySymbol', () => {
   it('groups by symbol, then by id', () => {
     const sorted = sortRulesBySymbol([{ id: 3, asset_symbol: 'ETH' }, { id: 2, asset_symbol: 'BTC' }, { id: 1, asset_symbol: 'BTC' }])
     expect(sorted.map((r) => r.id)).toEqual([1, 2, 3])
+  })
+})
+
+describe('formatPct', () => {
+  it('signs and rounds to one decimal', () => {
+    expect(formatPct(14.2857)).toBe('+14.3%')
+    expect(formatPct(-2.4)).toBe('-2.4%')
+    expect(formatPct(0)).toBe('0.0%')
+  })
+
+  it('null is a dash', () => {
+    expect(formatPct(null)).toBe('—')
   })
 })
