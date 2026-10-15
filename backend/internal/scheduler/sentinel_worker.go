@@ -381,8 +381,7 @@ func groupMatchesByUser(matches []matchRow) []userMatchInfo {
 }
 
 // insertSeenItem records item in sentinel_seen_items for global dedup, so
-// it isn't reprocessed on the next run. The legacy ai_analysis_* columns
-// are left NULL.
+// it isn't reprocessed on the next run.
 func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()

@@ -49,6 +49,10 @@ func newMigrationDB(t *testing.T) (*sql.DB, *migrate.Migrate) {
 	return conn, m
 }
 
+const aiColumns = `SELECT COUNT(*) FROM information_schema.columns
+	WHERE table_schema = DATABASE() AND table_name = 'sentinel_seen_items'
+	AND column_name IN ('ai_analysis_id', 'ai_analysis_en')`
+
 func count(t *testing.T, db *sql.DB, query string, args ...interface{}) int {
 	t.Helper()
 	var n int
@@ -96,10 +100,13 @@ func TestMigrations_LegacyDataUpgradeAndRollback(t *testing.T) {
 	// 000013 + 000015: unknown gold change is NULL, other changes are kept.
 	assert.Equal(t, 1, count(t, db, `SELECT COUNT(*) FROM market_cache WHERE symbol = 'ANTAM' AND change_pct_24h IS NULL`))
 	assert.Equal(t, 1, count(t, db, `SELECT COUNT(*) FROM market_cache WHERE symbol = 'BTC' AND change_pct_24h = 1.5`))
+	// 000016: the unused DeepSeek columns are gone.
+	assert.Equal(t, 0, count(t, db, aiColumns))
 
-	// Roll back every Spec 2 migration (15 -> 9) with a NULL change present,
-	// then upgrade again from the untouched legacy tables.
-	require.NoError(t, m.Steps(-6))
+	// Roll back to version 9 with a NULL change present, then upgrade again
+	// from the untouched legacy tables.
+	require.NoError(t, m.Migrate(9))
+	assert.Equal(t, 2, count(t, db, aiColumns), "000016 down restores the columns (empty)")
 	assert.Equal(t, 0, count(t, db, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('asset_rules', 'price_snapshots')`))
 	assert.Equal(t, 8, count(t, db, `SELECT COUNT(*) FROM asset_subscriptions`), "legacy rows are never touched")
 
