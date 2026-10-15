@@ -267,6 +267,9 @@ func (s *UserService) CreateAssetRule(userID uint64, in AssetRuleInput) (uint64,
 	if err != nil {
 		return 0, fmt.Errorf("user: read new asset rule id: %w", err)
 	}
+	if id < 0 {
+		return 0, fmt.Errorf("user: read new asset rule id: negative id %d", id)
+	}
 	return uint64(id), nil
 }
 
