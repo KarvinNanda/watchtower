@@ -26,6 +26,7 @@ var (
 	ErrCannotRearm             = errors.New("only a trailing_stop that has fired can be re-armed")
 	ErrRuleNotFound            = errors.New("rule not found")
 	ErrSymbolTypeMismatch      = errors.New("asset_symbol does not belong to asset_type")
+	ErrEmptyUpdate             = errors.New("nothing to update: send a rule definition, is_active, or both")
 )
 
 // symbolTypeError names the symbol and type in its message ("BTC is not a
@@ -263,7 +264,7 @@ func (s *UserService) CreateAssetRule(userID uint64, in AssetRuleInput) (uint64,
 // UpdateAssetRule applies req to ruleID, which must belong to userID.
 func (s *UserService) UpdateAssetRule(userID, ruleID uint64, req UpdateAssetRuleRequest) error {
 	if req.Rule == nil && req.IsActive == nil {
-		return nil
+		return ErrEmptyUpdate
 	}
 	var def *AssetRuleInput
 	if req.Rule != nil {

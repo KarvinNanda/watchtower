@@ -474,6 +474,7 @@ func respondUserServiceError(c *gin.Context, err error) {
 		errors.Is(err, user.ErrFieldNotAllowed),
 		errors.Is(err, user.ErrWeek52NotForGold),
 		errors.Is(err, user.ErrSymbolTypeMismatch),
+		errors.Is(err, user.ErrEmptyUpdate),
 		errors.Is(err, user.ErrEmptyKeyword),
 		errors.Is(err, user.ErrKeywordTooLong),
 		errors.Is(err, user.ErrInvalidExpertiseLevel),

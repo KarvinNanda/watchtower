@@ -124,3 +124,11 @@ func TestCreateRule_SymbolOfAnotherTypeIs400WithClearMessage(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "BTC is not a stock symbol")
 }
+
+func TestUpdateRule_EmptyBodyIs400(t *testing.T) {
+	r, mock := newRuleTestRouter(t)
+	w := do(r, http.MethodPut, "/rules/assets/424242", `{}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "an update that changes nothing must not answer 200 for any id")
+	assert.Equal(t, "validation_error", errorCode(t, w))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
