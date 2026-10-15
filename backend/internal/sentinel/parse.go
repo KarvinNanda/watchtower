@@ -147,9 +147,19 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 		HTMLURL     string `json:"html_url"`
 		PublishedAt string `json:"published_at"`
 		Severity    string `json:"severity"`
-		CVSS        struct {
+		// Deprecated by GitHub in favour of CVSSSeverities; still read as
+		// the last fallback.
+		CVSS struct {
 			Score float64 `json:"score"`
 		} `json:"cvss"`
+		CVSSSeverities struct {
+			V3 struct {
+				Score float64 `json:"score"`
+			} `json:"cvss_v3"`
+			V4 struct {
+				Score float64 `json:"score"`
+			} `json:"cvss_v4"`
+		} `json:"cvss_severities"`
 		CWEs []struct {
 			Name string `json:"name"`
 		} `json:"cwes"`
@@ -181,8 +191,19 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 			RawContent:  a.Description,
 			CVEID:       a.CVEID,
 			Severity:    severity,
-			CVSSScore:   a.CVSS.Score,
+			CVSSScore:   firstScore(a.CVSSSeverities.V3.Score, a.CVSSSeverities.V4.Score, a.CVSS.Score),
 		})
 	}
 	return items, nil
+}
+
+// firstScore returns the first positive score. GitHub reports a missing
+// cvss_severities score as 0.0 (verified 2026-10-15), not null.
+func firstScore(scores ...float64) float64 {
+	for _, s := range scores {
+		if s > 0 {
+			return s
+		}
+	}
+	return 0
 }

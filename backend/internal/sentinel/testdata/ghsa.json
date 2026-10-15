@@ -1,11 +1,97 @@
 [
-  {"ghsa_id": "GHSA-4j9v-h7pp-725h", "cve_id": "CVE-2026-70035", "summary": "Remote code execution in libfoo",
-   "description": "Remote code execution in libfoo via crafted input.",
-   "html_url": "https://github.com/advisories/GHSA-4j9v-h7pp-725h", "published_at": "2026-10-13T12:00:00Z",
-   "severity": "high", "cvss": {"vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H", "score": 8.8},
-   "cwes": [{"cwe_id": "CWE-94", "name": "Improper Control of Generation of Code"}]},
-  {"ghsa_id": "GHSA-aaaa-bbbb-cccc", "cve_id": null, "summary": "Advisory without CVE or score",
-   "description": "No CVE assigned yet.", "html_url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
-   "published_at": "2026-10-13T13:00:00Z", "severity": "unknown",
-   "cvss": {"vector_string": null, "score": null}, "cwes": []}
+  {
+    "ghsa_id": "GHSA-4j9v-h7pp-725h",
+    "cve_id": "CVE-2026-70035",
+    "summary": "Remote code execution in libfoo",
+    "description": "Remote code execution in libfoo via crafted input.",
+    "html_url": "https://github.com/advisories/GHSA-4j9v-h7pp-725h",
+    "published_at": "2026-10-13T12:00:00Z",
+    "severity": "high",
+    "cvss": {
+      "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+      "score": 8.8
+    },
+    "cwes": [
+      {
+        "cwe_id": "CWE-94",
+        "name": "Improper Control of Generation of Code"
+      }
+    ]
+  },
+  {
+    "ghsa_id": "GHSA-aaaa-bbbb-cccc",
+    "cve_id": null,
+    "summary": "Advisory without CVE or score",
+    "description": "No CVE assigned yet.",
+    "html_url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+    "published_at": "2026-10-13T13:00:00Z",
+    "severity": "unknown",
+    "cvss": {
+      "vector_string": null,
+      "score": null
+    },
+    "cwes": []
+  },
+  {
+    "ghsa_id": "GHSA-pwhx-cvv3-qj5c",
+    "cve_id": "CVE-2026-108259",
+    "summary": "Tina: Code injection via unescaped Git branch name in generated client source",
+    "description": "### Summary",
+    "html_url": "https://github.com/advisories/GHSA-pwhx-cvv3-qj5c",
+    "published_at": "2026-10-09T20:56:52Z",
+    "severity": "high",
+    "cvss": {
+      "vector_string": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:N",
+      "score": 8.2
+    },
+    "cvss_severities": {
+      "cvss_v3": {
+        "vector_string": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:N",
+        "score": 8.2
+      },
+      "cvss_v4": {
+        "vector_string": null,
+        "score": 0.0
+      }
+    },
+    "cwes": [
+      {
+        "cwe_id": "CWE-94",
+        "name": "Improper Control of Generation of Code ('Code Injection')"
+      }
+    ]
+  },
+  {
+    "ghsa_id": "GHSA-p8wg-vrv2-v86f",
+    "cve_id": "CVE-2026-106445",
+    "summary": "Handlebars: JavaScript Injection via Own Property Check Bypass",
+    "description": "## Summary",
+    "html_url": "https://github.com/advisories/GHSA-p8wg-vrv2-v86f",
+    "published_at": "2026-10-08T17:52:26Z",
+    "severity": "critical",
+    "cvss": {
+      "vector_string": null,
+      "score": null
+    },
+    "cvss_severities": {
+      "cvss_v3": {
+        "vector_string": null,
+        "score": 0.0
+      },
+      "cvss_v4": {
+        "vector_string": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+        "score": 9.2
+      }
+    },
+    "cwes": [
+      {
+        "cwe_id": "CWE-184",
+        "name": "Incomplete List of Disallowed Inputs"
+      },
+      {
+        "cwe_id": "CWE-1289",
+        "name": "Improper Validation of Unsafe Equivalence in Input"
+      }
+    ]
+  }
 ]

@@ -96,3 +96,21 @@ func TestParseGitHubAdvisories(t *testing.T) {
 	assert.Empty(t, unscored.Severity, `"unknown" severity is treated as no severity`)
 	assert.Zero(t, unscored.CVSSScore)
 }
+
+// Real advisories (trimmed) from GET /advisories, 2026-10-15. GitHub
+// deprecated "cvss" for "cvss_severities"; a missing score there is 0.0.
+func TestParseGitHubAdvisories_ReadsCVSSSeverities(t *testing.T) {
+	items, err := parseGitHubAdvisories(readFixture(t, "ghsa.json"), fixtureNow)
+	require.NoError(t, err)
+	m := byID(items)
+
+	v3 := m["GHSA-pwhx-cvv3-qj5c"]
+	assert.Equal(t, "HIGH", v3.Severity)
+	assert.InDelta(t, 8.2, v3.CVSSScore, 0.001)
+
+	// Only a CVSS 4.0 score: the deprecated "cvss" is null here, so reading
+	// it alone dropped the score of a critical advisory.
+	v4 := m["GHSA-p8wg-vrv2-v86f"]
+	assert.Equal(t, "CRITICAL", v4.Severity)
+	assert.InDelta(t, 9.2, v4.CVSSScore, 0.001)
+}
