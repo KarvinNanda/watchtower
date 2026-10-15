@@ -21,11 +21,17 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # 32 random bytes from the OS CSPRNG, as 64 hex characters.
 rand_hex() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
 
-# set_var KEY VALUE: replace the "KEY=" line in .env.
+# set_var KEY VALUE: replace the "KEY=" line in the .env being built.
 set_var() {
   tmp=$(mktemp)
-  awk -v k="$1" -v v="$2" 'index($0, k "=") == 1 { print k "=" v; next } { print }' .env > "$tmp"
-  mv "$tmp" .env
+  awk -v k="$1" -v v="$2" 'index($0, k "=") == 1 { print k "=" v; next } { print }' "$env_tmp" > "$tmp"
+  mv "$tmp" "$env_tmp"
+}
+
+check_docker() {
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed. Get Docker Desktop (macOS) or Docker Engine (Linux): https://docs.docker.com/get-docker/"
+  docker info >/dev/null 2>&1 || die "Docker is installed but not running. Start Docker Desktop (macOS) or run: sudo systemctl start docker (Linux)"
+  docker compose version >/dev/null 2>&1 || die "The docker compose plugin is missing: https://docs.docker.com/compose/install/"
 }
 
 ask() { # ask KEY PROMPT SECRET(0|1)
@@ -37,11 +43,21 @@ ask() { # ask KEY PROMPT SECRET(0|1)
   if [ -n "$val" ]; then set_var "$1" "$val"; fi
 }
 
+# Check Docker before writing anything, so a missing Docker does not leave
+# a .env behind that makes the next run skip the prompts.
+if [ "$NO_START" -eq 0 ]; then
+  check_docker
+fi
+
 if [ -f .env ]; then
   say ".env already exists; leaving it untouched."
 else
   umask 077
-  cp .env.example .env
+  # Build .env in a temp file and move it into place only when complete. On
+  # Ctrl-C at a prompt, restore terminal echo and leave no half-written .env.
+  env_tmp=$(mktemp .env.XXXXXX)
+  trap 'stty echo 2>/dev/null; rm -f "$env_tmp"; printf "\n"; exit 130' INT TERM
+  cp .env.example "$env_tmp"
   for k in DB_ROOT_PASSWORD DB_PASSWORD REDIS_PASSWORD JWT_SECRET; do
     set_var "$k" "$(rand_hex)"
   done
@@ -57,16 +73,15 @@ else
     ask VITE_SENTINEL_BOT_USERNAME "Sentinel bot username" 0
     ask TWELVE_DATA_API_KEY "Twelve Data API key (optional, needed for stock alerts)" 1
   fi
+
+  mv "$env_tmp" .env
+  trap - INT TERM
 fi
 
 if [ "$NO_START" -eq 1 ]; then
   say "Skipping start (--no-start). Start later with: docker compose up -d --build"
   exit 0
 fi
-
-command -v docker >/dev/null 2>&1 || die "Docker is not installed. Get Docker Desktop (macOS) or Docker Engine (Linux): https://docs.docker.com/get-docker/"
-docker info >/dev/null 2>&1 || die "Docker is installed but not running. Start Docker Desktop (macOS) or run: sudo systemctl start docker (Linux)"
-docker compose version >/dev/null 2>&1 || die "The docker compose plugin is missing: https://docs.docker.com/compose/install/"
 
 say "Building and starting WatchTower (first build takes a few minutes)..."
 docker compose up -d --build

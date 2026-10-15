@@ -176,11 +176,39 @@ func (s *Store) Pop(ctx context.Context, timeout time.Duration) (*Run, error) {
 	return run, err
 }
 
+// markScript updates a run hash only while it still exists. A plain HSET on
+// an expired run would recreate the hash without TTL, user_id or created_at,
+// leaving an orphan key that GET /api/runs/:id cannot decode.
+var markScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+redis.call('HSET', KEYS[1], unpack(ARGV))
+return 1
+`)
+
+// mark writes field/value pairs to run id, or returns ErrNotFound if the
+// run has already expired.
+func (s *Store) mark(ctx context.Context, id string, fields ...string) error {
+	args := make([]interface{}, len(fields))
+	for i, f := range fields {
+		args[i] = f
+	}
+	updated, err := markScript.Run(ctx, s.rdb, []string{runKeyPrefix + id}, args...).Int()
+	if err != nil {
+		return fmt.Errorf("runs: update run %s: %w", id, err)
+	}
+	if updated == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) MarkRunning(ctx context.Context, id string) error {
-	return s.rdb.HSet(ctx, runKeyPrefix+id,
+	return s.mark(ctx, id,
 		"status", StatusRunning,
 		"started_at", s.now().UTC().Format(time.RFC3339Nano),
-	).Err()
+	)
 }
 
 func (s *Store) MarkDone(ctx context.Context, id string, summary map[string]int) error {
@@ -188,19 +216,19 @@ func (s *Store) MarkDone(ctx context.Context, id string, summary map[string]int)
 	if err != nil {
 		return fmt.Errorf("runs: encode summary: %w", err)
 	}
-	return s.rdb.HSet(ctx, runKeyPrefix+id,
+	return s.mark(ctx, id,
 		"status", StatusDone,
 		"finished_at", s.now().UTC().Format(time.RFC3339Nano),
 		"summary", string(b),
-	).Err()
+	)
 }
 
 func (s *Store) MarkFailed(ctx context.Context, id, reason string) error {
-	return s.rdb.HSet(ctx, runKeyPrefix+id,
+	return s.mark(ctx, id,
 		"status", StatusFailed,
 		"finished_at", s.now().UTC().Format(time.RFC3339Nano),
 		"error", reason,
-	).Err()
+	)
 }
 
 func (s *Store) load(ctx context.Context, id string) (*Run, error) {

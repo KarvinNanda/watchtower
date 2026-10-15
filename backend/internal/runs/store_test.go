@@ -198,3 +198,33 @@ func TestHeartbeat(t *testing.T) {
 	alive, _ = s.SchedulerAlive(ctx)
 	assert.False(t, alive)
 }
+
+func TestMark_ExpiredRunIsNotRecreated(t *testing.T) {
+	s, mr, _ := newTestStore(t)
+	ctx := context.Background()
+	run, err := s.Enqueue(ctx, 7, TypeAsset)
+	require.NoError(t, err)
+	mr.FastForward(runTTL + time.Second)
+	require.False(t, mr.Exists(runKeyPrefix+run.ID))
+
+	assert.ErrorIs(t, s.MarkRunning(ctx, run.ID), ErrNotFound)
+	assert.ErrorIs(t, s.MarkDone(ctx, run.ID, map[string]int{"sent": 1}), ErrNotFound)
+	assert.ErrorIs(t, s.MarkFailed(ctx, run.ID, "boom"), ErrNotFound)
+	assert.False(t, mr.Exists(runKeyPrefix+run.ID),
+		"an HSET on an expired run would recreate the hash without TTL, user_id or created_at")
+}
+
+func TestMark_LiveRunKeepsItsTTL(t *testing.T) {
+	s, mr, _ := newTestStore(t)
+	ctx := context.Background()
+	run, err := s.Enqueue(ctx, 7, TypeAsset)
+	require.NoError(t, err)
+
+	require.NoError(t, s.MarkRunning(ctx, run.ID))
+	require.NoError(t, s.MarkDone(ctx, run.ID, map[string]int{"sent": 1}))
+
+	got, err := s.Get(ctx, run.ID, 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusDone, got.Status)
+	assert.Equal(t, 24*time.Hour, mr.TTL(runKeyPrefix+run.ID))
+}

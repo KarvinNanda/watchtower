@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -88,6 +89,9 @@ func main() {
 	}
 
 	router := gin.New()
+	if err := configureTrustedProxies(router, cfg.Server.TrustedProxies); err != nil {
+		log.Fatalf("[ERROR] main: %v", err)
+	}
 	// Recovery must be registered before anything that could panic, since
 	// it catches panics via a deferred recover() wrapped around its own
 	// c.Next() call — middleware registered ahead of it would panic
@@ -1094,4 +1098,15 @@ func marketQuoteHandler(sqlDB *sql.DB) gin.HandlerFunc {
 
 		respondData(c, http.StatusOK, q, "market data retrieved")
 	}
+}
+
+// configureTrustedProxies tells gin which peers may set X-Forwarded-For.
+// With none (the default), ClientIP is always the TCP peer. docker-compose
+// trusts the private ranges, because there only nginx and the scheduler can
+// reach the api (it is not published), and nginx overwrites the header.
+func configureTrustedProxies(r *gin.Engine, proxies []string) error {
+	if err := r.SetTrustedProxies(proxies); err != nil {
+		return fmt.Errorf("invalid TRUSTED_PROXIES: %w", err)
+	}
+	return nil
 }

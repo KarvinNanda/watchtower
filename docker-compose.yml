@@ -1,6 +1,39 @@
 # Self-hosted stack. Only the web app is published, and only on 127.0.0.1:
 # mysql, redis, api and scheduler are reachable on the compose network only.
 # For local development with `go run` / `npm run dev`, see docker-compose.dev.yml.
+
+# Settings for api and scheduler, passed one by one instead of loading the
+# whole .env, so the containers never receive DB_ROOT_PASSWORD (only mysql
+# needs it). Unset values arrive empty and fall back to backend/configs/config.yaml.
+# backend/internal/config/compose_test.go keeps this list in sync with
+# config.go.
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-}
+  APP_PORT: ${APP_PORT:-}
+  FRONTEND_URL: ${FRONTEND_URL:-}
+  COOKIE_SECURE: ${COOKIE_SECURE:-}
+  # Only nginx and the scheduler can reach the api on the compose network,
+  # and nginx overwrites X-Forwarded-For, so the private ranges are safe.
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+  DB_USER: ${DB_USER:-}
+  DB_PASSWORD: ${DB_PASSWORD:-}
+  DB_NAME: ${DB_NAME:-}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  JWT_SECRET: ${JWT_SECRET:-}
+  JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-}
+  TELEGRAM_ASSET_BOT_TOKEN: ${TELEGRAM_ASSET_BOT_TOKEN:-}
+  TELEGRAM_SENTINEL_BOT_TOKEN: ${TELEGRAM_SENTINEL_BOT_TOKEN:-}
+  TELEGRAM_MODE: ${TELEGRAM_MODE:-}
+  TWELVE_DATA_API_KEY: ${TWELVE_DATA_API_KEY:-}
+  COINGECKO_BASE_URL: ${COINGECKO_BASE_URL:-}
+  OPEN_ER_BASE_URL: ${OPEN_ER_BASE_URL:-}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  ASSET_SCHEDULER_INTERVAL_HOURS: ${ASSET_SCHEDULER_INTERVAL_HOURS:-}
+  SENTINEL_SCHEDULER_INTERVAL_HOURS: ${SENTINEL_SCHEDULER_INTERVAL_HOURS:-}
+  MAX_UNIQUE_SYMBOLS: ${MAX_UNIQUE_SYMBOLS:-}
+  ALERT_COOLDOWN_HOURS: ${ALERT_COOLDOWN_HOURS:-}
+  ALERT_PRICE_MOVE_PCT: ${ALERT_PRICE_MOVE_PCT:-}
+
 services:
   mysql:
     image: mysql:8.0
@@ -34,9 +67,8 @@ services:
     build:
       context: ./backend
       dockerfile: docker/Dockerfile.api
-    env_file:
-      - .env
     environment:
+      <<: *backend-env
       # Always talk to the services above, whatever .env says.
       DB_HOST: mysql
       DB_PORT: 3306
@@ -53,9 +85,8 @@ services:
     build:
       context: ./backend
       dockerfile: docker/Dockerfile.scheduler
-    env_file:
-      - .env
     environment:
+      <<: *backend-env
       DB_HOST: mysql
       DB_PORT: 3306
       REDIS_HOST: redis
