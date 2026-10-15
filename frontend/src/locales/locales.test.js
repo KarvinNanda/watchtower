@@ -19,6 +19,15 @@ function flatKeys(obj, prefix = '') {
   )
 }
 
+describe('asset rules help text', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s interval help uses the configured hours', (_, messages) => {
+    expect(messages.asset.rules.help_interval).toContain('{hours}')
+  })
+})
+
 describe('locale parity', () => {
   it('en and id have exactly the same keys', () => {
     expect(flatKeys(id).sort()).toEqual(flatKeys(en).sort())
