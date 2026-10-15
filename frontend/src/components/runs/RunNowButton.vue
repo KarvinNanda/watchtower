@@ -1,10 +1,10 @@
 <script setup>
-import { ref } from 'vue'
+import { onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton } from 'naive-ui'
 
 import { createRun, getRun } from '@/api/runs'
-import { pollRun, runErrorKey } from '@/utils/runPoller'
+import { useRunNow } from '@/composables/useRunNow'
 import { message } from '@/plugins/naive'
 
 const props = defineProps({
@@ -16,29 +16,23 @@ const props = defineProps({
 })
 
 const { t } = useI18n()
-const running = ref(false)
+const { running, start, stop } = useRunNow({
+  type: props.type,
+  createRun,
+  getRun,
+  t,
+  notify: {
+    success: (text) => message.success(text, { duration: 6000 }),
+    error: (text) => message.error(text),
+  },
+})
 
-async function handleClick() {
-  running.value = true
-  try {
-    const res = await createRun(props.type)
-    const run = await pollRun(getRun, res.data.run_id)
-    if (run.status === 'done') {
-      message.success(t(`run.${props.type}_summary`, run.summary || {}), { duration: 6000 })
-    } else {
-      message.error(t('run.failed', { reason: run.error || '' }))
-    }
-  } catch (err) {
-    const { key, params } = runErrorKey(err)
-    message.error(t(key, params))
-  } finally {
-    running.value = false
-  }
-}
+// Leaving the page stops polling, so no result pops up on another page.
+onUnmounted(stop)
 </script>
 
 <template>
-  <n-button :loading="running" :disabled="running" :aria-busy="running" @click="handleClick">
+  <n-button :loading="running" :disabled="running" :aria-busy="running" @click="start">
     {{ running ? t('run.running') : t('run.check_now') }}
   </n-button>
 </template>
