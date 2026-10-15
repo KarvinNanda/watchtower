@@ -42,7 +42,7 @@ type fakeMarket struct {
 	week52Err error
 }
 
-func (f *fakeMarket) GetMarketData(_ context.Context, symbol, _ string) (*cache.MarketData, error) {
+func (f *fakeMarket) GetMarketData(_ context.Context, symbol, _ string, _ cache.FetchOptions) (*cache.MarketData, error) {
 	d, ok := f.data[symbol]
 	if !ok {
 		return nil, errors.New("no market data")

@@ -78,13 +78,11 @@ func TestGetFromMySQL_NullChangeAndWeek52(t *testing.T) {
 	defer db.Close()
 	c := &Cache{db: db, ttlHours: 4}
 
-	mock.ExpectQuery(`FROM market_cache`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(
-		[]string{"symbol", "price_usd", "price_idr", "change_pct_24h", "week52_high_usd", "week52_low_usd", "last_fetched", "source"}).
-		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, time.Now(), "harga-emas.org"))
+	mock.ExpectQuery(`FROM market_cache`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(marketColumns).
+		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, nil, nil, time.Now(), "harga-emas.org"))
 
-	d, fresh, err := c.getFromMySQL(context.Background(), "ANTAM")
+	d, err := c.getFromMySQL(context.Background(), "ANTAM")
 	require.NoError(t, err)
-	assert.True(t, fresh)
 	assert.Nil(t, d.ChangePct24h)
 	assert.Nil(t, d.Week52HighUSD)
 }
@@ -133,11 +131,10 @@ func TestGetMarketData_IgnoresPreUpgradeRedisEntries(t *testing.T) {
 	require.NoError(t, mr.Set("market:ANTAM",
 		`{"symbol":"ANTAM","price_usd":146,"price_idr":2392157,"change_pct_24h":0,"last_fetched":"2026-10-15T00:00:00Z","source":"harga-emas.org"}`))
 
-	mock.ExpectQuery(`FROM market_cache`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(
-		[]string{"symbol", "price_usd", "price_idr", "change_pct_24h", "week52_high_usd", "week52_low_usd", "last_fetched", "source"}).
-		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, time.Now(), "harga-emas.org"))
+	mock.ExpectQuery(`FROM market_cache`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(marketColumns).
+		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, nil, nil, time.Now(), "harga-emas.org"))
 
-	d, err := c.GetMarketData(context.Background(), "ANTAM", "gold")
+	d, err := c.GetMarketData(context.Background(), "ANTAM", "gold", FetchOptions{})
 	require.NoError(t, err)
 	assert.Nil(t, d.ChangePct24h, "the legacy Redis entry's fake 0% must not be served")
 	assert.NoError(t, mock.ExpectationsWereMet())

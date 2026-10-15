@@ -35,7 +35,7 @@ type NotifierInterface interface {
 // marketSource is the subset of cache.Cache the worker reads from,
 // allowing tests to inject fake market data.
 type marketSource interface {
-	GetMarketData(ctx context.Context, symbol, assetType string) (*cache.MarketData, error)
+	GetMarketData(ctx context.Context, symbol, assetType string, opts cache.FetchOptions) (*cache.MarketData, error)
 	GetCryptoWeek52(ctx context.Context, symbol string) (high, low float64, err error)
 }
 
@@ -78,7 +78,7 @@ func NewAssetWorker(
 		db:                db,
 		redis:             redisClient,
 		notifier:          notif,
-		cache:             cache.New(redisClient, db, cacheTTLHours, fetcher),
+		cache:             cache.New(redisClient, db, cacheTTLHours, fetcher, nil),
 		notifLogs:         notifier.NewLogRepository(db),
 		maxUniqueSymbols:  maxUniqueSymbols,
 		alertPriceMovePct: alertPriceMovePct,
@@ -263,7 +263,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
-	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType)
+	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType, cache.FetchOptions{})
 	if err != nil {
 		return symbolResult{}, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
 	}

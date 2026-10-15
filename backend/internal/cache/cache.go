@@ -2,9 +2,12 @@
 // MySQL's market_cache table (persistent fallback), per WatchTower's
 // read/write flow:
 //
-// Read: Redis hit -> return. Redis miss -> check MySQL. MySQL fresh
-// (within ttlHours) -> warm Redis, return. MySQL stale or empty -> fetch
-// live from the external API, persist to both layers, return.
+// Read: an entry younger than the caller's max age (default: the TTL) is
+// served from Redis or MySQL. Older entries are refetched from the
+// external API. A manual run ("Check now", max age ManualMaxAge) spends
+// the instance's manual Twelve Data budget to refresh a stock, and when a
+// manual refresh is refused or fails it falls back to an entry still
+// within the TTL, marked Stale.
 //
 // Write (every scheduler run): fetch live, persist to Redis + MySQL
 // together, TTL = ttlHours (ASSET_SCHEDULER_INTERVAL_HOURS).
@@ -24,6 +27,7 @@ import (
 
 	"github.com/karvin-nanda/watchtower/internal/asset"
 	"github.com/karvin-nanda/watchtower/internal/currency"
+	"github.com/karvin-nanda/watchtower/internal/quota"
 )
 
 const (
@@ -41,17 +45,44 @@ const (
 	changeWindowMax   = 28 * time.Hour
 )
 
+// ManualMaxAge is the oldest price a manual run accepts (spec Q2).
+const ManualMaxAge = 15 * time.Minute
+
+// FetchOptions controls how fresh GetMarketData's answer must be.
+type FetchOptions struct {
+	// MaxAge refetches entries older than this; 0 means the TTL (periodic runs).
+	MaxAge time.Duration
+	// Manual marks a user's Check now (see the package doc).
+	Manual bool
+}
+
+// marketFetcher is the subset of asset.AssetFetcher the cache uses.
+type marketFetcher interface {
+	FetchAsset(symbol, assetType string) (*asset.FetchResult, error)
+	FetchCryptoWeek52(symbol string) (high, low float64, err error)
+}
+
+// manualBudget is the subset of quota.Budget the cache uses.
+type manualBudget interface {
+	TryUse(ctx context.Context, credits int) (bool, error)
+}
+
 // MarketData is the cached market snapshot for a single asset symbol,
 // mirroring the market_cache table. Nil pointers mean unknown.
 type MarketData struct {
-	Symbol        string    `json:"symbol"`
-	PriceUSD      float64   `json:"price_usd"`
-	PriceIDR      float64   `json:"price_idr"`
-	ChangePct24h  *float64  `json:"change_pct_24h"`
-	Week52HighUSD *float64  `json:"week52_high_usd"`
-	Week52LowUSD  *float64  `json:"week52_low_usd"`
-	LastFetched   time.Time `json:"last_fetched"`
-	Source        string    `json:"source"`
+	Symbol        string     `json:"symbol"`
+	PriceUSD      float64    `json:"price_usd"`
+	PriceIDR      float64    `json:"price_idr"`
+	ChangePct24h  *float64   `json:"change_pct_24h"`
+	Week52HighUSD *float64   `json:"week52_high_usd"`
+	Week52LowUSD  *float64   `json:"week52_low_usd"`
+	HighUSD       *float64   `json:"high_usd"`
+	HighSince     *time.Time `json:"high_since"`
+	// Stale marks data served because a manual refresh was refused or
+	// failed. It is never persisted.
+	Stale       bool      `json:"-"`
+	LastFetched time.Time `json:"last_fetched"`
+	Source      string    `json:"source"`
 }
 
 // Snapshot is one row of price_snapshots, in the source currency.
@@ -65,66 +96,131 @@ type Cache struct {
 	redis    *redis.Client
 	db       *sql.DB
 	ttlHours int
-	fetcher  *asset.AssetFetcher
+	fetcher  marketFetcher
+	budget   manualBudget
+	now      func() time.Time     // nil = time.Now
+	rateFn   func() currency.Rate // nil = currency.Current
 }
 
-// New builds a Cache. ttlHours controls both the Redis TTL and the
-// freshness window used to decide whether a MySQL row can be trusted
-// without refetching from the external API (see GetMarketData) — it should
-// be set to ASSET_SCHEDULER_INTERVAL_HOURS. fetcher is used to refresh a
-// symbol from its external API when both cache layers are empty or stale;
-// it is injected rather than constructed here so callers control exactly
-// how/when its credentials (e.g. the Twelve Data API key) are supplied.
-func New(redisClient *redis.Client, db *sql.DB, ttlHours int, fetcher *asset.AssetFetcher) *Cache {
-	return &Cache{redis: redisClient, db: db, ttlHours: ttlHours, fetcher: fetcher}
+// New builds a Cache. ttlHours is both the Redis TTL and the default
+// freshness window (ASSET_SCHEDULER_INTERVAL_HOURS). budget limits the
+// Twelve Data credits manual runs may spend.
+func New(redisClient *redis.Client, db *sql.DB, ttlHours int, fetcher *asset.AssetFetcher, budget *quota.Budget) *Cache {
+	return &Cache{redis: redisClient, db: db, ttlHours: ttlHours, fetcher: fetcher, budget: budget}
+}
+
+func (c *Cache) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+func (c *Cache) rate() currency.Rate {
+	if c.rateFn != nil {
+		return c.rateFn()
+	}
+	return currency.Current()
 }
 
 func marketKey(symbol string) string {
 	return marketKeyPrefix + symbol
 }
 
-// GetMarketData implements the read flow described in the package doc.
-// assetType ("stock", "crypto", or "gold") is required so that, if both
-// cache layers are empty or stale, GetMarketData knows how to refetch
-// symbol from the correct external API.
-func (c *Cache) GetMarketData(ctx context.Context, symbol, assetType string) (*MarketData, error) {
+// GetMarketData returns symbol's market data no older than opts allows.
+// assetType ("stock", "crypto" or "gold") picks the external API for a
+// refetch.
+func (c *Cache) GetMarketData(ctx context.Context, symbol, assetType string, opts FetchOptions) (*MarketData, error) {
+	ttl := time.Duration(c.ttlHours) * time.Hour
+	maxAge := opts.MaxAge
+	if maxAge <= 0 {
+		maxAge = ttl
+	}
+
+	cached, fromRedis := c.cachedEntry(ctx, symbol)
+	if cached != nil && c.clock().Sub(cached.LastFetched) < maxAge {
+		if !fromRedis {
+			if err := c.setRedis(ctx, cached); err != nil {
+				log.Printf("[ERROR] GetMarketData: warm redis for %s: %v", symbol, err)
+			}
+		}
+		return cached, nil
+	}
+	// What a periodic run would still accept: the fallback for a manual
+	// refresh that cannot happen.
+	usable := cached != nil && c.clock().Sub(cached.LastFetched) < ttl
+
+	if opts.Manual && assetType == "stock" {
+		ok, err := false, error(nil)
+		if c.budget != nil {
+			ok, err = c.budget.TryUse(ctx, 1)
+		}
+		if err != nil {
+			log.Printf("[ERROR] GetMarketData: manual budget for %s: %v", symbol, err)
+		}
+		if !ok {
+			if usable {
+				return markStale(cached), nil
+			}
+			return nil, fmt.Errorf("cache: no manual Twelve Data budget left to refresh %s", symbol)
+		}
+	}
+
+	fresh, err := c.refresh(ctx, symbol, assetType)
+	if err != nil {
+		if opts.Manual && usable {
+			log.Printf("[WARN] GetMarketData: manual refresh of %s failed, using cached data: %v", symbol, err)
+			return markStale(cached), nil
+		}
+		return nil, err
+	}
+	return fresh, nil
+}
+
+// cachedEntry returns the Redis entry, else the MySQL row (fromRedis =
+// false), else nil. Read errors are logged and treated as a miss.
+func (c *Cache) cachedEntry(ctx context.Context, symbol string) (data *MarketData, fromRedis bool) {
 	if data, err := c.getFromRedis(ctx, symbol); err == nil {
-		return data, nil
+		return data, true
 	} else if !errors.Is(err, redis.Nil) {
 		log.Printf("[ERROR] GetMarketData: redis get %s: %v", symbol, err)
 	}
-
-	data, fresh, err := c.getFromMySQL(ctx, symbol)
+	data, err := c.getFromMySQL(ctx, symbol)
 	if err != nil {
 		log.Printf("[ERROR] GetMarketData: mysql get %s: %v", symbol, err)
 	}
-	if data != nil && fresh {
-		if err := c.setRedis(ctx, data); err != nil {
-			log.Printf("[ERROR] GetMarketData: warm redis for %s: %v", symbol, err)
-		}
-		return data, nil
-	}
+	return data, false
+}
 
+func markStale(d *MarketData) *MarketData {
+	cp := *d
+	cp.Stale = true
+	return &cp
+}
+
+// refresh fetches symbol from its external API and stores it in both layers.
+func (c *Cache) refresh(ctx context.Context, symbol, assetType string) (*MarketData, error) {
 	result, err := c.fetcher.FetchAsset(symbol, assetType)
 	if err != nil {
 		return nil, fmt.Errorf("cache: refresh %s from external api: %w", symbol, err)
 	}
 
-	rate := currency.Current()
+	rate := c.rate()
 	if result.PriceIDR == 0 && rate.Fallback {
 		log.Printf("[WARN] GetMarketData: no real USD/IDR rate for %s; IDR price stored as unknown (0)", symbol)
 	}
-	priceIDR := displayIDR(result.PriceIDR, result.PriceUSD, rate)
 
 	freshData := &MarketData{
 		// The requested symbol, not result.Symbol, so the cache key always
 		// matches what the caller asked for (FetchGold reports a fixed one).
 		Symbol:        symbol,
 		PriceUSD:      result.PriceUSD,
-		PriceIDR:      priceIDR,
+		PriceIDR:      displayIDR(result.PriceIDR, result.PriceUSD, rate),
 		ChangePct24h:  result.ChangePct24h,
 		Week52HighUSD: result.Week52HighUSD,
 		Week52LowUSD:  result.Week52LowUSD,
+		HighUSD:       result.HighUSD,
+		HighSince:     result.HighSince,
 		LastFetched:   result.FetchedAt,
 		Source:        result.Source,
 	}
@@ -140,7 +236,6 @@ func (c *Cache) GetMarketData(ctx context.Context, symbol, assetType string) (*M
 	if err := c.SetMarketData(ctx, freshData); err != nil {
 		log.Printf("[ERROR] GetMarketData: persist fresh data for %s: %v", symbol, err)
 	}
-
 	return freshData, nil
 }
 
@@ -259,29 +354,31 @@ func (c *Cache) getFromRedis(ctx context.Context, symbol string) (*MarketData, e
 	return &data, nil
 }
 
-func (c *Cache) getFromMySQL(ctx context.Context, symbol string) (data *MarketData, fresh bool, err error) {
+func (c *Cache) getFromMySQL(ctx context.Context, symbol string) (*MarketData, error) {
 	var (
-		d              MarketData
-		change, hi, lo sql.NullFloat64
+		d                    MarketData
+		change, hi, lo, high sql.NullFloat64
+		highSince            sql.NullTime
 	)
-	err = c.db.QueryRowContext(ctx, `
-		SELECT symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, last_fetched, source
+	err := c.db.QueryRowContext(ctx, `
+		SELECT symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source
 		FROM market_cache
 		WHERE symbol = ?`, symbol,
-	).Scan(&d.Symbol, &d.PriceUSD, &d.PriceIDR, &change, &hi, &lo, &d.LastFetched, &d.Source)
-
+	).Scan(&d.Symbol, &d.PriceUSD, &d.PriceIDR, &change, &hi, &lo, &high, &highSince, &d.LastFetched, &d.Source)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, false, nil
+			return nil, nil
 		}
-		return nil, false, fmt.Errorf("query market_cache for %s: %w", symbol, err)
+		return nil, fmt.Errorf("query market_cache for %s: %w", symbol, err)
 	}
 	d.ChangePct24h = nullFloatPtr(change)
 	d.Week52HighUSD = nullFloatPtr(hi)
 	d.Week52LowUSD = nullFloatPtr(lo)
-
-	isFresh := time.Since(d.LastFetched) < time.Duration(c.ttlHours)*time.Hour
-	return &d, isFresh, nil
+	d.HighUSD = nullFloatPtr(high)
+	if highSince.Valid {
+		d.HighSince = &highSince.Time
+	}
+	return &d, nil
 }
 
 func nullFloatPtr(n sql.NullFloat64) *float64 {
@@ -313,17 +410,19 @@ func (c *Cache) SetMarketData(ctx context.Context, data *MarketData) error {
 	}
 
 	_, err := c.db.ExecContext(ctx, `
-		INSERT INTO market_cache (symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, last_fetched, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO market_cache (symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 			price_usd = VALUES(price_usd),
 			price_idr = VALUES(price_idr),
 			change_pct_24h = VALUES(change_pct_24h),
 			week52_high_usd = VALUES(week52_high_usd),
 			week52_low_usd = VALUES(week52_low_usd),
+			high_usd = VALUES(high_usd),
+			high_since = VALUES(high_since),
 			last_fetched = VALUES(last_fetched),
 			source = VALUES(source)`,
-		data.Symbol, data.PriceUSD, data.PriceIDR, data.ChangePct24h, data.Week52HighUSD, data.Week52LowUSD, data.LastFetched, data.Source,
+		data.Symbol, data.PriceUSD, data.PriceIDR, data.ChangePct24h, data.Week52HighUSD, data.Week52LowUSD, data.HighUSD, data.HighSince, data.LastFetched, data.Source,
 	)
 	if err != nil {
 		return fmt.Errorf("cache: upsert market_cache for %s: %w", data.Symbol, err)
