@@ -310,7 +310,7 @@ func (f *AssetFetcher) FetchGold() (*FetchResult, error) {
 	}
 
 	return &FetchResult{
-		Symbol:   "XAU",
+		Symbol:   "ANTAM",
 		PriceUSD: priceIDR / rate,
 		PriceIDR: priceIDR,
 		// harga-emas.org exposes only a point-in-time price. The cache layer
@@ -384,7 +384,7 @@ var symbolAssetTypes = map[string]string{
 	"TSM": "stock", "AVGO": "stock", "JPM": "stock", "LLY": "stock",
 	"V": "stock", "UNH": "stock", "XOM": "stock", "MA": "stock",
 	"JNJ": "stock", "PG": "stock", "HD": "stock", "COST": "stock",
-	"ANTAM": "gold", "XAU": "gold",
+	"ANTAM": "gold",
 }
 
 // SymbolAssetType reports which asset type a whitelisted symbol belongs to.

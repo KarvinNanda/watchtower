@@ -96,7 +96,7 @@
       "rearm_success": "Rule berhasil di-re-arm",
       "help_intent": "Label adalah rencana kamu sendiri. WatchTower hanya mengulangnya di alert dan tidak pernah memberi saran beli atau jual.",
       "help_trailing": "Peak = harga tertinggi yang dicek WatchTower sejak rule dibuat atau di-re-arm.",
-      "help_interval": "Harga diperbarui sesuai interval scheduler (default setiap 4 jam). Check now memakai harga terakhir yang sudah diambil.",
+      "help_interval": "Harga diperbarui setiap {hours} jam (interval scheduler). Check now memakai harga terakhir yang sudah diambil.",
       "error_level": "Isi level lebih dari 0.",
       "error_pct": "Isi persen minimal 0.01 dan maksimal 100.",
       "error_pct_trailing": "Isi persen minimal 0.01 dan di bawah 100.",
@@ -104,7 +104,9 @@
       "error_validation_error": "Ada field yang tidak valid untuk tipe rule ini.",
       "error_conflict": "Rule ini sudah ada, atau aksi ini tidak bisa dilakukan untuk rule ini.",
       "error_not_found": "Rule ini sudah tidak ada.",
-      "error_limit_reached": "Jumlah maksimum simbol yang dipantau sudah tercapai."
+      "error_limit_reached": "Jumlah maksimum simbol yang dipantau sudah tercapai.",
+      "unsupported": "Simbol tidak didukung",
+      "unsupported_hint": "WatchTower tidak bisa mengambil harga simbol ini, jadi rule ini tidak akan pernah fire. Hapus rule ini atau buat rule dengan simbol yang ada di daftar."
     }
   },
   "keyword": {

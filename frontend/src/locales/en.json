@@ -96,7 +96,7 @@
       "rearm_success": "Rule re-armed",
       "help_intent": "The label is your own plan. WatchTower only repeats it in the alert and never gives buy or sell advice.",
       "help_trailing": "Peak = the highest price WatchTower has checked since the rule was created or re-armed.",
-      "help_interval": "Prices refresh on the scheduler interval (every 4 hours by default). Check now uses the latest fetched price.",
+      "help_interval": "Prices refresh every {hours} hours (scheduler interval). Check now uses the latest fetched price.",
       "error_level": "Enter a level greater than 0.",
       "error_pct": "Enter a percent of at least 0.01 and at most 100.",
       "error_pct_trailing": "Enter a percent of at least 0.01 and below 100.",
@@ -104,7 +104,9 @@
       "error_validation_error": "Some fields are not valid for this rule type.",
       "error_conflict": "This rule already exists, or this action is not allowed for it.",
       "error_not_found": "This rule no longer exists.",
-      "error_limit_reached": "The maximum number of tracked symbols has been reached."
+      "error_limit_reached": "The maximum number of tracked symbols has been reached.",
+      "unsupported": "Symbol not supported",
+      "unsupported_hint": "WatchTower cannot fetch this symbol, so this rule never fires. Delete it or create a rule on a listed symbol."
     }
   },
   "keyword": {

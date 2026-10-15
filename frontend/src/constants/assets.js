@@ -50,6 +50,5 @@ export const ASSET_OPTIONS = {
   ],
   gold: [
     { label: 'ANTAM - Antam (IDR)', value: 'ANTAM' },
-    { label: 'XAU - Gold (USD)', value: 'XAU' },
   ],
 }

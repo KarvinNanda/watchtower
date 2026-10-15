@@ -99,6 +99,8 @@ export function ruleSummary(rule, t) {
 }
 
 export function ruleState(rule) {
+  // A symbol WatchTower cannot fetch never fires, whatever else is set.
+  if (rule.supported === false) return 'unsupported'
   if (rule.rule_type === 'trailing_stop' && rule.triggered_at) return 'fired'
   return rule.is_active ? 'active' : 'paused'
 }

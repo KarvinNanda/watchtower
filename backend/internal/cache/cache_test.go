@@ -120,3 +120,24 @@ func TestGetCryptoWeek52_CachedFor24Hours(t *testing.T) {
 	assert.Equal(t, 1, hits, "the second call must be served from Redis")
 	assert.Equal(t, 24*time.Hour, mr.TTL(week52KeyPrefix+"BTC"))
 }
+
+// Redis entries written before migration 000013 carry a fake 0 change for
+// gold. They must be ignored, so the fixed MySQL row (change NULL) is used.
+func TestGetMarketData_IgnoresPreUpgradeRedisEntries(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	mr := miniredis.RunT(t)
+	c := &Cache{redis: redis.NewClient(&redis.Options{Addr: mr.Addr()}), db: db, ttlHours: 4}
+	require.NoError(t, mr.Set("market:ANTAM",
+		`{"symbol":"ANTAM","price_usd":146,"price_idr":2392157,"change_pct_24h":0,"last_fetched":"2026-10-15T00:00:00Z","source":"harga-emas.org"}`))
+
+	mock.ExpectQuery(`FROM market_cache`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(
+		[]string{"symbol", "price_usd", "price_idr", "change_pct_24h", "week52_high_usd", "week52_low_usd", "last_fetched", "source"}).
+		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, time.Now(), "harga-emas.org"))
+
+	d, err := c.GetMarketData(context.Background(), "ANTAM", "gold")
+	require.NoError(t, err)
+	assert.Nil(t, d.ChangePct24h, "the legacy Redis entry's fake 0% must not be served")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

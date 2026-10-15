@@ -125,7 +125,7 @@ func main() {
 	router.Use(middleware.RequestSizeLimit(maxRequestBodyBytes))
 	router.Use(middleware.SQLInjectionGuard())
 
-	registerRoutes(router, database, authService, userService, cfg.Server.CookieSecure)
+	registerRoutes(router, database, authService, userService, cfg.Server.CookieSecure, cfg.Scheduler.AssetIntervalHours)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -222,7 +222,7 @@ func allowedOrigins(frontendURL string, isProduction bool) []string {
 	return origins
 }
 
-func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService, cookieSecure bool) {
+func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService, cookieSecure bool, assetIntervalHours int) {
 	router.GET("/health", healthHandler(database))
 
 	api := router.Group("/api")
@@ -251,7 +251,7 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 	protected.GET("/user/profile", getUserProfileHandler(userService))
 	protected.PUT("/user/profile", updateUserProfileHandler(userService))
 
-	registerAssetRuleRoutes(protected, userService)
+	registerAssetRuleRoutes(protected, userService, assetIntervalHours)
 
 	protected.GET("/subscriptions/keywords", listKeywordSubsHandler(userService))
 	protected.POST("/subscriptions/keywords", createKeywordSubHandler(userService))
@@ -473,6 +473,8 @@ func respondUserServiceError(c *gin.Context, err error) {
 		errors.Is(err, user.ErrInvalidPct),
 		errors.Is(err, user.ErrFieldNotAllowed),
 		errors.Is(err, user.ErrWeek52NotForGold),
+		errors.Is(err, user.ErrSymbolTypeMismatch),
+		errors.Is(err, user.ErrEmptyUpdate),
 		errors.Is(err, user.ErrEmptyKeyword),
 		errors.Is(err, user.ErrKeywordTooLong),
 		errors.Is(err, user.ErrInvalidExpertiseLevel),
@@ -594,6 +596,7 @@ type assetRuleResponse struct {
 	TriggeredPriceUSD *float64   `json:"triggered_price_usd"`
 	LastAlertedAt     *time.Time `json:"last_alerted_at"`
 	CreatedAt         time.Time  `json:"created_at"`
+	Supported         bool       `json:"supported"`
 }
 
 func toAssetRuleResponse(r user.AssetRule) assetRuleResponse {
@@ -601,7 +604,7 @@ func toAssetRuleResponse(r user.AssetRule) assetRuleResponse {
 		ID: r.ID, AssetType: r.AssetType, AssetSymbol: r.AssetSymbol, RuleType: r.RuleType,
 		Direction: r.Direction, Intent: r.Intent, LevelUSD: r.LevelUSD, Pct: r.Pct, IsActive: r.IsActive,
 		PeakPriceUSD: r.PeakPriceUSD, TriggeredAt: r.TriggeredAt, TriggeredPriceUSD: r.TriggeredPriceUSD,
-		LastAlertedAt: r.LastAlertedAt, CreatedAt: r.CreatedAt,
+		LastAlertedAt: r.LastAlertedAt, CreatedAt: r.CreatedAt, Supported: r.Supported,
 	}
 }
 
@@ -638,15 +641,18 @@ type updateAssetRuleBody struct {
 	IsActive    *bool    `json:"is_active"`
 }
 
-func registerAssetRuleRoutes(g *gin.RouterGroup, svc *user.UserService) {
-	g.GET("/rules/assets", listAssetRulesHandler(svc))
+// registerAssetRuleRoutes mounts the asset rule endpoints. assetIntervalHours
+// (ASSET_SCHEDULER_INTERVAL_HOURS) is returned with the list so the UI can say
+// how often prices refresh.
+func registerAssetRuleRoutes(g *gin.RouterGroup, svc *user.UserService, assetIntervalHours int) {
+	g.GET("/rules/assets", listAssetRulesHandler(svc, assetIntervalHours))
 	g.POST("/rules/assets", createAssetRuleHandler(svc))
 	g.PUT("/rules/assets/:id", updateAssetRuleHandler(svc))
 	g.DELETE("/rules/assets/:id", deleteAssetRuleHandler(svc))
 	g.POST("/rules/assets/:id/rearm", rearmAssetRuleHandler(svc))
 }
 
-func listAssetRulesHandler(svc *user.UserService) gin.HandlerFunc {
+func listAssetRulesHandler(svc *user.UserService, assetIntervalHours int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
 		if err != nil {
@@ -662,7 +668,12 @@ func listAssetRulesHandler(svc *user.UserService) gin.HandlerFunc {
 		for _, r := range list {
 			result = append(result, toAssetRuleResponse(r))
 		}
-		respondSuccess(c, http.StatusOK, result, "asset rules retrieved")
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    result,
+			"meta":    gin.H{"asset_interval_hours": assetIntervalHours},
+			"message": "asset rules retrieved",
+		})
 	}
 }
 
@@ -992,6 +1003,18 @@ type dashboardResponse struct {
 	RecentNotifications []notificationLogResponse `json:"recent_notifications"`
 }
 
+// countActiveSymbols counts distinct assets with at least one active rule,
+// so four rules on BTC still count as one tracked asset.
+func countActiveSymbols(rules []user.AssetRule) int {
+	seen := make(map[string]bool)
+	for _, r := range rules {
+		if r.IsActive {
+			seen[r.AssetSymbol] = true
+		}
+	}
+	return len(seen)
+}
+
 func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
@@ -1005,12 +1028,7 @@ func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 			respondUserServiceError(c, err)
 			return
 		}
-		activeAssetCount := 0
-		for _, s := range assetRules {
-			if s.IsActive {
-				activeAssetCount++
-			}
-		}
+		activeAssetCount := countActiveSymbols(assetRules)
 
 		keywordSubs, err := userService.GetKeywordSubscriptions(userID)
 		if err != nil {

@@ -5,6 +5,8 @@ import * as subscriptionsApi from '@/api/subscriptions'
 
 export const useSubscriptionsStore = defineStore('subscriptions', () => {
   const assets = ref([])
+  // ASSET_SCHEDULER_INTERVAL_HOURS, sent with the rules list.
+  const assetIntervalHours = ref(null)
   const keywords = ref([])
   const loading = ref(false)
 
@@ -13,6 +15,7 @@ export const useSubscriptionsStore = defineStore('subscriptions', () => {
     try {
       const res = await subscriptionsApi.getAssetRules()
       assets.value = res.data
+      assetIntervalHours.value = res.meta?.asset_interval_hours ?? null
     } finally {
       loading.value = false
     }
@@ -60,6 +63,7 @@ export const useSubscriptionsStore = defineStore('subscriptions', () => {
 
   return {
     assets,
+    assetIntervalHours,
     keywords,
     loading,
     fetchAssets,

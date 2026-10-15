@@ -65,6 +65,10 @@ describe('ruleSummary and ruleState', () => {
     expect(ruleState({ rule_type: 'trailing_stop', triggered_at: '2026-10-15T04:00:00Z', is_active: false })).toBe('fired')
     expect(ruleState({ rule_type: 'price_level', triggered_at: null, is_active: false })).toBe('paused')
   })
+  it('marks a rule on a symbol WatchTower cannot fetch', () => {
+    expect(ruleState({ rule_type: 'price_level', is_active: true, supported: false })).toBe('unsupported')
+    expect(ruleState({ rule_type: 'price_level', is_active: true, supported: true })).toBe('active')
+  })
 })
 
 describe('formatUSD', () => {

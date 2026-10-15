@@ -25,7 +25,16 @@ var (
 	ErrDuplicateRule           = errors.New("an identical active rule already exists")
 	ErrCannotRearm             = errors.New("only a trailing_stop that has fired can be re-armed")
 	ErrRuleNotFound            = errors.New("rule not found")
+	ErrSymbolTypeMismatch      = errors.New("asset_symbol does not belong to asset_type")
+	ErrEmptyUpdate             = errors.New("nothing to update: send a rule definition, is_active, or both")
 )
+
+// symbolTypeError names the symbol and type in its message ("BTC is not a
+// stock symbol") and matches ErrSymbolTypeMismatch with errors.Is.
+type symbolTypeError struct{ symbol, assetType string }
+
+func (e symbolTypeError) Error() string        { return e.symbol + " is not a " + e.assetType + " symbol" }
+func (e symbolTypeError) Is(target error) bool { return target == ErrSymbolTypeMismatch }
 
 const (
 	ruleTypePriceLevel   = "price_level"
@@ -48,11 +57,14 @@ var validDirections = map[string]bool{"above": true, "below": true}
 // intentDirections mirrors rules.IntentDirection (spec Q2).
 var intentDirections = map[string]string{"buy_target": "below", "take_profit": "above", "stop_loss": "below"}
 
+// stateResetKeepFiredSQL clears every scheduler-owned column except the
+// one-shot "fired" record of a trailing stop.
+const stateResetKeepFiredSQL = "baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, week52_ref_usd = NULL, " +
+	"last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL"
+
 // stateResetSQL clears every scheduler-owned column, so an edited or
 // re-armed rule starts like a new one.
-const stateResetSQL = "baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, week52_ref_usd = NULL, " +
-	"last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL, " +
-	"triggered_at = NULL, triggered_price_usd = NULL"
+const stateResetSQL = stateResetKeepFiredSQL + ", triggered_at = NULL, triggered_price_usd = NULL"
 
 // AssetRule mirrors an asset_rules row, including the read-only state the
 // UI shows.
@@ -71,6 +83,10 @@ type AssetRule struct {
 	TriggeredPriceUSD *float64
 	LastAlertedAt     *time.Time
 	CreatedAt         time.Time
+	// Supported is false for a symbol WatchTower cannot fetch (not on the
+	// whitelist, or listed under another asset type), e.g. a legacy
+	// free-form symbol copied from asset_subscriptions. Such a rule never fires.
+	Supported bool
 }
 
 // AssetRuleInput is a rule definition from the API. It never carries state.
@@ -108,8 +124,12 @@ func normalizeAssetRule(in AssetRuleInput) (AssetRuleInput, error) {
 	if out.AssetSymbol == "" || !assetSymbolPattern.MatchString(out.AssetSymbol) {
 		return AssetRuleInput{}, ErrInvalidAssetSymbol
 	}
-	if t, ok := asset.SymbolAssetType(out.AssetSymbol); !ok || t != out.AssetType {
+	t, ok := asset.SymbolAssetType(out.AssetSymbol)
+	if !ok {
 		return AssetRuleInput{}, ErrInvalidAssetSymbol
+	}
+	if t != out.AssetType {
+		return AssetRuleInput{}, symbolTypeError{symbol: out.AssetSymbol, assetType: out.AssetType}
 	}
 	if !validRuleTypes[out.RuleType] {
 		return AssetRuleInput{}, ErrInvalidRuleType
@@ -208,6 +228,8 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 		r.Direction, r.Intent = nullStringPtr(direction), nullStringPtr(intent)
 		r.LevelUSD, r.Pct, r.PeakPriceUSD, r.TriggeredPriceUSD = nullFloatPtr(level), nullFloatPtr(pct), nullFloatPtr(peak), nullFloatPtr(trigPrice)
 		r.TriggeredAt, r.LastAlertedAt = nullTimePtr(triggeredAt), nullTimePtr(lastAlertedAt)
+		t, ok := asset.SymbolAssetType(r.AssetSymbol)
+		r.Supported = ok && t == r.AssetType
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -251,7 +273,7 @@ func (s *UserService) CreateAssetRule(userID uint64, in AssetRuleInput) (uint64,
 // UpdateAssetRule applies req to ruleID, which must belong to userID.
 func (s *UserService) UpdateAssetRule(userID, ruleID uint64, req UpdateAssetRuleRequest) error {
 	if req.Rule == nil && req.IsActive == nil {
-		return nil
+		return ErrEmptyUpdate
 	}
 	var def *AssetRuleInput
 	if req.Rule != nil {
@@ -330,10 +352,18 @@ func (s *UserService) updateRule(userID, ruleID uint64, def *AssetRuleInput, isA
 		clauses = append(clauses, "asset_type = ?", "asset_symbol = ?", "rule_type = ?", "direction = ?", "intent = ?", "level_usd = ?", "pct = ?")
 		args = append(args, def.AssetType, def.AssetSymbol, def.RuleType, def.Direction, def.Intent, def.LevelUSD, def.Pct)
 	}
-	// Turning a fired trailing stop back on must not reuse its old peak,
-	// or it fires again on the next run (spec §7.1).
-	reactivatingFired := def == nil && active && !cur.isActive && firedTrailing
-	if def != nil || reactivatingFired {
+	// Turning a fired trailing stop back on (re-arm or is_active=true) must
+	// not reuse its old peak, or it fires again on the next run (spec §7.1).
+	reactivatingFired := firedTrailing && active && !cur.isActive
+	// Editing a fired trailing stop that stays off resets its peak but keeps
+	// the fired record, so the UI still shows the badge and Re-arm (#26).
+	keepFired := firedTrailing && !active && target.RuleType == ruleTypeTrailingStop
+	switch {
+	case rearm || reactivatingFired:
+		clauses = append(clauses, stateResetSQL)
+	case def != nil && keepFired:
+		clauses = append(clauses, stateResetKeepFiredSQL)
+	case def != nil:
 		clauses = append(clauses, stateResetSQL)
 	}
 	args = append(args, ruleID, userID)

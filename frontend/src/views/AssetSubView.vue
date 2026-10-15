@@ -177,6 +177,14 @@ async function handleRearm(row) {
 }
 
 function renderDetail(row) {
+  if (ruleState(row) === 'unsupported') {
+    // Text, not color alone, and the reason on hover/focus.
+    return h(
+      NTag,
+      { type: 'error', size: 'small', round: true, title: t('asset.rules.unsupported_hint') },
+      { default: () => t('asset.rules.unsupported') },
+    )
+  }
   if (row.rule_type !== 'trailing_stop') return '—'
   if (ruleState(row) === 'fired') {
     const date = new Date(row.triggered_at).toLocaleString()
@@ -241,7 +249,9 @@ onMounted(async () => {
       <run-now-button type="asset" />
       <n-button type="primary" @click="openCreateModal">{{ t('asset.add') }}</n-button>
     </div>
-    <n-text depth="3" class="asset-view__hint">{{ t('asset.rules.help_interval') }}</n-text>
+    <n-text v-if="store.assetIntervalHours" depth="3" class="asset-view__hint">
+      {{ t('asset.rules.help_interval', { hours: store.assetIntervalHours }) }}
+    </n-text>
 
     <n-data-table :columns="columns" :data="rows" :loading="loading" :bordered="false" :pagination="{ pageSize: 10 }" />
 

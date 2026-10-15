@@ -25,7 +25,7 @@ func newRuleTestRouter(t *testing.T) (*gin.Engine, sqlmock.Sqlmock) {
 
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("user_id", uint64(7)); c.Next() })
-	registerAssetRuleRoutes(r.Group("/"), user.NewUserService(db, 100))
+	registerAssetRuleRoutes(r.Group("/"), user.NewUserService(db, 100), 6)
 	return r, mock
 }
 
@@ -116,4 +116,32 @@ func TestListRules_ExplicitNulls(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), `"direction":null`)
 	assert.Contains(t, w.Body.String(), `"peak_price_usd":null`)
+}
+
+func TestCreateRule_SymbolOfAnotherTypeIs400WithClearMessage(t *testing.T) {
+	r, _ := newRuleTestRouter(t)
+	w := do(r, http.MethodPost, "/rules/assets", `{"asset_type":"stock","asset_symbol":"BTC","rule_type":"pct_change_24h","pct":5}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "BTC is not a stock symbol")
+}
+
+func TestUpdateRule_EmptyBodyIs400(t *testing.T) {
+	r, mock := newRuleTestRouter(t)
+	w := do(r, http.MethodPut, "/rules/assets/424242", `{}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "an update that changes nothing must not answer 200 for any id")
+	assert.Equal(t, "validation_error", errorCode(t, w))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListRules_CarriesSchedulerInterval(t *testing.T) {
+	r, mock := newRuleTestRouter(t)
+	mock.ExpectQuery(`FROM asset_rules`).WillReturnRows(sqlmock.NewRows([]string{
+		"id", "asset_type", "asset_symbol", "rule_type", "direction", "intent", "level_usd", "pct", "is_active",
+		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at",
+	}))
+
+	w := do(r, http.MethodGet, "/rules/assets", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"meta":{"asset_interval_hours":6}`,
+		"the UI help text shows the configured interval, not a hard-coded 4 hours")
 }
