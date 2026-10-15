@@ -26,7 +26,12 @@ export function useRunNow({ type, createRun, getRun, notify, t, pollOptions = {}
       const run = await pollRun(getRun, res.data.run_id, { ...pollOptions, signal: controller.signal })
       if (!run) return
       if (run.status === 'done') {
-        notify.success(t(`run.${type}_summary`, run.summary || {}))
+        const summary = run.summary || {}
+        let text = t(`run.${type}_summary`, summary)
+        // Some prices could not be refreshed (daily quota or a failing
+        // source) and the run used cached ones; say so (#20).
+        if (summary.stale > 0) text += ' ' + t('run.stale_prices', { stale: summary.stale })
+        notify.success(text)
       } else {
         notify.error(t('run.failed', { reason: reasonText(run.error) }))
       }

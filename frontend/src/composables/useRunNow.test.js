@@ -49,6 +49,24 @@ describe('useRunNow', () => {
     expect(notify.success).toHaveBeenCalledWith('run.asset_summary|{"sent":1}')
   })
 
+  it('adds the stale sentence when some prices came from cache', async () => {
+    const { start, notify } = setup({
+      getRun: async () => ({ data: { status: 'done', summary: { sent: 1, stale: 2 } } }),
+    })
+    await start()
+    expect(notify.success).toHaveBeenCalledWith(
+      'run.asset_summary|{"sent":1,"stale":2} run.stale_prices|{"stale":2}',
+    )
+  })
+
+  it('omits the stale sentence when every price was fresh', async () => {
+    const { start, notify } = setup({
+      getRun: async () => ({ data: { status: 'done', summary: { sent: 1, stale: 0 } } }),
+    })
+    await start()
+    expect(notify.success).toHaveBeenCalledWith('run.asset_summary|{"sent":1,"stale":0}')
+  })
+
   it('translates a known failure reason', async () => {
     const { start, notify } = setup({ getRun: async () => ({ data: { status: 'failed', error: 'timed out' } }) })
     await start()

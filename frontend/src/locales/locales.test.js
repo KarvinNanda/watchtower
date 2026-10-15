@@ -33,3 +33,12 @@ describe('locale parity', () => {
     expect(flatKeys(id).sort()).toEqual(flatKeys(en).sort())
   })
 })
+
+describe('stale prices message', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s shows the stale count', (_, messages) => {
+    expect(messages.run.stale_prices).toContain('{stale}')
+  })
+})
