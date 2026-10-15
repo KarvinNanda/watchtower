@@ -1,18 +1,23 @@
 <script setup>
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useNow } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
-  NAlert, NButton, NDataTable, NForm, NFormItem, NInputNumber, NModal, NSelect, NSpace, NSwitch, NTag, NText, useDialog,
+  NAlert, NButton, NEmpty, NForm, NFormItem, NInputNumber, NModal, NSelect, NSpace, NSpin, NText, useDialog,
 } from 'naive-ui'
 
 import { useSubscriptionsStore } from '@/stores/subscriptions'
+import { useMarketStore } from '@/stores/market'
 import RunNowButton from '@/components/runs/RunNowButton.vue'
+import RunResultPanel from '@/components/runs/RunResultPanel.vue'
+import SymbolRuleCard from '@/components/assets/SymbolRuleCard.vue'
 import { message } from '@/plugins/naive'
 import { ASSET_OPTIONS } from '@/constants/assets'
 import {
-  RULE_TYPES, INTENTS, emptyRuleForm, ruleToForm, validateRuleForm, buildRulePayload,
-  ruleSummary, ruleState, sortRulesBySymbol, formatUSD,
+  RULE_TYPES, INTENTS, emptyRuleForm, ruleToForm, validateRuleForm, buildRulePayload, ruleSummary,
 } from '@/utils/assetRules'
+import { groupRulesBySymbol } from '@/utils/groupRules'
+import { runChangedRuleIds } from '@/utils/runHighlight'
 
 const { t, te } = useI18n()
 const store = useSubscriptionsStore()
@@ -27,6 +32,16 @@ const formError = ref('')
 const form = ref(emptyRuleForm())
 // Field-level validation error, shown under the field it belongs to.
 const fieldError = ref({ field: '', key: '' })
+
+const marketStore = useMarketStore()
+const rulesError = ref('')
+// Last Check now result, shown until closed, and the rules it changed.
+const runResult = ref(null)
+const highlightIds = ref(new Set())
+
+const groups = computed(() => groupRulesBySymbol(store.assets, marketStore.snapshot))
+// One ticking clock for every card's "Updated … ago" label.
+const now = useNow({ interval: 60_000 })
 
 const ERROR_FIELD = {
   'asset.rules.error_level': 'level',
@@ -65,7 +80,6 @@ const showDirection = computed(
   () => (isLevel.value && form.value.intent === 'none') || form.value.ruleType === 'week52_break',
 )
 const showPct = computed(() => ['pct_change_24h', 'trailing_stop'].includes(form.value.ruleType))
-const rows = computed(() => sortRulesBySymbol(store.assets))
 
 const formRules = {
   assetType: { required: true, message: () => t('common.required_field'), trigger: ['change', 'blur'] },
@@ -131,6 +145,8 @@ async function handleSubmit() {
       message.success(t('asset.updated_success'))
     } else {
       await store.createAsset(payload)
+      // A new symbol shows its price at once if one is already cached.
+      marketStore.fetchSnapshot().catch(() => {})
       message.success(t('asset.created_success'))
     }
     formVisible.value = false
@@ -176,84 +192,72 @@ async function handleRearm(row) {
   }
 }
 
-function renderDetail(row) {
-  if (ruleState(row) === 'unsupported') {
-    // Text, not color alone, and the reason on hover/focus.
-    return h(
-      NTag,
-      { type: 'error', size: 'small', round: true, title: t('asset.rules.unsupported_hint') },
-      { default: () => t('asset.rules.unsupported') },
-    )
-  }
-  if (row.rule_type !== 'trailing_stop') return '—'
-  if (ruleState(row) === 'fired') {
-    const date = new Date(row.triggered_at).toLocaleString()
-    return h(NTag, { type: 'warning', size: 'small', round: true }, {
-      default: () => t('asset.rules.fired', { price: formatUSD(row.triggered_price_usd), date }),
-    })
-  }
-  return row.peak_price_usd == null
-    ? t('asset.rules.peak_pending')
-    : t('asset.rules.peak', { price: formatUSD(row.peak_price_usd) })
-}
-
-function renderStatus(row) {
-  if (ruleState(row) === 'fired') {
-    return h(NButton, { size: 'small', type: 'warning', onClick: () => handleRearm(row) }, { default: () => t('asset.rules.rearm') })
-  }
-  return h(NSwitch, {
-    value: row.is_active,
-    'aria-label': t('asset.status'),
-    onUpdateValue: (value) => handleToggleActive(row, value),
-  })
-}
-
-const columns = computed(() => [
-  { title: t('asset.symbol'), key: 'asset_symbol' },
-  {
-    title: t('asset.type'),
-    key: 'asset_type',
-    render: (row) => assetTypeOptions.value.find((o) => o.value === row.asset_type)?.label || row.asset_type,
-  },
-  { title: t('asset.rules.rule'), key: 'rule', render: (row) => ruleSummary(row, t) },
-  { title: t('asset.rules.detail'), key: 'detail', render: renderDetail },
-  { title: t('asset.status'), key: 'is_active', render: renderStatus },
-  {
-    title: t('asset.actions'),
-    key: 'actions',
-    render: (row) =>
-      h(NSpace, null, {
-        default: () => [
-          h(NButton, { size: 'small', onClick: () => openEditModal(row) }, { default: () => t('common.edit') }),
-          h(NButton, { size: 'small', type: 'error', onClick: () => confirmDelete(row) }, { default: () => t('common.delete') }),
-        ],
-      }),
-  },
-])
-
-onMounted(async () => {
+// Rules and prices load in parallel. A failed snapshot only hides prices;
+// the rules still render (Spec 4a, section 6).
+async function loadAll() {
   loading.value = true
-  try {
-    await store.fetchAssets()
-  } catch (err) {
-    message.error(apiErrorMessage(err))
-  } finally {
-    loading.value = false
-  }
+  rulesError.value = ''
+  const [rules] = await Promise.allSettled([store.fetchAssets(), marketStore.fetchSnapshot()])
+  if (rules.status === 'rejected') rulesError.value = apiErrorMessage(rules.reason)
+  loading.value = false
+}
+
+function handleRunStarted() {
+  runResult.value = null
+  highlightIds.value = new Set()
+}
+
+async function handleRunFinished(result) {
+  runResult.value = result
+  if (result.status !== 'done') return
+  await loadAll()
+  if (!rulesError.value) highlightIds.value = runChangedRuleIds(store.assets, result.run)
+}
+
+function closeRunResult() {
+  runResult.value = null
+  highlightIds.value = new Set()
+}
+
+onMounted(() => {
+  loadAll()
+  marketStore.startAutoRefresh()
 })
+onUnmounted(() => marketStore.stopAutoRefresh())
 </script>
 
 <template>
   <div class="asset-view">
     <div class="asset-view__toolbar">
-      <run-now-button type="asset" />
+      <run-now-button type="asset" @started="handleRunStarted" @finished="handleRunFinished" />
       <n-button type="primary" @click="openCreateModal">{{ t('asset.add') }}</n-button>
     </div>
     <n-text v-if="store.assetIntervalHours" depth="3" class="asset-view__hint">
       {{ t('asset.rules.help_interval', { hours: store.assetIntervalHours }) }}
     </n-text>
 
-    <n-data-table :columns="columns" :data="rows" :loading="loading" :bordered="false" :pagination="{ pageSize: 10 }" />
+    <run-result-panel :result="runResult" @close="closeRunResult" />
+
+    <n-alert v-if="rulesError" type="error" role="alert" class="asset-view__error">
+      {{ t('asset.load_error') }} {{ rulesError }}
+      <n-button size="small" @click="loadAll">{{ t('common.retry') }}</n-button>
+    </n-alert>
+
+    <n-spin :show="loading">
+      <n-empty v-if="!loading && !rulesError && !groups.length" :description="t('asset.empty')" />
+      <symbol-rule-card
+        v-for="group in groups"
+        :key="group.symbol"
+        :group="group"
+        :highlight-ids="highlightIds"
+        :stale-after-hours="store.assetIntervalHours"
+        :now="now.getTime()"
+        @edit="openEditModal"
+        @delete="confirmDelete"
+        @toggle="handleToggleActive"
+        @rearm="handleRearm"
+      />
+    </n-spin>
 
     <n-modal v-model:show="formVisible" preset="card" :title="modalTitle" style="max-width: 480px">
       <n-alert v-if="formError" type="error" role="alert" style="margin-bottom: 16px">{{ formError }}</n-alert>
@@ -336,5 +340,8 @@ onMounted(async () => {
 .asset-view__hint {
   display: block;
   margin-bottom: 16px;
+}
+.asset-view__error {
+  margin-bottom: var(--wt-space-lg);
 }
 </style>

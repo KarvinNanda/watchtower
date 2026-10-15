@@ -45,3 +45,28 @@ describe('stale prices message', () => {
     expect(messages.run.stale_prices).toContain('{stale}')
   })
 })
+
+describe('run result panel', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s finished-at text shows the time', (_, messages) => {
+    expect(messages.run.finished_at).toContain('{time}')
+  })
+})
+
+describe('asset card texts', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s placeholders', (_, messages) => {
+    expect(messages.asset.card.updated).toContain('{age}')
+    expect(messages.asset.card.stale_hint).toContain('{hours}')
+    expect(messages.asset.card.rules_of).toContain('{symbol}')
+    expect(messages.asset.rules.stop_at).toContain('{stop}')
+    expect(messages.asset.rules.stop_at).toContain('{peak}')
+    expect(messages.asset.rules.change_vs_threshold).toContain('{current}')
+    expect(messages.asset.rules.change_vs_threshold).toContain('{threshold}')
+    expect(messages.asset.rules.near_hint).toContain('{pct}')
+  })
+})

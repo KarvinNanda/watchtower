@@ -1,7 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NThing, NTag, NTime } from 'naive-ui'
+import { NThing, NTag, NTime, NIcon } from 'naive-ui'
+import { Bell, ShieldAlert } from '@lucide/vue'
 
 const props = defineProps({
   notification: {
@@ -14,7 +15,7 @@ defineEmits(['click'])
 
 const { t } = useI18n()
 
-const icon = computed(() => (props.notification.notif_type === 'sentinel' ? '🛡️' : '🔔'))
+const icon = computed(() => (props.notification.notif_type === 'sentinel' ? ShieldAlert : Bell))
 
 const label = computed(() => props.notification.asset_symbol || props.notification.keyword || '')
 
@@ -33,7 +34,7 @@ const statusLabel = computed(() =>
 <template>
   <n-thing class="notif-card" @click="$emit('click', notification)">
     <template #avatar>
-      <span class="notif-card__icon">{{ icon }}</span>
+      <n-icon class="notif-card__icon" :component="icon" size="20" aria-hidden="true" />
     </template>
     <template #header>
       <span>{{ label }}</span>
@@ -57,7 +58,7 @@ const statusLabel = computed(() =>
 }
 
 .notif-card:hover {
-  background-color: rgba(124, 106, 247, 0.08);
+  background-color: var(--wt-primary-tint);
 }
 
 .notif-card__icon {

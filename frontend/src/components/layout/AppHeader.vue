@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NButton, NIcon, NEllipsis } from 'naive-ui'
+import { Menu } from '@lucide/vue'
 
 import { useAuthStore } from '@/stores/auth'
 
@@ -45,7 +46,7 @@ const title = computed(() => {
         @click="$emit('toggle-menu')"
       >
         <template #icon>
-          <n-icon size="20"><span>☰</span></n-icon>
+          <n-icon size="20" :component="Menu" aria-hidden="true" />
         </template>
       </n-button>
       <h1 class="app-header__title">{{ title }}</h1>

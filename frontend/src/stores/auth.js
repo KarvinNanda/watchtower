@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 import router from '@/router'
 import * as authApi from '@/api/auth'
+import { resetUserData } from './userData'
 
 // The JWT itself is never held here (or anywhere in JS) — it lives only in
 // the httpOnly watchtower_token cookie the backend sets on login and reads
@@ -17,6 +18,8 @@ export const useAuthStore = defineStore('auth', () => {
   function clearSession() {
     user.value = null
     isAuthenticated.value = false
+    // The next user on this browser must not see this user's data (#53).
+    resetUserData()
   }
 
   async function login(email, password) {

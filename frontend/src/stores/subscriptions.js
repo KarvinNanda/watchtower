@@ -41,6 +41,13 @@ export const useSubscriptionsStore = defineStore('subscriptions', () => {
     await fetchAssets()
   }
 
+  // reset forgets the current user's rules and keywords (logout, expired session).
+  function reset() {
+    assets.value = []
+    assetIntervalHours.value = null
+    keywords.value = []
+  }
+
   async function fetchKeywords() {
     loading.value = true
     try {
@@ -74,5 +81,6 @@ export const useSubscriptionsStore = defineStore('subscriptions', () => {
     fetchKeywords,
     createKeyword,
     deleteKeyword,
+    reset,
   }
 })

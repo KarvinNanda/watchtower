@@ -143,7 +143,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding: 10px 0;
-  border-bottom: 1px solid var(--n-border-color, transparent);
+  border-bottom: 1px solid var(--wt-border);
 }
 
 .dashboard__stat:last-child {

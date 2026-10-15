@@ -198,20 +198,38 @@ func TestGetKeywordSubscriptions_Success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetMarketSnapshot_Success(t *testing.T) {
+func TestGetMarketSnapshot_OnlyCallersSymbols(t *testing.T) {
 	t.Parallel()
 	svc, mock := newMockUserService(t, 100)
 
 	rows := sqlmock.NewRows([]string{"symbol", "price_usd", "price_idr", "change_pct_24h", "last_fetched", "source"}).
 		AddRow("BTC", 65000.0, 1040000000.0, nil, time.Now(), "coingecko")
-	mock.ExpectQuery(`SELECT mc.symbol`).WillReturnRows(rows)
+	// Owner filter, and no is_active filter: a paused rule's card still shows
+	// the last known price (#53, Spec 4a).
+	mock.ExpectQuery(`FROM market_cache mc\s+WHERE mc\.symbol IN \(\s+SELECT DISTINCT asset_symbol FROM asset_rules WHERE user_id = \?\s+\)`).
+		WithArgs(uint64(1)).
+		WillReturnRows(rows)
 
-	data, err := svc.GetMarketSnapshot()
+	data, err := svc.GetMarketSnapshot(1)
 
 	require.NoError(t, err)
 	require.Len(t, data, 1)
 	assert.Equal(t, "BTC", data[0].Symbol)
 	assert.Nil(t, data[0].ChangePct24h)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetMarketSnapshot_NoRulesIsEmptySlice(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockUserService(t, 100)
+	mock.ExpectQuery(`FROM market_cache mc`).WithArgs(uint64(2)).
+		WillReturnRows(sqlmock.NewRows([]string{"symbol", "price_usd", "price_idr", "change_pct_24h", "last_fetched", "source"}))
+
+	data, err := svc.GetMarketSnapshot(2)
+
+	require.NoError(t, err)
+	assert.NotNil(t, data, "JSON must be [] not null")
+	assert.Empty(t, data)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

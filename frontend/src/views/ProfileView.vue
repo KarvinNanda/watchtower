@@ -213,7 +213,7 @@ onMounted(async () => {
   display: inline-block;
   margin-top: 8px;
   font-size: 13px;
-  color: var(--n-primary-color, #7c6af7);
+  color: var(--wt-primary);
 }
 
 .profile-view__actions {

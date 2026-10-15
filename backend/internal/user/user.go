@@ -652,9 +652,10 @@ type MarketData struct {
 	Source       string
 }
 
-// GetMarketSnapshot returns cached market data for every symbol currently
-// tracked by at least one active asset subscription, system-wide.
-func (s *UserService) GetMarketSnapshot() ([]MarketData, error) {
+// GetMarketSnapshot returns cached market data for the symbols in userID's
+// own asset rules, active or paused. It must never include another user's
+// symbols: on a multi-user instance that would reveal their watchlist (#53).
+func (s *UserService) GetMarketSnapshot(userID uint64) ([]MarketData, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
 
@@ -662,9 +663,9 @@ func (s *UserService) GetMarketSnapshot() ([]MarketData, error) {
 		SELECT mc.symbol, mc.price_usd, mc.price_idr, mc.change_pct_24h, mc.last_fetched, mc.source
 		FROM market_cache mc
 		WHERE mc.symbol IN (
-			SELECT DISTINCT asset_symbol FROM asset_rules WHERE is_active = true
+			SELECT DISTINCT asset_symbol FROM asset_rules WHERE user_id = ?
 		)
-		ORDER BY mc.symbol`,
+		ORDER BY mc.symbol`, userID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("user: query market_cache: %w", err)

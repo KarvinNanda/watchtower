@@ -71,8 +71,7 @@ All routes live directly under `/api` — there is no version prefix. "Cookie" i
 | POST | `/api/subscriptions/keywords` | Cookie | Create a keyword subscription |
 | DELETE | `/api/subscriptions/keywords/:id` | Cookie | Delete a keyword subscription |
 | GET | `/api/notifications` | Cookie | Paginated notification history, optional `type` (`asset`/`sentinel`) filter |
-| GET | `/api/market/snapshot` | Cookie | Latest cached price for every symbol the user actively tracks |
-| GET | `/api/market/:symbol` | Cookie | Latest cached price for a single symbol |
+| GET | `/api/market/snapshot` | Cookie | Latest cached price for every symbol the user has rules for (active or paused) |
 | GET | `/api/dashboard` | Cookie | Aggregated dashboard payload — subscription counts, last alert timestamps, market snapshot, recent notifications |
 | POST | `/webhook/telegram/asset` | No | Telegram webhook callback for the asset bot — only registered when `TELEGRAM_MODE=webhook`; rate-limited (shared with the sentinel webhook) to 100 req/min per IP |
 | POST | `/webhook/telegram/sentinel` | No | Telegram webhook callback for the sentinel bot — same conditions as above |
