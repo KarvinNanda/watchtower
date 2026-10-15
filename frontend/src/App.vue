@@ -1,12 +1,16 @@
 <script setup>
 import { NConfigProvider, NGlobalStyle, NLoadingBarProvider, NDialogProvider, NNotificationProvider, NMessageProvider } from 'naive-ui'
-import { computed } from 'vue'
+import { computed, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { currentTheme, currentThemeOverrides } from '@/plugins/naive'
+import { currentTheme, currentThemeOverrides, currentTokens } from '@/plugins/naive'
 import { naiveLocaleFor } from '@/plugins/naiveLocale'
+import { toCssVars, applyCssVars } from '@/theme/cssVars'
 
 const { locale } = useI18n()
 const naiveLocale = computed(() => naiveLocaleFor(locale.value))
+
+// Our own CSS reads --wt-* variables; keep them in step with the theme.
+watchEffect(() => applyCssVars(document.documentElement.style, toCssVars(currentTokens.value)))
 </script>
 
 <template>
