@@ -23,6 +23,7 @@ const (
 // markdownV2SpecialChars replaces every character Telegram's MarkdownV2
 // parse mode treats as a formatting entity with its escaped form.
 var markdownV2SpecialChars = strings.NewReplacer(
+	"\\", "\\\\",
 	"_", "\\_",
 	"*", "\\*",
 	"[", "\\[",

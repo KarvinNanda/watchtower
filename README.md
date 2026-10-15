@@ -118,6 +118,9 @@ Tests: `cd backend && go test ./...` and `cd frontend && npm test`.
 - Gold prices are scraped from JSON-LD on `harga-emas.org`; if the page changes, gold quotes stop updating until the scraper is fixed.
 - Twelve Data's free tier allows 800 calls/day, so the stock symbol list stays small.
 - "Check now" for sentinel runs the global sentinel check (deduplication is global), so other users with matching keywords may receive new items at the same time.
+- Asset alerts are information only, not financial advice. Buy, take-profit and stop-loss wording only repeats the labels you gave your own rules.
+- IDR amounts in Telegram messages use the free open.er-api.com USD/IDR rate, which updates once a day. Each message shows the rate and when it was updated; rules are always evaluated in USD. If no real rate is available, IDR amounts are hidden and ANTAM is skipped for that run.
+- All timestamps in Telegram messages use one timezone per installation (`APP_TIMEZONE`, default `Asia/Jakarta`).
 
 ## Project structure
 

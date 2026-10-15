@@ -6,6 +6,7 @@
 
 app_env: development
 app_port: 8080
+app_timezone: Asia/Jakarta
 frontend_url: ""
 cookie_secure: false
 

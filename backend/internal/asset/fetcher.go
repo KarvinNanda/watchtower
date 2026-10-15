@@ -298,26 +298,31 @@ func (f *AssetFetcher) FetchGold() (*FetchResult, error) {
 		return nil, fmt.Errorf("asset: fetch gold price: %w", err)
 	}
 
-	rate, err := currency.GetUSDToIDR()
+	result, err := goldResult(priceIDR, currency.Current(), time.Now())
 	if err != nil {
-		log.Printf("[ERROR] FetchGold: get usd/idr rate: %v", err)
-		return nil, fmt.Errorf("asset: convert gold price to usd: %w", err)
-	}
-	if rate == 0 {
-		err := fmt.Errorf("asset: usd/idr rate is zero")
 		log.Printf("[ERROR] FetchGold: %v", err)
 		return nil, err
 	}
+	return result, nil
+}
 
+// goldResult converts the IDR gold price to USD. It refuses the currency
+// package's hardcoded fallback rate: ANTAM rules are evaluated on PriceUSD,
+// so a made-up rate could fire or miss them. The symbol is then skipped for
+// this run instead.
+func goldResult(priceIDR float64, rate currency.Rate, now time.Time) (*FetchResult, error) {
+	if rate.Fallback || rate.Value <= 0 {
+		return nil, fmt.Errorf("asset: no real usd/idr rate to convert gold price (fallback=%t, value=%v)", rate.Fallback, rate.Value)
+	}
 	return &FetchResult{
 		Symbol:   "ANTAM",
-		PriceUSD: priceIDR / rate,
+		PriceUSD: priceIDR / rate.Value,
 		PriceIDR: priceIDR,
 		// harga-emas.org exposes only a point-in-time price. The cache layer
 		// computes the 24h change from its own snapshots (price_snapshots).
 		ChangePct24h: nil,
 		Source:       "harga-emas.org",
-		FetchedAt:    time.Now(),
+		FetchedAt:    now,
 	}, nil
 }
 

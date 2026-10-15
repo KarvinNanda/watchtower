@@ -12,6 +12,7 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
+	"github.com/karvin-nanda/watchtower/internal/alertmsg"
 	"github.com/karvin-nanda/watchtower/internal/notifier"
 	"github.com/karvin-nanda/watchtower/internal/sentinel"
 )
@@ -22,7 +23,7 @@ const (
 	// first_seen_at + 7 days.
 	sentinelItemRetention = 7 * 24 * time.Hour
 	// sentinelTitleTruncateLen bounds how much of an item's title appears in
-	// a batched message section and in the notification_logs summary.
+	// the notification_logs summary (alertmsg truncates the message itself).
 	sentinelTitleTruncateLen = 60
 )
 
@@ -44,23 +45,9 @@ type ProcessCounters struct {
 	Sent    int
 }
 
-// SentinelBatchItem is one matched sentinel item for a single user,
-// collected during a run and rendered as one section of that user's
-// batched message. Every field comes from the source feed itself.
-type SentinelBatchItem struct {
-	SourceType      string
-	Title           string
-	Description     string
-	URL             string
-	CVEID           string
-	Severity        string
-	CVSSScore       float64
-	KnownExploited  bool
-	RequiredAction  string
-	DueDate         string
-	Ransomware      bool
-	MatchedKeywords []string
-}
+// SentinelBatchItem is one matched item in a user's batch. It is the
+// alertmsg entry type itself, so the batch needs no conversion to render.
+type SentinelBatchItem = alertmsg.SentinelEntry
 
 // SentinelBatch accumulates every SentinelBatchItem matched for one user
 // during a single SentinelWorker.Run, so they can be delivered as one
@@ -87,6 +74,9 @@ type SentinelWorker struct {
 	mu sync.Mutex // serializes periodic and manual sentinel runs
 
 	notifLogs *notifier.LogRepository
+
+	// loc is the instance timezone (APP_TIMEZONE) for message timestamps.
+	loc *time.Location
 }
 
 // NewSentinelWorker wires together every dependency needed to run the
@@ -95,12 +85,14 @@ func NewSentinelWorker(
 	db *sql.DB,
 	fetcher *sentinel.SentinelFetcher,
 	notif SentinelNotifierInterface,
+	loc *time.Location,
 ) *SentinelWorker {
 	return &SentinelWorker{
 		db:        db,
 		fetcher:   fetcher,
 		notifier:  notif,
 		notifLogs: notifier.NewLogRepository(db),
+		loc:       loc,
 	}
 }
 
@@ -405,7 +397,7 @@ func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem) error {
 
 // dispatchBatches sends one combined Telegram message per user in batches
 // (splitting into multiple messages only if the combined text would exceed
-// Telegram's 4096-character limit — see buildBatchedMessages), and records
+// Telegram's 4096-character limit — see alertmsg.SentinelMessages), and records
 // exactly one notification_logs entry per user for the run.
 func (w *SentinelWorker) dispatchBatches(batches map[uint64]*SentinelBatch) (sentToUser map[uint64]int, usersNotified int) {
 	sentToUser = make(map[uint64]int)
@@ -413,14 +405,13 @@ func (w *SentinelWorker) dispatchBatches(batches map[uint64]*SentinelBatch) (sen
 		return sentToUser, 0
 	}
 
-	timestamp := time.Now().In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
-	timestampEscaped := notifier.EscapeTelegramMarkdown(timestamp)
+	at := time.Now().In(w.loc)
 
 	for _, batch := range batches {
 		if len(batch.Items) == 0 {
 			continue
 		}
-		if w.dispatchUserBatch(batch, timestampEscaped) {
+		if w.dispatchUserBatch(batch, at) {
 			sentToUser[batch.UserID] = len(batch.Items)
 		}
 		usersNotified++
@@ -429,15 +420,10 @@ func (w *SentinelWorker) dispatchBatches(batches map[uint64]*SentinelBatch) (sen
 }
 
 // dispatchUserBatch sends batch as one or more Telegram messages (per
-// buildBatchedMessages) and records exactly one notification_logs row for
+// alertmsg.SentinelMessages) and records exactly one notification_logs row for
 // the whole batch, reporting whether every message part sent successfully.
-func (w *SentinelWorker) dispatchUserBatch(batch *SentinelBatch, timestampEscaped string) bool {
-	blocks := make([]string, 0, len(batch.Items))
-	for _, item := range batch.Items {
-		blocks = append(blocks, buildSentinelItemBlock(batch.Language, item))
-	}
-
-	messages := buildBatchedMessages("🛡️ *WATCHTOWER SENTINEL REPORT*", timestampEscaped, blocks)
+func (w *SentinelWorker) dispatchUserBatch(batch *SentinelBatch, at time.Time) bool {
+	messages := alertmsg.SentinelMessages(batch.Language, at, batch.Items)
 
 	allSent := true
 	for _, msg := range messages {
@@ -457,7 +443,7 @@ func (w *SentinelWorker) dispatchUserBatch(batch *SentinelBatch, timestampEscape
 
 	titles := make([]string, 0, len(batch.Items))
 	for _, item := range batch.Items {
-		titles = append(titles, truncateRunes(item.Title, sentinelTitleTruncateLen))
+		titles = append(titles, alertmsg.TruncateRunes(item.Title, sentinelTitleTruncateLen))
 	}
 	summary := strings.Join(titles, ", ") + " sentinel alert triggered"
 
@@ -478,92 +464,4 @@ func (w *SentinelWorker) logNotification(userID uint64, summary string, status n
 		ContentSummary: summary,
 		Status:         status,
 	})
-}
-
-// sentinelDivider frames each item's section as a compact, scannable card
-// (see buildSentinelItemBlock) — computed once since EscapeTelegramMarkdown
-// is a pure function of a constant string.
-var sentinelDivider = notifier.EscapeTelegramMarkdown(strings.Repeat("-", 50))
-
-const sentinelExcerptLen = 200
-
-type sentinelLabels struct {
-	Severity, Status, Source, Action, Due, Ransomware, Keyword string
-}
-
-var (
-	sentinelLabelsEN = sentinelLabels{"SEVERITY", "STATUS", "SOURCE", "ACTION", "DUE", "RANSOMWARE", "KEYWORD"}
-	sentinelLabelsID = sentinelLabels{"TINGKAT BAHAYA", "STATUS", "SUMBER", "AKSI", "BATAS WAKTU", "RANSOMWARE", "KEYWORD"}
-)
-
-var sentinelSourceNames = map[string]string{
-	"cve":             "NVD",
-	"cisa_kev":        "CISA KEV",
-	"github_advisory": "GitHub Advisory",
-	"github":          "GitHub",
-	"exploit_db":      "Exploit-DB",
-	"rss":             "RSS",
-}
-
-// buildSentinelItemBlock formats one matched item's section within a
-// batched sentinel report. Labels follow lang ('en' for English, anything
-// else for Indonesian); source content stays as published (English).
-// Every dynamic field is escaped for Telegram MarkdownV2.
-func buildSentinelItemBlock(lang string, item SentinelBatchItem) string {
-	labels := sentinelLabelsID
-	if lang == "en" {
-		labels = sentinelLabelsEN
-	}
-	esc := notifier.EscapeTelegramMarkdown
-
-	lines := []string{sentinelDivider}
-
-	switch {
-	case item.KnownExploited:
-		lines = append(lines, labels.Status+": ACTIVELY EXPLOITED")
-	case item.Severity != "" && item.CVSSScore > 0:
-		lines = append(lines, labels.Severity+": "+esc(fmt.Sprintf("%s (%.1f)", item.Severity, item.CVSSScore)))
-	case item.Severity != "":
-		lines = append(lines, labels.Severity+": "+esc(item.Severity))
-	case item.SourceType == "cve" || item.SourceType == "github_advisory":
-		lines = append(lines, labels.Severity+": N/A")
-	}
-
-	source := sentinelSourceNames[item.SourceType]
-	if source == "" {
-		source = item.SourceType
-	}
-	lines = append(lines, labels.Source+": "+esc(source))
-
-	if item.CVEID != "" {
-		lines = append(lines, "CVE: "+esc(item.CVEID))
-	}
-	lines = append(lines, esc(truncateRunes(item.Title, sentinelTitleTruncateLen)))
-	if item.Description != "" && item.Description != item.Title {
-		lines = append(lines, esc(truncateRunes(item.Description, sentinelExcerptLen)))
-	}
-	if item.RequiredAction != "" {
-		lines = append(lines, labels.Action+": "+esc(item.RequiredAction))
-	}
-	if item.DueDate != "" {
-		lines = append(lines, labels.Due+": "+esc(item.DueDate))
-	}
-	if item.Ransomware {
-		lines = append(lines, labels.Ransomware+": known campaign use")
-	}
-	if len(item.MatchedKeywords) > 0 {
-		lines = append(lines, labels.Keyword+": "+esc(strings.Join(item.MatchedKeywords, ", ")))
-	}
-	lines = append(lines, "🔗 "+esc(item.URL), sentinelDivider)
-
-	return strings.Join(lines, "\n")
-}
-
-// truncateRunes bounds s to n runes, appending an ellipsis when truncated.
-func truncateRunes(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n]) + "…"
 }

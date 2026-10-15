@@ -10,6 +10,7 @@
 x-backend-env: &backend-env
   APP_ENV: ${APP_ENV:-}
   APP_PORT: ${APP_PORT:-}
+  APP_TIMEZONE: ${APP_TIMEZONE:-}
   FRONTEND_URL: ${FRONTEND_URL:-}
   COOKIE_SECURE: ${COOKIE_SECURE:-}
   # Only nginx and the scheduler can reach the api on the compose network,
