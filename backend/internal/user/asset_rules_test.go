@@ -173,3 +173,39 @@ func TestUpdateAssetRule_UnchangedSaveKeepsState(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestUpdateAssetRule_EditingFiredTrailingKeepsFiredState(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockUserService(t, 100)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WillReturnRows(sqlmock.NewRows(lockColumns).
+		AddRow("crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, true))
+	// Still inactive after the edit: the peak and cooldown reset, but the
+	// fired badge and the Re-arm button must stay, so triggered_* is kept.
+	mock.ExpectExec(`baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, week52_ref_usd = NULL, last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL WHERE id = \? AND user_id = \?$`).
+		WithArgs(false, "crypto", "BTC", "trailing_stop", nil, nil, nil, 5.0, 5, 7).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := svc.UpdateAssetRule(7, 5, user.UpdateAssetRuleRequest{Rule: &user.AssetRuleInput{
+		AssetType: "crypto", AssetSymbol: "BTC", RuleType: "trailing_stop", Pct: floatPtr(5),
+	}})
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRearmAssetRule_FiredTrailingResetsEverything(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockUserService(t, 100)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WillReturnRows(sqlmock.NewRows(lockColumns).
+		AddRow("crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, true))
+	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(false))
+	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(true))
+	mock.ExpectExec(`peak_price_usd = NULL[\s\S]*triggered_at = NULL, triggered_price_usd = NULL`).
+		WithArgs(true, 5, 7).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, svc.RearmAssetRule(7, 5))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

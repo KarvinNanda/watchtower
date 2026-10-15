@@ -57,11 +57,14 @@ var validDirections = map[string]bool{"above": true, "below": true}
 // intentDirections mirrors rules.IntentDirection (spec Q2).
 var intentDirections = map[string]string{"buy_target": "below", "take_profit": "above", "stop_loss": "below"}
 
+// stateResetKeepFiredSQL clears every scheduler-owned column except the
+// one-shot "fired" record of a trailing stop.
+const stateResetKeepFiredSQL = "baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, week52_ref_usd = NULL, " +
+	"last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL"
+
 // stateResetSQL clears every scheduler-owned column, so an edited or
 // re-armed rule starts like a new one.
-const stateResetSQL = "baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, week52_ref_usd = NULL, " +
-	"last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL, " +
-	"triggered_at = NULL, triggered_price_usd = NULL"
+const stateResetSQL = stateResetKeepFiredSQL + ", triggered_at = NULL, triggered_price_usd = NULL"
 
 // AssetRule mirrors an asset_rules row, including the read-only state the
 // UI shows.
@@ -343,10 +346,18 @@ func (s *UserService) updateRule(userID, ruleID uint64, def *AssetRuleInput, isA
 		clauses = append(clauses, "asset_type = ?", "asset_symbol = ?", "rule_type = ?", "direction = ?", "intent = ?", "level_usd = ?", "pct = ?")
 		args = append(args, def.AssetType, def.AssetSymbol, def.RuleType, def.Direction, def.Intent, def.LevelUSD, def.Pct)
 	}
-	// Turning a fired trailing stop back on must not reuse its old peak,
-	// or it fires again on the next run (spec §7.1).
-	reactivatingFired := def == nil && active && !cur.isActive && firedTrailing
-	if def != nil || reactivatingFired {
+	// Turning a fired trailing stop back on (re-arm or is_active=true) must
+	// not reuse its old peak, or it fires again on the next run (spec §7.1).
+	reactivatingFired := firedTrailing && active && !cur.isActive
+	// Editing a fired trailing stop that stays off resets its peak but keeps
+	// the fired record, so the UI still shows the badge and Re-arm (#26).
+	keepFired := firedTrailing && !active && target.RuleType == ruleTypeTrailingStop
+	switch {
+	case rearm || reactivatingFired:
+		clauses = append(clauses, stateResetSQL)
+	case def != nil && keepFired:
+		clauses = append(clauses, stateResetKeepFiredSQL)
+	case def != nil:
 		clauses = append(clauses, stateResetSQL)
 	}
 	args = append(args, ruleID, userID)
