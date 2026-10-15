@@ -145,13 +145,3 @@ func fetchRate() (Rate, error) {
 	}
 	return r, nil
 }
-
-// ConvertToIDR converts a USD amount to IDR using the current cached/live
-// USD -> IDR exchange rate.
-func ConvertToIDR(usd float64) (float64, error) {
-	rate, err := GetUSDToIDR()
-	if err != nil {
-		return 0, err
-	}
-	return usd * rate, nil
-}
