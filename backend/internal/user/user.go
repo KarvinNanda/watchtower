@@ -918,7 +918,7 @@ type MarketData struct {
 	Symbol       string
 	PriceUSD     float64
 	PriceIDR     float64
-	ChangePct24h float64
+	ChangePct24h *float64
 	LastFetched  time.Time
 	Source       string
 }
@@ -933,7 +933,7 @@ func (s *UserService) GetMarketSnapshot() ([]MarketData, error) {
 		SELECT mc.symbol, mc.price_usd, mc.price_idr, mc.change_pct_24h, mc.last_fetched, mc.source
 		FROM market_cache mc
 		WHERE mc.symbol IN (
-			SELECT DISTINCT asset_symbol FROM asset_subscriptions WHERE is_active = true
+			SELECT DISTINCT asset_symbol FROM asset_rules WHERE is_active = true
 		)
 		ORDER BY mc.symbol`,
 	)
@@ -944,10 +944,14 @@ func (s *UserService) GetMarketSnapshot() ([]MarketData, error) {
 
 	data := make([]MarketData, 0)
 	for rows.Next() {
-		var m MarketData
-		if err := rows.Scan(&m.Symbol, &m.PriceUSD, &m.PriceIDR, &m.ChangePct24h, &m.LastFetched, &m.Source); err != nil {
+		var (
+			m      MarketData
+			change sql.NullFloat64
+		)
+		if err := rows.Scan(&m.Symbol, &m.PriceUSD, &m.PriceIDR, &change, &m.LastFetched, &m.Source); err != nil {
 			return nil, fmt.Errorf("user: scan market_cache: %w", err)
 		}
+		m.ChangePct24h = nullFloatPtr(change)
 		data = append(data, m)
 	}
 

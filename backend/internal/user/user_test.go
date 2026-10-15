@@ -356,7 +356,7 @@ func TestGetMarketSnapshot_Success(t *testing.T) {
 	svc, mock := newMockUserService(t, 100)
 
 	rows := sqlmock.NewRows([]string{"symbol", "price_usd", "price_idr", "change_pct_24h", "last_fetched", "source"}).
-		AddRow("BTC", 65000.0, 1040000000.0, 2.5, time.Now(), "coingecko")
+		AddRow("BTC", 65000.0, 1040000000.0, nil, time.Now(), "coingecko")
 	mock.ExpectQuery(`SELECT mc.symbol`).WillReturnRows(rows)
 
 	data, err := svc.GetMarketSnapshot()
@@ -364,6 +364,7 @@ func TestGetMarketSnapshot_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, data, 1)
 	assert.Equal(t, "BTC", data[0].Symbol)
+	assert.Nil(t, data[0].ChangePct24h)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

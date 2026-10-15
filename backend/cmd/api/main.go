@@ -907,7 +907,7 @@ type marketDataResponse struct {
 	Symbol       string    `json:"symbol"`
 	PriceUSD     float64   `json:"price_usd"`
 	PriceIDR     float64   `json:"price_idr"`
-	ChangePct24h float64   `json:"change_pct_24h"`
+	ChangePct24h *float64  `json:"change_pct_24h"`
 	LastFetched  time.Time `json:"last_fetched"`
 	Source       string    `json:"source"`
 }
@@ -1022,7 +1022,7 @@ type marketQuoteResponse struct {
 	Symbol       string    `json:"symbol"`
 	PriceUSD     float64   `json:"price_usd"`
 	PriceIDR     float64   `json:"price_idr"`
-	ChangePct24h float64   `json:"change_pct_24h"`
+	ChangePct24h *float64  `json:"change_pct_24h"`
 	LastFetched  time.Time `json:"last_fetched"`
 	Source       string    `json:"source"`
 }
@@ -1031,12 +1031,18 @@ func marketQuoteHandler(sqlDB *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		symbol := c.Param("symbol")
 
-		var q marketQuoteResponse
+		var (
+			q      marketQuoteResponse
+			change sql.NullFloat64
+		)
 		err := sqlDB.QueryRowContext(c.Request.Context(), `
 			SELECT symbol, price_usd, price_idr, change_pct_24h, last_fetched, source
 			FROM market_cache
 			WHERE symbol = ?`, symbol,
-		).Scan(&q.Symbol, &q.PriceUSD, &q.PriceIDR, &q.ChangePct24h, &q.LastFetched, &q.Source)
+		).Scan(&q.Symbol, &q.PriceUSD, &q.PriceIDR, &change, &q.LastFetched, &q.Source)
+		if change.Valid {
+			q.ChangePct24h = &change.Float64
+		}
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				respondError(c, http.StatusNotFound, "not_found", "symbol not found in cache")
