@@ -52,20 +52,6 @@ type FetchResult struct {
 	Week52LowUSD  *float64
 	Source        string
 	FetchedAt     time.Time
-
-	// Technical indicators, populated only for stock symbols — see
-	// enrichWithTechnicalIndicators in technical.go. FetchCrypto/FetchGold
-	// results leave these at their zero value since Twelve Data's
-	// /time_series endpoint (the only historical data source wired up here)
-	// has no crypto or Antam gold equivalent.
-	RSI           float64
-	Volatility    float64
-	Trend         string
-	Signal        string
-	RangeLow14D   float64
-	RangeHigh14D  float64
-	TargetBuyUSD  float64
-	TargetSellUSD float64
 }
 
 // AssetFetcher fetches live market data for stocks, crypto, and gold. The
@@ -181,8 +167,8 @@ func recordStockAPICall() {
 }
 
 // FetchStock retrieves the latest quote for a stock ticker (e.g. "AAPL")
-// via Twelve Data. On a rate-limit response it retries exactly once after
-// waiting 60 seconds.
+// via Twelve Data's /quote (one API credit). On a rate-limit response it
+// retries exactly once after waiting 60 seconds.
 func (f *AssetFetcher) FetchStock(symbol string) (*FetchResult, error) {
 	result, err := f.fetchStockOnce(symbol)
 	if err != nil && errors.Is(err, errTwelveDataRateLimit) {
@@ -194,7 +180,6 @@ func (f *AssetFetcher) FetchStock(symbol string) (*FetchResult, error) {
 		return nil, err
 	}
 
-	f.enrichWithTechnicalIndicators(result, symbol)
 	return result, nil
 }
 
