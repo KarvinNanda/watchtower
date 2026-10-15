@@ -40,8 +40,8 @@ func TestParseNVD_ScoredCVE(t *testing.T) {
 func TestParseNVD_UnscoredCVE(t *testing.T) {
 	items, err := parseNVD(readFixture(t, "nvd.json"), fixtureNow)
 	require.NoError(t, err)
-	it := byID(items)["CVE-2026-99999"]
-	assert.Equal(t, "CVE-2026-99999", it.CVEID)
+	it := byID(items)["CVE-2026-109708"] // real, status "Deferred", no metrics
+	assert.Equal(t, "CVE-2026-109708", it.CVEID)
 	assert.Empty(t, it.Severity)
 	assert.Zero(t, it.CVSSScore)
 }
@@ -49,17 +49,19 @@ func TestParseNVD_UnscoredCVE(t *testing.T) {
 func TestParseNVD_PrimaryBeatsSecondary(t *testing.T) {
 	items, err := parseNVD(readFixture(t, "nvd.json"), fixtureNow)
 	require.NoError(t, err)
-	it := byID(items)["CVE-2026-88888"]
-	assert.Equal(t, "HIGH", it.Severity)
-	assert.InDelta(t, 7.5, it.CVSSScore, 0.001)
+	// Real: NVD Primary 5.5 vs CNA Secondary 6.2. The higher CNA score must
+	// not win, so this also proves the parser does not just take the max.
+	it := byID(items)["CVE-2026-74871"]
+	assert.Equal(t, "MEDIUM", it.Severity)
+	assert.InDelta(t, 5.5, it.CVSSScore, 0.001)
 }
 
 func TestParseNVD_FallsBackToV40(t *testing.T) {
 	items, err := parseNVD(readFixture(t, "nvd.json"), fixtureNow)
 	require.NoError(t, err)
-	it := byID(items)["CVE-2026-77777"]
-	assert.Equal(t, "CRITICAL", it.Severity)
-	assert.InDelta(t, 9.3, it.CVSSScore, 0.001)
+	it := byID(items)["CVE-2026-96535"] // real, status "Received", CVSS 4.0 only
+	assert.Equal(t, "MEDIUM", it.Severity)
+	assert.InDelta(t, 5.1, it.CVSSScore, 0.001)
 }
 
 func TestParseKEV_EnrichedAndWindowed(t *testing.T) {
@@ -95,4 +97,22 @@ func TestParseGitHubAdvisories(t *testing.T) {
 	assert.Empty(t, unscored.CVEID)
 	assert.Empty(t, unscored.Severity, `"unknown" severity is treated as no severity`)
 	assert.Zero(t, unscored.CVSSScore)
+}
+
+// Real advisories (trimmed) from GET /advisories, 2026-10-15. GitHub
+// deprecated "cvss" for "cvss_severities"; a missing score there is 0.0.
+func TestParseGitHubAdvisories_ReadsCVSSSeverities(t *testing.T) {
+	items, err := parseGitHubAdvisories(readFixture(t, "ghsa.json"), fixtureNow)
+	require.NoError(t, err)
+	m := byID(items)
+
+	v3 := m["GHSA-pwhx-cvv3-qj5c"]
+	assert.Equal(t, "HIGH", v3.Severity)
+	assert.InDelta(t, 8.2, v3.CVSSScore, 0.001)
+
+	// Only a CVSS 4.0 score: the deprecated "cvss" is null here, so reading
+	// it alone dropped the score of a critical advisory.
+	v4 := m["GHSA-p8wg-vrv2-v86f"]
+	assert.Equal(t, "CRITICAL", v4.Severity)
+	assert.InDelta(t, 9.2, v4.CVSSScore, 0.001)
 }
