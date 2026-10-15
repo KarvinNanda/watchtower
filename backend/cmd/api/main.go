@@ -596,6 +596,7 @@ type assetRuleResponse struct {
 	TriggeredPriceUSD *float64   `json:"triggered_price_usd"`
 	LastAlertedAt     *time.Time `json:"last_alerted_at"`
 	CreatedAt         time.Time  `json:"created_at"`
+	Supported         bool       `json:"supported"`
 }
 
 func toAssetRuleResponse(r user.AssetRule) assetRuleResponse {
@@ -603,7 +604,7 @@ func toAssetRuleResponse(r user.AssetRule) assetRuleResponse {
 		ID: r.ID, AssetType: r.AssetType, AssetSymbol: r.AssetSymbol, RuleType: r.RuleType,
 		Direction: r.Direction, Intent: r.Intent, LevelUSD: r.LevelUSD, Pct: r.Pct, IsActive: r.IsActive,
 		PeakPriceUSD: r.PeakPriceUSD, TriggeredAt: r.TriggeredAt, TriggeredPriceUSD: r.TriggeredPriceUSD,
-		LastAlertedAt: r.LastAlertedAt, CreatedAt: r.CreatedAt,
+		LastAlertedAt: r.LastAlertedAt, CreatedAt: r.CreatedAt, Supported: r.Supported,
 	}
 }
 

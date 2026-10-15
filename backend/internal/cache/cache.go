@@ -115,8 +115,8 @@ func (c *Cache) GetMarketData(ctx context.Context, symbol, assetType string) (*M
 	}
 
 	freshData := &MarketData{
-		// The requested symbol, not result.Symbol: FetchGold always
-		// reports "XAU", which made "ANTAM" a permanent cache miss.
+		// The requested symbol, not result.Symbol, so the cache key always
+		// matches what the caller asked for (FetchGold reports a fixed one).
 		Symbol:        symbol,
 		PriceUSD:      result.PriceUSD,
 		PriceIDR:      priceIDR,

@@ -83,6 +83,10 @@ type AssetRule struct {
 	TriggeredPriceUSD *float64
 	LastAlertedAt     *time.Time
 	CreatedAt         time.Time
+	// Supported is false for a symbol WatchTower cannot fetch (not on the
+	// whitelist, or listed under another asset type), e.g. a legacy
+	// free-form symbol copied from asset_subscriptions. Such a rule never fires.
+	Supported bool
 }
 
 // AssetRuleInput is a rule definition from the API. It never carries state.
@@ -224,6 +228,8 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 		r.Direction, r.Intent = nullStringPtr(direction), nullStringPtr(intent)
 		r.LevelUSD, r.Pct, r.PeakPriceUSD, r.TriggeredPriceUSD = nullFloatPtr(level), nullFloatPtr(pct), nullFloatPtr(peak), nullFloatPtr(trigPrice)
 		r.TriggeredAt, r.LastAlertedAt = nullTimePtr(triggeredAt), nullTimePtr(lastAlertedAt)
+		t, ok := asset.SymbolAssetType(r.AssetSymbol)
+		r.Supported = ok && t == r.AssetType
 		out = append(out, r)
 	}
 	return out, rows.Err()
