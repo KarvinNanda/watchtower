@@ -64,3 +64,30 @@ func TestRegisterRoutes_NoPerSymbolMarketRoute(t *testing.T) {
 	assert.True(t, paths["GET /api/market/snapshot"])
 	assert.False(t, paths["GET /api/market/:symbol"])
 }
+
+// The dashboard embeds the market snapshot; it must use the caller's id too,
+// or the #53 leak comes back through /api/dashboard.
+func TestDashboard_SnapshotUsesCallerID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sqlDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("user_id", uint64(7)); c.Next() })
+	r.GET("/dashboard", dashboardHandler(user.NewUserService(sqlDB, 100)))
+
+	empty := func(cols ...string) *sqlmock.Rows { return sqlmock.NewRows(cols) }
+	mock.ExpectQuery(`FROM asset_rules`).WillReturnRows(empty("id"))
+	mock.ExpectQuery(`.`).WillReturnRows(empty("id")) // keyword subscriptions
+	mock.ExpectQuery(`MAX\(sent_at\)`).WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(nil))
+	mock.ExpectQuery(`MAX\(sent_at\)`).WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(nil))
+	mock.ExpectQuery(`FROM market_cache mc`).WithArgs(uint64(7)).
+		WillReturnRows(empty("symbol", "price_usd", "price_idr", "change_pct_24h", "last_fetched", "source"))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM notification_logs`).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`FROM notification_logs`).WillReturnRows(empty("id"))
+
+	w := do(r, http.MethodGet, "/dashboard", "")
+
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
