@@ -3,6 +3,7 @@ import { computed, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NMenu, NButton, NIcon } from 'naive-ui'
+import { LayoutDashboard, ChartCandlestick, ShieldAlert, Bell, User, Send, LogOut, TowerControl } from '@lucide/vue'
 
 import { useAuthStore } from '@/stores/auth'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
@@ -15,17 +16,17 @@ const router = useRouter()
 const { t } = useI18n()
 const authStore = useAuthStore()
 
-function renderIcon(emoji) {
-  return () => h(NIcon, null, { default: () => h('span', emoji) })
+function renderIcon(icon) {
+  return () => h(NIcon, { component: icon, 'aria-hidden': 'true' })
 }
 
 const menuOptions = computed(() => [
-  { label: t('nav.dashboard'), key: 'dashboard', icon: renderIcon('🏠') },
-  { label: t('nav.assets'), key: 'assets', icon: renderIcon('📊') },
-  { label: t('nav.sentinel'), key: 'keywords', icon: renderIcon('🛡️') },
-  { label: t('nav.notifications'), key: 'notifications', icon: renderIcon('🔔') },
-  { label: t('nav.profile'), key: 'profile', icon: renderIcon('👤') },
-  { label: t('nav.telegram'), key: 'telegram-setup', icon: renderIcon('📱') },
+  { label: t('nav.dashboard'), key: 'dashboard', icon: renderIcon(LayoutDashboard) },
+  { label: t('nav.assets'), key: 'assets', icon: renderIcon(ChartCandlestick) },
+  { label: t('nav.sentinel'), key: 'keywords', icon: renderIcon(ShieldAlert) },
+  { label: t('nav.notifications'), key: 'notifications', icon: renderIcon(Bell) },
+  { label: t('nav.profile'), key: 'profile', icon: renderIcon(User) },
+  { label: t('nav.telegram'), key: 'telegram-setup', icon: renderIcon(Send) },
 ])
 
 const activeKey = computed(() => route.name)
@@ -43,7 +44,7 @@ function handleLogout() {
 <template>
   <div class="app-sidebar">
     <div class="app-sidebar__logo">
-      <span class="app-sidebar__logo-icon">🗼</span>
+      <n-icon class="app-sidebar__logo-icon" :component="TowerControl" size="22" aria-hidden="true" />
       <span class="app-sidebar__logo-text">{{ t('app.name') }}</span>
     </div>
 
@@ -61,7 +62,7 @@ function handleLogout() {
       </div>
       <n-button block quaternary @click="handleLogout">
         <template #icon>
-          <n-icon><span>🚪</span></n-icon>
+          <n-icon :component="LogOut" aria-hidden="true" />
         </template>
         {{ t('nav.logout') }}
       </n-button>

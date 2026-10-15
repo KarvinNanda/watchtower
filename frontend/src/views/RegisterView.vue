@@ -2,7 +2,8 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NCard, NForm, NFormItem, NInput, NButton, NAlert } from 'naive-ui'
+import { NCard, NForm, NFormItem, NInput, NButton, NAlert, NIcon } from 'naive-ui'
+import { TowerControl } from '@lucide/vue'
 
 import { useAuthStore } from '@/stores/auth'
 import { message } from '@/plugins/naive'
@@ -92,7 +93,7 @@ async function handleSubmit() {
 
     <div class="auth-page__center">
       <div class="auth-page__logo">
-        <span class="auth-page__logo-icon">🗼</span>
+        <n-icon class="auth-page__logo-icon" :component="TowerControl" size="32" aria-hidden="true" />
         <span class="auth-page__logo-text">{{ t('app.name') }}</span>
       </div>
 

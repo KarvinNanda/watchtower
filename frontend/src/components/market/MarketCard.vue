@@ -29,12 +29,12 @@ const formattedPct = computed(() => {
   <n-card size="small" :bordered="true" class="market-card">
     <div class="market-card__top">
       <span class="market-card__symbol">{{ data.symbol }}</span>
-      <n-tag :type="!hasChange ? 'default' : isPositive ? 'success' : 'error'" size="small" round>
+      <n-tag class="wt-num" :type="!hasChange ? 'default' : isPositive ? 'success' : 'error'" size="small" round>
         {{ formattedPct }}
       </n-tag>
     </div>
-    <div class="market-card__price-usd">{{ formattedUSD }}</div>
-    <div class="market-card__price-idr">{{ formattedIDR }}</div>
+    <div class="market-card__price-usd wt-num">{{ formattedUSD }}</div>
+    <div class="market-card__price-idr wt-num">{{ formattedIDR }}</div>
   </n-card>
 </template>
 
