@@ -52,3 +52,40 @@ func TestLoad_EmptyEnvFallsBackToDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 4, cfg.Scheduler.AssetIntervalHours)
 }
+
+func TestLoad_TimezoneDefaultsToJakarta(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	cfg, err := Load("does-not-exist.env")
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Jakarta", cfg.Scheduler.Timezone.String())
+}
+
+// docker-compose.yml passes ${APP_TIMEZONE:-}: unset arrives as "". That
+// must mean the default, not UTC (time.LoadLocation("") returns UTC).
+func TestLoad_EmptyTimezoneMeansDefault(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_TIMEZONE", "")
+	cfg, err := Load("does-not-exist.env")
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Jakarta", cfg.Scheduler.Timezone.String())
+}
+
+func TestLoad_TimezoneFromEnv(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_TIMEZONE", "Europe/Berlin")
+	cfg, err := Load("does-not-exist.env")
+	require.NoError(t, err)
+	assert.Equal(t, "Europe/Berlin", cfg.Scheduler.Timezone.String())
+}
+
+func TestLoad_InvalidTimezoneFails(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_TIMEZONE", "Mars/Olympus_Mons")
+	_, err := Load("does-not-exist.env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "APP_TIMEZONE")
+}

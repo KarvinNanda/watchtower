@@ -6,10 +6,14 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
+
+// defaultTimezone is used when APP_TIMEZONE is unset or empty.
+const defaultTimezone = "Asia/Jakarta"
 
 type ServerConfig struct {
 	Env  string
@@ -63,6 +67,8 @@ type ExternalAPIConfig struct {
 type SchedulerConfig struct {
 	AssetIntervalHours    int
 	SentinelIntervalHours int
+	// Timezone is used for timestamps in Telegram messages (APP_TIMEZONE).
+	Timezone *time.Location
 }
 
 type LimitsConfig struct {
@@ -93,6 +99,7 @@ type Config struct {
 var envBindings = map[string]string{
 	"app_env":                           "APP_ENV",
 	"app_port":                          "APP_PORT",
+	"app_timezone":                      "APP_TIMEZONE",
 	"frontend_url":                      "FRONTEND_URL",
 	"cookie_secure":                     "COOKIE_SECURE",
 	"trusted_proxies":                   "TRUSTED_PROXIES",
@@ -202,6 +209,16 @@ func Load(envPath string) (*Config, error) {
 	if cfg.JWT.Secret == "" && cfg.Server.Env != "development" {
 		return nil, fmt.Errorf("config: JWT_SECRET is required outside development")
 	}
+
+	tzName := v.GetString("app_timezone")
+	if tzName == "" {
+		tzName = defaultTimezone
+	}
+	loc, err := time.LoadLocation(tzName)
+	if err != nil {
+		return nil, fmt.Errorf("config: APP_TIMEZONE %q is not a valid IANA timezone: %w", tzName, err)
+	}
+	cfg.Scheduler.Timezone = loc
 
 	return cfg, nil
 }
