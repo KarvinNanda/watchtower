@@ -59,6 +59,7 @@ jobs:
           MIGRATION_TEST_DSN: root:ci-migrations@tcp(127.0.0.1:3306)/
         run: go test -tags integration ./internal/db/ -count=1 -v
 
+  linux-selfhost:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
