@@ -170,13 +170,19 @@ func TestDispatchUserBatch_FailedSendKeepsState(t *testing.T) {
 	batches := make(map[uint64]*UserAlertBatch)
 	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
 
-	// No UPDATE asset_rules: last_beyond stays false, so the next run fires again.
+	// sqlmock does not report unexpected calls, and applyPatch only logs its
+	// error, so "no UPDATE expected" alone proves nothing. Instead, set a trap:
+	// an UPDATE expectation that must stay unmatched after a failed send.
+	mock.MatchExpectationsInOrder(false)
+	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	ok := w.dispatchUserBatch(batches[1], "01 Jan 2026 00:00 WIB")
 
 	assert.False(t, ok)
-	assert.NoError(t, mock.ExpectationsWereMet())
+	err := mock.ExpectationsWereMet()
+	require.Error(t, err, "OnSent was written although the send failed: the alert would be lost")
+	assert.Contains(t, err.Error(), "UPDATE asset_rules", "only the UPDATE trap may stay unmatched")
 }
 
 func TestProcessSymbol_CryptoWeek52FailureDoesNotBlockPriceRules(t *testing.T) {
