@@ -25,7 +25,15 @@ var (
 	ErrDuplicateRule           = errors.New("an identical active rule already exists")
 	ErrCannotRearm             = errors.New("only a trailing_stop that has fired can be re-armed")
 	ErrRuleNotFound            = errors.New("rule not found")
+	ErrSymbolTypeMismatch      = errors.New("asset_symbol does not belong to asset_type")
 )
+
+// symbolTypeError names the symbol and type in its message ("BTC is not a
+// stock symbol") and matches ErrSymbolTypeMismatch with errors.Is.
+type symbolTypeError struct{ symbol, assetType string }
+
+func (e symbolTypeError) Error() string        { return e.symbol + " is not a " + e.assetType + " symbol" }
+func (e symbolTypeError) Is(target error) bool { return target == ErrSymbolTypeMismatch }
 
 const (
 	ruleTypePriceLevel   = "price_level"
@@ -108,8 +116,12 @@ func normalizeAssetRule(in AssetRuleInput) (AssetRuleInput, error) {
 	if out.AssetSymbol == "" || !assetSymbolPattern.MatchString(out.AssetSymbol) {
 		return AssetRuleInput{}, ErrInvalidAssetSymbol
 	}
-	if t, ok := asset.SymbolAssetType(out.AssetSymbol); !ok || t != out.AssetType {
+	t, ok := asset.SymbolAssetType(out.AssetSymbol)
+	if !ok {
 		return AssetRuleInput{}, ErrInvalidAssetSymbol
+	}
+	if t != out.AssetType {
+		return AssetRuleInput{}, symbolTypeError{symbol: out.AssetSymbol, assetType: out.AssetType}
 	}
 	if !validRuleTypes[out.RuleType] {
 		return AssetRuleInput{}, ErrInvalidRuleType

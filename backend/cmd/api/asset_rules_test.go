@@ -117,3 +117,10 @@ func TestListRules_ExplicitNulls(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"direction":null`)
 	assert.Contains(t, w.Body.String(), `"peak_price_usd":null`)
 }
+
+func TestCreateRule_SymbolOfAnotherTypeIs400WithClearMessage(t *testing.T) {
+	r, _ := newRuleTestRouter(t)
+	w := do(r, http.MethodPost, "/rules/assets", `{"asset_type":"stock","asset_symbol":"BTC","rule_type":"pct_change_24h","pct":5}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "BTC is not a stock symbol")
+}

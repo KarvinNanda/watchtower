@@ -41,7 +41,7 @@ func TestNormalizeAssetRule(t *testing.T) {
 		{"week52 ok", with(base("week52_break"), func(i *AssetRuleInput) { i.Direction = sp("above") }), nil},
 		{"week52 needs direction", base("week52_break"), ErrInvalidDirection},
 		{"week52 not for gold", AssetRuleInput{AssetType: "gold", AssetSymbol: "ANTAM", RuleType: "week52_break", Direction: sp("above")}, ErrWeek52NotForGold},
-		{"symbol of another type", AssetRuleInput{AssetType: "stock", AssetSymbol: "BTC", RuleType: "pct_change_24h", Pct: fp(5)}, ErrInvalidAssetSymbol},
+		{"symbol of another type", AssetRuleInput{AssetType: "stock", AssetSymbol: "BTC", RuleType: "pct_change_24h", Pct: fp(5)}, ErrSymbolTypeMismatch},
 		{"symbol not whitelisted", AssetRuleInput{AssetType: "stock", AssetSymbol: "BRK-B", RuleType: "pct_change_24h", Pct: fp(5)}, ErrInvalidAssetSymbol},
 		{"unknown rule type", base("volume_spike"), ErrInvalidRuleType},
 		{"unknown asset type", AssetRuleInput{AssetType: "bond", AssetSymbol: "BTC", RuleType: "pct_change_24h", Pct: fp(5)}, ErrInvalidAssetType},
@@ -63,4 +63,10 @@ func TestNormalizeAssetRule_DerivesDirectionAndCleansSymbol(t *testing.T) {
 	assert.Equal(t, "BTC", out.AssetSymbol)
 	require.NotNil(t, out.Direction)
 	assert.Equal(t, "below", *out.Direction)
+}
+
+func TestNormalizeAssetRule_TypeMismatchNamesTheSymbol(t *testing.T) {
+	_, err := normalizeAssetRule(AssetRuleInput{AssetType: "stock", AssetSymbol: "btc", RuleType: "pct_change_24h", Pct: fp(5)})
+	require.ErrorIs(t, err, ErrSymbolTypeMismatch)
+	assert.Equal(t, "BTC is not a stock symbol", err.Error())
 }
