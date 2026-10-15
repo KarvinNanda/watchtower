@@ -36,7 +36,29 @@ jobs:
             echo "bundle contains new Function; it would render a blank page under the CSP"; exit 1
           fi
 
-  linux-selfhost:
+  migration-tests:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          # Throwaway password for this CI-only container; not a real secret.
+          MYSQL_ROOT_PASSWORD: ci-migrations
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-migrations"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Migrations on real MySQL (legacy data, upgrade, rollback)
+        working-directory: backend
+        env:
+          MIGRATION_TEST_DSN: root:ci-migrations@tcp(127.0.0.1:3306)/
+        run: go test -tags integration ./internal/db/ -count=1 -v
+
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
