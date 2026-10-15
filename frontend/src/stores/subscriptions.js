@@ -11,7 +11,7 @@ export const useSubscriptionsStore = defineStore('subscriptions', () => {
   async function fetchAssets() {
     loading.value = true
     try {
-      const res = await subscriptionsApi.getAssetSubscriptions()
+      const res = await subscriptionsApi.getAssetRules()
       assets.value = res.data
     } finally {
       loading.value = false
@@ -19,17 +19,22 @@ export const useSubscriptionsStore = defineStore('subscriptions', () => {
   }
 
   async function createAsset(payload) {
-    await subscriptionsApi.createAssetSubscription(payload)
+    await subscriptionsApi.createAssetRule(payload)
     await fetchAssets()
   }
 
   async function updateAsset(id, payload) {
-    await subscriptionsApi.updateAssetSubscription(id, payload)
+    await subscriptionsApi.updateAssetRule(id, payload)
     await fetchAssets()
   }
 
   async function deleteAsset(id) {
-    await subscriptionsApi.deleteAssetSubscription(id)
+    await subscriptionsApi.deleteAssetRule(id)
+    await fetchAssets()
+  }
+
+  async function rearmAsset(id) {
+    await subscriptionsApi.rearmAssetRule(id)
     await fetchAssets()
   }
 
@@ -61,6 +66,7 @@ export const useSubscriptionsStore = defineStore('subscriptions', () => {
     createAsset,
     updateAsset,
     deleteAsset,
+    rearmAsset,
     fetchKeywords,
     createKeyword,
     deleteKeyword,

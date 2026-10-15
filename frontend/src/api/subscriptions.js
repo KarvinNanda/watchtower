@@ -1,19 +1,23 @@
 import api from './axios'
 
-export function getAssetSubscriptions() {
-  return api.get('/subscriptions/assets')
+export function getAssetRules() {
+  return api.get('/rules/assets')
 }
 
-export function createAssetSubscription(payload) {
-  return api.post('/subscriptions/assets', payload)
+export function createAssetRule(payload) {
+  return api.post('/rules/assets', payload)
 }
 
-export function updateAssetSubscription(id, payload) {
-  return api.put(`/subscriptions/assets/${id}`, payload)
+export function updateAssetRule(id, payload) {
+  return api.put(`/rules/assets/${id}`, payload)
 }
 
-export function deleteAssetSubscription(id) {
-  return api.delete(`/subscriptions/assets/${id}`)
+export function deleteAssetRule(id) {
+  return api.delete(`/rules/assets/${id}`)
+}
+
+export function rearmAssetRule(id) {
+  return api.post(`/rules/assets/${id}/rearm`)
 }
 
 export function getKeywordSubscriptions() {
