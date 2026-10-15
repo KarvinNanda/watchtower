@@ -67,7 +67,6 @@
     "rules": {
       "rule": "Rule",
       "rule_type": "Rule type",
-      "detail": "Detail",
       "type_price_level": "Price level",
       "type_pct_change_24h": "24h change",
       "type_trailing_stop": "Trailing stop",
@@ -89,7 +88,6 @@
       "summary_level_below": "Below {level}",
       "summary_pct": "24h change beyond ±{pct}%",
       "summary_trailing": "Drops {pct}% from peak",
-      "peak": "Peak: {price}",
       "peak_pending": "Peak is set on the next check",
       "fired": "Fired at {price}, {date}",
       "rearm": "Re-arm",
@@ -106,7 +104,20 @@
       "error_not_found": "This rule no longer exists.",
       "error_limit_reached": "The maximum number of tracked symbols has been reached.",
       "unsupported": "Symbol not supported",
-      "unsupported_hint": "WatchTower cannot fetch this symbol, so this rule never fires. Delete it or create a rule on a listed symbol."
+      "unsupported_hint": "WatchTower cannot fetch this symbol, so this rule never fires. Delete it or create a rule on a listed symbol.",
+      "distance": "Distance",
+      "passed": "passed",
+      "just_now": "just now",
+      "near_hint": "Within {pct}% of the level",
+      "change_vs_threshold": "{current} now / ±{threshold}%",
+      "stop_at": "{stop} (peak {peak})"
+    },
+    "load_error": "Could not load your rules.",
+    "card": {
+      "updated": "Updated {age}",
+      "price_unavailable": "Price unavailable",
+      "stale_hint": "Older than the {hours} h check interval",
+      "rules_of": "Rules for {symbol}"
     }
   },
   "keyword": {
@@ -197,7 +208,8 @@
     "close": "Close",
     "back": "Back",
     "required_field": "This field is required",
-    "session_expired": "Your session has expired. Please sign in again."
+    "session_expired": "Your session has expired. Please sign in again.",
+    "retry": "Retry"
   },
   "run": {
     "check_now": "Check now",

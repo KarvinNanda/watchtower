@@ -67,7 +67,6 @@
     "rules": {
       "rule": "Rule",
       "rule_type": "Tipe rule",
-      "detail": "Detail",
       "type_price_level": "Level harga",
       "type_pct_change_24h": "Perubahan 24 jam",
       "type_trailing_stop": "Trailing stop",
@@ -89,7 +88,6 @@
       "summary_level_below": "Di bawah {level}",
       "summary_pct": "Perubahan 24 jam melewati ±{pct}%",
       "summary_trailing": "Turun {pct}% dari peak",
-      "peak": "Peak: {price}",
       "peak_pending": "Peak diisi saat pengecekan berikutnya",
       "fired": "Fire di {price}, {date}",
       "rearm": "Re-arm",
@@ -106,7 +104,20 @@
       "error_not_found": "Rule ini sudah tidak ada.",
       "error_limit_reached": "Jumlah maksimum simbol yang dipantau sudah tercapai.",
       "unsupported": "Simbol tidak didukung",
-      "unsupported_hint": "WatchTower tidak bisa mengambil harga simbol ini, jadi rule ini tidak akan pernah fire. Hapus rule ini atau buat rule dengan simbol yang ada di daftar."
+      "unsupported_hint": "WatchTower tidak bisa mengambil harga simbol ini, jadi rule ini tidak akan pernah fire. Hapus rule ini atau buat rule dengan simbol yang ada di daftar.",
+      "distance": "Jarak",
+      "passed": "lewat",
+      "just_now": "baru saja",
+      "near_hint": "Dalam {pct}% dari level",
+      "change_vs_threshold": "{current} sekarang / ±{threshold}%",
+      "stop_at": "{stop} (puncak {peak})"
+    },
+    "load_error": "Gagal memuat rule Anda.",
+    "card": {
+      "updated": "Diperbarui {age}",
+      "price_unavailable": "Harga tidak tersedia",
+      "stale_hint": "Lebih lama dari interval cek {hours} jam",
+      "rules_of": "Rule untuk {symbol}"
     }
   },
   "keyword": {
@@ -197,7 +208,8 @@
     "close": "Tutup",
     "back": "Kembali",
     "required_field": "Wajib diisi",
-    "session_expired": "Sesi Anda telah berakhir. Silakan masuk kembali."
+    "session_expired": "Sesi Anda telah berakhir. Silakan masuk kembali.",
+    "retry": "Coba lagi"
   },
   "run": {
     "check_now": "Cek sekarang",
