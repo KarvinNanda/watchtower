@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -20,6 +21,10 @@ type ServerConfig struct {
 	// Keep false for self-hosting over http://localhost; set true only
 	// behind HTTPS.
 	CookieSecure bool
+	// TrustedProxies lists the IPs/CIDRs allowed to set X-Forwarded-For.
+	// Empty means none: the client IP is the TCP peer, so a client cannot
+	// pick its own rate-limit key with a forged header.
+	TrustedProxies []string
 }
 
 type DatabaseConfig struct {
@@ -90,6 +95,7 @@ var envBindings = map[string]string{
 	"app_port":                          "APP_PORT",
 	"frontend_url":                      "FRONTEND_URL",
 	"cookie_secure":                     "COOKIE_SECURE",
+	"trusted_proxies":                   "TRUSTED_PROXIES",
 	"db_host":                           "DB_HOST",
 	"db_port":                           "DB_PORT",
 	"db_user":                           "DB_USER",
@@ -146,10 +152,11 @@ func Load(envPath string) (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			Env:          v.GetString("app_env"),
-			Port:         v.GetInt("app_port"),
-			FrontendURL:  v.GetString("frontend_url"),
-			CookieSecure: v.GetBool("cookie_secure"),
+			Env:            v.GetString("app_env"),
+			Port:           v.GetInt("app_port"),
+			FrontendURL:    v.GetString("frontend_url"),
+			CookieSecure:   v.GetBool("cookie_secure"),
+			TrustedProxies: splitList(v.GetString("trusted_proxies")),
 		},
 		Database: DatabaseConfig{
 			Host:     v.GetString("db_host"),
@@ -219,4 +226,15 @@ func telegramMode(mode string) string {
 		return "webhook"
 	}
 	return "polling"
+}
+
+// splitList parses a comma-separated env value, dropping blanks.
+func splitList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
