@@ -38,3 +38,4 @@ sentinel_scheduler_interval_hours: 6
 max_unique_symbols: 100
 alert_cooldown_hours: 4
 alert_price_move_pct: 3
+twelve_data_manual_daily_credits: 400

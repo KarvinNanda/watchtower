@@ -89,3 +89,30 @@ func TestLoad_InvalidTimezoneFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "APP_TIMEZONE")
 }
+
+func TestLoad_ManualCreditsDefault(t *testing.T) {
+	t.Chdir("../..") // backend/, where configs/config.yaml lives
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	cfg, err := Load("does-not-exist.env")
+	require.NoError(t, err)
+	assert.Equal(t, 400, cfg.Limits.TwelveDataManualDailyCredits)
+}
+
+func TestLoad_ManualCreditsFromEnvAndZero(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("TWELVE_DATA_MANUAL_DAILY_CREDITS", "0")
+	cfg, err := Load("does-not-exist.env")
+	require.NoError(t, err)
+	assert.Equal(t, 0, cfg.Limits.TwelveDataManualDailyCredits, "0 disables manual stock refreshes")
+}
+
+func TestLoad_NegativeManualCreditsFails(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("TWELVE_DATA_MANUAL_DAILY_CREDITS", "-1")
+	_, err := Load("does-not-exist.env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TWELVE_DATA_MANUAL_DAILY_CREDITS")
+}

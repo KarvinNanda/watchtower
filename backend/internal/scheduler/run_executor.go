@@ -45,6 +45,7 @@ func (e *RunExecutor) Execute(ctx context.Context, run *runs.Run) (map[string]in
 			"triggered":     res.Triggered,
 			"sent":          res.Sent,
 			"errors":        res.Errors,
+			"stale":         res.Stale,
 		}, nil
 
 	case runs.TypeSentinel:

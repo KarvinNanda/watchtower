@@ -59,8 +59,8 @@ var intentDirections = map[string]string{"buy_target": "below", "take_profit": "
 
 // stateResetKeepFiredSQL clears every scheduler-owned column except the
 // one-shot "fired" record of a trailing stop.
-const stateResetKeepFiredSQL = "baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, week52_ref_usd = NULL, " +
-	"last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL"
+const stateResetKeepFiredSQL = "baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, peak_since = NULL, " +
+	"week52_ref_usd = NULL, last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL"
 
 // stateResetSQL clears every scheduler-owned column, so an edited or
 // re-armed rule starts like a new one.

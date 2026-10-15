@@ -53,6 +53,7 @@ type State struct {
 	BaselinePending     bool
 	LastBeyond          *bool
 	PeakPriceUSD        *float64
+	PeakSince           *time.Time // when peak tracking started (creation, re-arm or migration)
 	Week52RefUSD        *float64
 	LastAlertedPriceUSD *float64
 	CooldownUntil       *time.Time
@@ -76,6 +77,10 @@ type Market struct {
 	ChangePct24h *float64
 	Week52High   *float64
 	Week52Low    *float64
+	// HighUSD is the source's recent high and HighSince the start of the
+	// window it covers. Either nil means unknown.
+	HighUSD   *float64
+	HighSince *time.Time
 }
 
 // Options carries the per-run and per-user settings Evaluate needs.
@@ -118,6 +123,7 @@ type Patch struct {
 	ClearBaseline bool
 	LastBeyond    *bool
 	PeakPriceUSD  *float64
+	PeakSince     *time.Time
 	Week52RefUSD  *float64
 	Alert         *AlertMark
 	Fired         *FiredMark
@@ -125,7 +131,7 @@ type Patch struct {
 
 // IsEmpty reports whether the patch changes nothing.
 func (p Patch) IsEmpty() bool {
-	return !p.ClearBaseline && p.LastBeyond == nil && p.PeakPriceUSD == nil &&
+	return !p.ClearBaseline && p.LastBeyond == nil && p.PeakPriceUSD == nil && p.PeakSince == nil &&
 		p.Week52RefUSD == nil && p.Alert == nil && p.Fired == nil
 }
 

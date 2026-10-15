@@ -14,7 +14,7 @@ import (
 
 var ruleColumns = []string{
 	"id", "user_id", "rule_type", "direction", "intent", "level_usd", "pct", "params_version",
-	"baseline_pending", "last_beyond", "peak_price_usd", "week52_ref_usd",
+	"baseline_pending", "last_beyond", "peak_price_usd", "peak_since", "week52_ref_usd",
 	"last_alerted_price_usd", "cooldown_until",
 	"telegram_asset_chat_id", "alert_cooldown_hours", "preferred_language",
 }
@@ -26,7 +26,7 @@ func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
 		WithArgs("BTC", 7).
 		WillReturnRows(sqlmock.NewRows(ruleColumns).
 			AddRow(int64(11), int64(7), "price_level", "above", "take_profit", 120000.0, nil, int64(3),
-				false, true, nil, nil, 119000.0, cooldown, int64(7000), int64(4), "en"))
+				false, true, 118000.0, time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC), nil, 119000.0, cooldown, int64(7000), int64(4), "en"))
 
 	rows, err := w.loadRules(context.Background(), "BTC", 7)
 	require.NoError(t, err)
@@ -43,6 +43,8 @@ func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
 	require.NotNil(t, r.Rule.State.CooldownUntil)
 	assert.Equal(t, cooldown, *r.Rule.State.CooldownUntil)
 	assert.Equal(t, int64(7000), r.TelegramAssetChatID)
+	require.NotNil(t, r.Rule.State.PeakSince)
+	assert.Equal(t, time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC), *r.Rule.State.PeakSince)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -68,6 +70,11 @@ func TestBuildPatchUpdate(t *testing.T) {
 		"is_active = FALSE", "triggered_at = ?", "triggered_price_usd = ?",
 	}, clauses)
 	assert.Equal(t, []interface{}{at, 90.0, nil, at, 90.0}, args, "no cooldown is written as NULL")
+
+	since := time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)
+	clauses, args = buildPatchUpdate(rules.Patch{PeakPriceUSD: &peak, PeakSince: &since})
+	assert.Equal(t, []string{"peak_price_usd = ?", "peak_since = ?"}, clauses)
+	assert.Equal(t, []interface{}{101.5, since}, args)
 }
 
 func TestApplyPatch_GuardsOnParamsVersion(t *testing.T) {

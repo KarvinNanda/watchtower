@@ -102,26 +102,41 @@ func triggerFor(r Rule) Trigger {
 	return Trigger{Type: r.Type, Direction: r.Direction, Intent: r.Intent, LevelUSD: r.LevelUSD, Pct: r.Pct}
 }
 
-func boolPtr(v bool) *bool        { return &v }
-func floatPtr(v float64) *float64 { return &v }
+func boolPtr(v bool) *bool           { return &v }
+func floatPtr(v float64) *float64    { return &v }
+func timePtr(v time.Time) *time.Time { return &v }
 
 // pctEpsilon absorbs float rounding so that a drop of exactly Pct percent
 // fires (e.g. 0.3 * (1 - 0.073) must count as a 7.3% drop).
 const pctEpsilon = 1e-9
 
-// evalTrailingStop tracks the highest price seen at runs since the rule was
-// created or re-armed, and fires once when the price falls Pct percent
-// below it. It is one-shot: OnSent deactivates the rule. No cooldown.
+// evalTrailingStop tracks the highest price since the rule was created or
+// re-armed, and fires once when the price falls Pct percent below it. It
+// also counts the source's high (#21), but only when that high's window
+// starts at or after the time tracking started, so a spike from before
+// creation or re-arm never fires the rule. It is one-shot: OnSent
+// deactivates the rule. No cooldown.
 func evalTrailingStop(r Rule, m Market, now time.Time) Outcome {
 	price := m.PriceUSD
 	if r.State.PeakPriceUSD == nil {
-		return Outcome{Observed: Patch{PeakPriceUSD: floatPtr(price)}}
+		return Outcome{Observed: Patch{PeakPriceUSD: floatPtr(price), PeakSince: timePtr(now)}}
+	}
+
+	var observed Patch
+	since := r.State.PeakSince
+	if since == nil {
+		// Tracked before peak_since existed: tracking officially starts
+		// now, and no high can be trusted yet.
+		observed.PeakSince = timePtr(now)
 	}
 
 	peak := *r.State.PeakPriceUSD
-	var observed Patch
-	if price > peak {
-		peak = price
+	candidate := price
+	if since != nil && highCounts(m, *since) && *m.HighUSD > candidate {
+		candidate = *m.HighUSD
+	}
+	if candidate > peak {
+		peak = candidate
 		observed.PeakPriceUSD = floatPtr(peak)
 	}
 	if peak <= 0 || (peak-price)/peak*100 < r.Pct-pctEpsilon {
@@ -139,6 +154,12 @@ func evalTrailingStop(r Rule, m Market, now time.Time) Outcome {
 			Alert: &AlertMark{At: now, PriceUSD: price},
 		},
 	}
+}
+
+// highCounts reports whether the source high may raise a peak tracked
+// since `since`: its window must not start before tracking did.
+func highCounts(m Market, since time.Time) bool {
+	return m.HighUSD != nil && *m.HighUSD > 0 && m.HighSince != nil && !m.HighSince.Before(since)
 }
 
 // evalWeek52 compares the price with the 52-week extreme recorded at the

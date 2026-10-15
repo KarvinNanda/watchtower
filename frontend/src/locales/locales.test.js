@@ -25,11 +25,23 @@ describe('asset rules help text', () => {
     ['id', id],
   ])('%s interval help uses the configured hours', (_, messages) => {
     expect(messages.asset.rules.help_interval).toContain('{hours}')
+    // Check now refreshes prices older than 15 minutes (#20); the help
+    // must not say it only reuses the last fetched price.
+    expect(messages.asset.rules.help_interval).toContain('15')
   })
 })
 
 describe('locale parity', () => {
   it('en and id have exactly the same keys', () => {
     expect(flatKeys(id).sort()).toEqual(flatKeys(en).sort())
+  })
+})
+
+describe('stale prices message', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s shows the stale count', (_, messages) => {
+    expect(messages.run.stale_prices).toContain('{stale}')
   })
 })

@@ -26,7 +26,7 @@ type ruleRow struct {
 func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint64) ([]ruleRow, error) {
 	query := `
 		SELECT r.id, r.user_id, r.rule_type, r.direction, r.intent, r.level_usd, r.pct, r.params_version,
-			r.baseline_pending, r.last_beyond, r.peak_price_usd, r.week52_ref_usd,
+			r.baseline_pending, r.last_beyond, r.peak_price_usd, r.peak_since, r.week52_ref_usd,
 			r.last_alerted_price_usd, r.cooldown_until,
 			u.telegram_asset_chat_id, u.alert_cooldown_hours, u.preferred_language
 		FROM asset_rules r
@@ -57,11 +57,11 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 			level, pct                  sql.NullFloat64
 			lastBeyond                  sql.NullBool
 			peak, ref, lastAlertedPrice sql.NullFloat64
-			cooldownUntil               sql.NullTime
+			cooldownUntil, peakSince    sql.NullTime
 		)
 		if err := rows.Scan(
 			&row.Rule.ID, &row.UserID, &ruleType, &direction, &intent, &level, &pct, &row.ParamsVersion,
-			&row.Rule.State.BaselinePending, &lastBeyond, &peak, &ref,
+			&row.Rule.State.BaselinePending, &lastBeyond, &peak, &peakSince, &ref,
 			&lastAlertedPrice, &cooldownUntil,
 			&row.TelegramAssetChatID, &row.AlertCooldownHours, &row.PreferredLanguage,
 		); err != nil {
@@ -77,6 +77,9 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 			row.Rule.State.LastBeyond = &lastBeyond.Bool
 		}
 		row.Rule.State.PeakPriceUSD = nullFloat(peak)
+		if peakSince.Valid {
+			row.Rule.State.PeakSince = &peakSince.Time
+		}
 		row.Rule.State.Week52RefUSD = nullFloat(ref)
 		row.Rule.State.LastAlertedPriceUSD = nullFloat(lastAlertedPrice)
 		if cooldownUntil.Valid {
@@ -108,6 +111,10 @@ func buildPatchUpdate(p rules.Patch) (clauses []string, args []interface{}) {
 	if p.PeakPriceUSD != nil {
 		clauses = append(clauses, "peak_price_usd = ?")
 		args = append(args, *p.PeakPriceUSD)
+	}
+	if p.PeakSince != nil {
+		clauses = append(clauses, "peak_since = ?")
+		args = append(args, *p.PeakSince)
 	}
 	if p.Week52RefUSD != nil {
 		clauses = append(clauses, "week52_ref_usd = ?")

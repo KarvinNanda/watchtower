@@ -32,14 +32,14 @@ func (f *fakeRecorder) RunAndRecordWith(_ context.Context, fn func() error) erro
 }
 
 func TestRunExecutor_Asset(t *testing.T) {
-	a := &fakeAssetRunner{res: AssetRunResult{RulesChecked: 5, Triggered: 1, Sent: 1}}
+	a := &fakeAssetRunner{res: AssetRunResult{RulesChecked: 5, Triggered: 1, Sent: 1, Stale: 2}}
 	rec := &fakeRecorder{}
 	e := NewRunExecutor(a, &fakeSentinelRunner{}, rec)
 
 	summary, err := e.Execute(context.Background(), &runs.Run{Type: runs.TypeAsset, UserID: 7})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(7), a.gotUser)
-	assert.Equal(t, map[string]int{"rules_checked": 5, "triggered": 1, "sent": 1, "errors": 0}, summary)
+	assert.Equal(t, map[string]int{"rules_checked": 5, "triggered": 1, "sent": 1, "errors": 0, "stale": 2}, summary)
 	assert.Equal(t, 0, rec.calls, "a single-user asset run must not reset the global schedule")
 }
 
