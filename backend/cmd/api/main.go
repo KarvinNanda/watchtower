@@ -125,7 +125,7 @@ func main() {
 	router.Use(middleware.RequestSizeLimit(maxRequestBodyBytes))
 	router.Use(middleware.SQLInjectionGuard())
 
-	registerRoutes(router, database, authService, userService, cfg.Server.CookieSecure)
+	registerRoutes(router, database, authService, userService, cfg.Server.CookieSecure, cfg.Scheduler.AssetIntervalHours)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -222,7 +222,7 @@ func allowedOrigins(frontendURL string, isProduction bool) []string {
 	return origins
 }
 
-func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService, cookieSecure bool) {
+func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Service, userService *user.UserService, cookieSecure bool, assetIntervalHours int) {
 	router.GET("/health", healthHandler(database))
 
 	api := router.Group("/api")
@@ -251,7 +251,7 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 	protected.GET("/user/profile", getUserProfileHandler(userService))
 	protected.PUT("/user/profile", updateUserProfileHandler(userService))
 
-	registerAssetRuleRoutes(protected, userService)
+	registerAssetRuleRoutes(protected, userService, assetIntervalHours)
 
 	protected.GET("/subscriptions/keywords", listKeywordSubsHandler(userService))
 	protected.POST("/subscriptions/keywords", createKeywordSubHandler(userService))
@@ -641,15 +641,18 @@ type updateAssetRuleBody struct {
 	IsActive    *bool    `json:"is_active"`
 }
 
-func registerAssetRuleRoutes(g *gin.RouterGroup, svc *user.UserService) {
-	g.GET("/rules/assets", listAssetRulesHandler(svc))
+// registerAssetRuleRoutes mounts the asset rule endpoints. assetIntervalHours
+// (ASSET_SCHEDULER_INTERVAL_HOURS) is returned with the list so the UI can say
+// how often prices refresh.
+func registerAssetRuleRoutes(g *gin.RouterGroup, svc *user.UserService, assetIntervalHours int) {
+	g.GET("/rules/assets", listAssetRulesHandler(svc, assetIntervalHours))
 	g.POST("/rules/assets", createAssetRuleHandler(svc))
 	g.PUT("/rules/assets/:id", updateAssetRuleHandler(svc))
 	g.DELETE("/rules/assets/:id", deleteAssetRuleHandler(svc))
 	g.POST("/rules/assets/:id/rearm", rearmAssetRuleHandler(svc))
 }
 
-func listAssetRulesHandler(svc *user.UserService) gin.HandlerFunc {
+func listAssetRulesHandler(svc *user.UserService, assetIntervalHours int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
 		if err != nil {
@@ -665,7 +668,12 @@ func listAssetRulesHandler(svc *user.UserService) gin.HandlerFunc {
 		for _, r := range list {
 			result = append(result, toAssetRuleResponse(r))
 		}
-		respondSuccess(c, http.StatusOK, result, "asset rules retrieved")
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    result,
+			"meta":    gin.H{"asset_interval_hours": assetIntervalHours},
+			"message": "asset rules retrieved",
+		})
 	}
 }
 
