@@ -37,8 +37,7 @@ func main() {
 	if err != nil {
 		log.Printf("[ERROR] FetchCrypto BTC: %v", err)
 	} else {
-		fmt.Printf("BTC: $%.2f (%.2f%%)\n",
-			btc.PriceUSD, btc.ChangePct24h)
+		fmt.Printf("BTC: $%.2f (%s)\n", btc.PriceUSD, pctText(btc.ChangePct24h))
 	}
 
 	// Test stock
@@ -46,8 +45,7 @@ func main() {
 	if err != nil {
 		log.Printf("[ERROR] FetchStock NVDA: %v", err)
 	} else {
-		fmt.Printf("NVDA: $%.2f (%.2f%%)\n",
-			nvda.PriceUSD, nvda.ChangePct24h)
+		fmt.Printf("NVDA: $%.2f (%s)\n", nvda.PriceUSD, pctText(nvda.ChangePct24h))
 	}
 
 	// Test gold
@@ -57,4 +55,11 @@ func main() {
 	} else {
 		fmt.Printf("GOLD: $%.4f\n", gold.PriceUSD)
 	}
+}
+
+func pctText(p *float64) string {
+	if p == nil {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2f%%", *p)
 }

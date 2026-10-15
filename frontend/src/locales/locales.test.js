@@ -12,3 +12,15 @@ describe('run summary messages', () => {
     expect(messages.run.asset_summary).toContain('{errors}')
   })
 })
+
+function flatKeys(obj, prefix = '') {
+  return Object.entries(obj).flatMap(([k, v]) =>
+    v && typeof v === 'object' ? flatKeys(v, `${prefix}${k}.`) : [`${prefix}${k}`],
+  )
+}
+
+describe('locale parity', () => {
+  it('en and id have exactly the same keys', () => {
+    expect(flatKeys(id).sort()).toEqual(flatKeys(en).sort())
+  })
+})

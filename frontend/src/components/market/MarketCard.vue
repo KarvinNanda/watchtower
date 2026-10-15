@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { NCard, NTag } from 'naive-ui'
 
+import { formatUSD, formatIDR } from '@/utils/assetRules'
+
 const props = defineProps({
   data: {
     type: Object,
@@ -9,19 +11,15 @@ const props = defineProps({
   },
 })
 
-const isPositive = computed(() => props.data.change_pct_24h >= 0)
+const hasChange = computed(() => props.data.change_pct_24h != null)
+const isPositive = computed(() => hasChange.value && props.data.change_pct_24h >= 0)
 
-const formattedUSD = computed(() =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(props.data.price_usd),
-)
+const formattedUSD = computed(() => formatUSD(props.data.price_usd))
 
-const formattedIDR = computed(() =>
-  new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(
-    props.data.price_idr,
-  ),
-)
+const formattedIDR = computed(() => formatIDR(props.data.price_idr))
 
 const formattedPct = computed(() => {
+  if (!hasChange.value) return 'n/a'
   const sign = isPositive.value ? '+' : ''
   return `${sign}${props.data.change_pct_24h.toFixed(2)}%`
 })
@@ -31,7 +29,7 @@ const formattedPct = computed(() => {
   <n-card size="small" :bordered="true" class="market-card">
     <div class="market-card__top">
       <span class="market-card__symbol">{{ data.symbol }}</span>
-      <n-tag :type="isPositive ? 'success' : 'error'" size="small" round>
+      <n-tag :type="!hasChange ? 'default' : isPositive ? 'success' : 'error'" size="small" round>
         {{ formattedPct }}
       </n-tag>
     </div>

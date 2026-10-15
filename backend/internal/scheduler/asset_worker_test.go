@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,36 +11,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/karvin-nanda/watchtower/internal/asset"
+	"github.com/karvin-nanda/watchtower/internal/cache"
 	"github.com/karvin-nanda/watchtower/internal/notifier"
+	"github.com/karvin-nanda/watchtower/internal/rules"
 )
 
-func floatPtr(v float64) *float64    { return &v }
-func timePtr(t time.Time) *time.Time { return &t }
+func floatPtr(v float64) *float64 { return &v }
+func boolPtr(v bool) *bool        { return &v }
 
 type mockAssetNotifierCall struct {
 	ChatID  int64
 	Message string
 }
 
-// mockAssetNotifier is a NotifierInterface test double that just records
-// every call, so tests can assert on how many Telegram messages a batch
-// dispatch actually sent — the crux of the "combined message, not one per
-// symbol" behavior under test here.
+// mockAssetNotifier records every send; err makes every send fail.
 type mockAssetNotifier struct {
 	calls []mockAssetNotifierCall
+	err   error
 }
 
 func (m *mockAssetNotifier) SendAssetAlert(chatID int64, message string) error {
 	m.calls = append(m.calls, mockAssetNotifierCall{ChatID: chatID, Message: message})
-	return nil
+	return m.err
 }
 
-// newMockAssetWorker builds an AssetWorker with only the fields exercised
-// by the batching/dispatch logic under test — db (sqlmock-backed), notifier
-// (recording mock), notifLogs, and alertPriceMovePct. cache/redis
-// are left nil since evaluateSubscriber/appendTriggeredAlerts/dispatchBatches
-// never touch them.
+// fakeMarket is a marketSource test double.
+type fakeMarket struct {
+	data      map[string]*cache.MarketData
+	week52Err error
+}
+
+func (f *fakeMarket) GetMarketData(_ context.Context, symbol, _ string) (*cache.MarketData, error) {
+	d, ok := f.data[symbol]
+	if !ok {
+		return nil, errors.New("no market data")
+	}
+	return d, nil
+}
+
+func (f *fakeMarket) GetCryptoWeek52(_ context.Context, _ string) (float64, float64, error) {
+	if f.week52Err != nil {
+		return 0, 0, f.week52Err
+	}
+	return 120, 50, nil
+}
+
 func newMockAssetWorker(t *testing.T, alertPriceMovePct float64) (*AssetWorker, sqlmock.Sqlmock, *mockAssetNotifier) {
 	t.Helper()
 	db, mock, err := sqlmock.New()
@@ -52,192 +68,165 @@ func newMockAssetWorker(t *testing.T, alertPriceMovePct float64) (*AssetWorker, 
 		notifier:          mockNotif,
 		notifLogs:         notifier.NewLogRepository(db),
 		alertPriceMovePct: alertPriceMovePct,
+		maxUniqueSymbols:  100,
 	}
 	return w, mock, mockNotif
 }
 
-func sampleSubscriber(userID uint64, priceUpper *float64) SubscriberData {
-	return SubscriberData{
+// levelRow is a fresh (never evaluated) "above level" rule for userID.
+func levelRow(ruleID, userID uint64, level float64) ruleRow {
+	return ruleRow{
+		Rule:                rules.Rule{ID: ruleID, Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: level},
 		UserID:              userID,
-		AlertType:           "price_threshold",
-		PriceUpperUSD:       priceUpper,
+		ParamsVersion:       1,
 		TelegramAssetChatID: int64(userID) * 1000,
 		AlertCooldownHours:  4,
-		PreferredLanguage:   "id",
+		PreferredLanguage:   "en",
 	}
 }
 
-func sampleFetchResultFor(symbol string, price float64) *asset.FetchResult {
-	return &asset.FetchResult{
-		Symbol:       symbol,
-		PriceUSD:     price,
-		ChangePct24h: 1.0,
-		Source:       "test",
-		FetchedAt:    time.Now(),
-	}
-}
-
-func TestBatchInitializedOnce(t *testing.T) {
+func TestEvaluateRules_OneBatchPerUserAcrossSymbols(t *testing.T) {
 	t.Parallel()
-	w, _, _ := newMockAssetWorker(t, 5.0)
-
+	w, _, _ := newMockAssetWorker(t, 3)
 	batches := make(map[uint64]*UserAlertBatch)
-	cooldownHoursByUser := make(map[uint64]int)
 
-	// The same 2 subscribers are present for all 3 symbols below — this
-	// proves batches accumulates across calls (as it does across symbols
-	// within one AssetWorker.Run) rather than being recreated per symbol,
-	// which was one of the two hypothesized causes of the "BTC sent twice"
-	// bug (see appendTriggeredAlerts's caller, Run(), which creates batches
-	// exactly once before its symbol loop).
-	sub1 := sampleSubscriber(1, floatPtr(100))
-	sub2 := sampleSubscriber(2, floatPtr(100))
-	subscribers := []SubscriberData{sub1, sub2}
-
-	for _, symbol := range []string{"BTC", "ETH", "SOL"} {
-		fetchResult := sampleFetchResultFor(symbol, 150) // breaches PriceUpperUSD=100 for both subscribers
-		triggered := w.appendTriggeredAlerts(subscribers, fetchResult, 150*16000, false, batches, cooldownHoursByUser)
-		assert.Equal(t, 2, triggered, "both subscribers should trigger for %s", symbol)
+	for i, symbol := range []string{"BTC", "ETH", "SOL"} {
+		rows := []ruleRow{levelRow(uint64(10+i), 1, 100), levelRow(uint64(20+i), 2, 100)}
+		triggered := w.evaluateRules(context.Background(), rows, symbol, rules.Market{PriceUSD: 150}, 150*16000, runScope{}, batches)
+		assert.Equal(t, 2, triggered, symbol)
 	}
 
-	require.Len(t, batches, 2, "batches map must have exactly one entry per user, not per symbol")
-	require.Contains(t, batches, uint64(1))
-	require.Contains(t, batches, uint64(2))
-	assert.Len(t, batches[1].Alerts, 3, "user 1 should accumulate one alert per symbol across all 3 calls")
-	assert.Len(t, batches[2].Alerts, 3, "user 2 should accumulate one alert per symbol across all 3 calls")
+	require.Len(t, batches, 2, "one batch per user, not per symbol")
+	assert.Len(t, batches[1].Alerts, 3)
+	assert.Len(t, batches[2].Alerts, 3)
+}
 
-	// Verify dispatch actually sends ONE combined Telegram message
-	// covering all 3 symbols for user 1, not 3 separate messages.
-	w2, mock, mockNotif := newMockAssetWorker(t, 5.0)
-	mock.ExpectExec(`INSERT INTO alert_states`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`INSERT INTO alert_states`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`INSERT INTO alert_states`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+func TestEvaluateRules_TwoRulesOnOneSymbolBothFire(t *testing.T) {
+	t.Parallel()
+	w, _, _ := newMockAssetWorker(t, 3)
+	batches := make(map[uint64]*UserAlertBatch)
+	tp := levelRow(1, 1, 100)
+	tp.Rule.Intent = rules.IntentTakeProfit
+	plain := levelRow(2, 1, 120)
 
-	w2.dispatchUserBatch(batches[1], cooldownHoursByUser[1], "01 Jan 2026 00:00 WIB", time.Now())
+	triggered := w.evaluateRules(context.Background(), []ruleRow{tp, plain}, "BTC", rules.Market{PriceUSD: 130}, 0, runScope{}, batches)
 
-	require.Len(t, mockNotif.calls, 1, "3 triggered symbols for one user must produce exactly one combined message")
-	assert.Contains(t, mockNotif.calls[0].Message, "BTC")
-	assert.Contains(t, mockNotif.calls[0].Message, "ETH")
-	assert.Contains(t, mockNotif.calls[0].Message, "SOL")
+	assert.Equal(t, 2, triggered)
+	require.Len(t, batches[1].Alerts, 2)
+	assert.Equal(t, uint64(1), batches[1].Alerts[0].RuleID)
+	assert.Equal(t, uint64(2), batches[1].Alerts[1].RuleID)
+}
+
+func TestEvaluateRules_PersistsObservedStateWithoutFiring(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \? WHERE id = \? AND params_version = \?`).
+		WithArgs(false, 5, 1).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	batches := make(map[uint64]*UserAlertBatch)
+
+	triggered := w.evaluateRules(context.Background(), []ruleRow{levelRow(5, 1, 100)}, "BTC", rules.Market{PriceUSD: 90}, 0, runScope{}, batches)
+
+	assert.Equal(t, 0, triggered)
+	assert.Empty(t, batches)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestBatchNoDuplicateUsers(t *testing.T) {
+func TestEvaluateRules_ManualRunSkipsCooldown(t *testing.T) {
 	t.Parallel()
-	w, _, _ := newMockAssetWorker(t, 5.0)
+	w, _, _ := newMockAssetWorker(t, 3)
+	row := levelRow(5, 1, 100)
+	until := time.Now().Add(3 * time.Hour)
+	row.Rule.State = rules.State{LastBeyond: boolPtr(false), LastAlertedPriceUSD: floatPtr(104), CooldownUntil: &until}
 
-	batches := make(map[uint64]*UserAlertBatch)
-	cooldownHoursByUser := make(map[uint64]int)
+	periodic := w.evaluateRules(context.Background(), []ruleRow{row}, "BTC", rules.Market{PriceUSD: 105}, 0, runScope{}, map[uint64]*UserAlertBatch{})
+	manual := w.evaluateRules(context.Background(), []ruleRow{row}, "BTC", rules.Market{PriceUSD: 105}, 0, runScope{userID: 1, skipCooldown: true}, map[uint64]*UserAlertBatch{})
 
-	sub := sampleSubscriber(1, floatPtr(100))
-
-	// BTC triggers, then NVDA triggers, both for the same user.
-	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("BTC", 150), 150*16000, false, batches, cooldownHoursByUser)
-	w.appendTriggeredAlerts([]SubscriberData{sub}, sampleFetchResultFor("NVDA", 150), 150*16000, false, batches, cooldownHoursByUser)
-
-	require.Len(t, batches, 1, "one user triggering on two symbols must produce exactly one map entry, not two")
-	assert.Len(t, batches[1].Alerts, 2, "that one entry must contain both AlertItems")
-
-	symbols := []string{batches[1].Alerts[0].Symbol, batches[1].Alerts[1].Symbol}
-	assert.ElementsMatch(t, []string{"BTC", "NVDA"}, symbols)
+	assert.Equal(t, 0, periodic, "cooldown holds a periodic run")
+	assert.Equal(t, 1, manual, "Check now ignores cooldown")
 }
 
-func TestBatchEmptyWhenNoTrigger(t *testing.T) {
+func TestDispatchUserBatch_AppliesOnSentAfterSuccess(t *testing.T) {
 	t.Parallel()
-	w, _, _ := newMockAssetWorker(t, 5.0)
-
+	w, mock, notif := newMockAssetWorker(t, 3)
 	batches := make(map[uint64]*UserAlertBatch)
-	cooldownHoursByUser := make(map[uint64]int)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100), levelRow(2, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
 
-	// Price stays within every subscriber's threshold.
-	sub := sampleSubscriber(1, floatPtr(200))
-	fetchResult := sampleFetchResultFor("BTC", 150)
+	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?, last_alerted_at`).WithArgs(true, sqlmock.AnyArg(), 150.0, sqlmock.AnyArg(), 1, 1).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?, last_alerted_at`).WithArgs(true, sqlmock.AnyArg(), 150.0, sqlmock.AnyArg(), 2, 1).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	triggered := w.appendTriggeredAlerts([]SubscriberData{sub}, fetchResult, 150*16000, false, batches, cooldownHoursByUser)
+	ok := w.dispatchUserBatch(batches[1], "01 Jan 2026 00:00 WIB")
 
-	assert.Equal(t, 0, triggered)
-	assert.Empty(t, batches, "no message should be queued when no subscriber's threshold is breached")
+	assert.True(t, ok)
+	require.Len(t, notif.calls, 1, "two rules for one user go into one message")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestBatchCooldownRespected(t *testing.T) {
+func TestDispatchUserBatch_FailedSendKeepsState(t *testing.T) {
 	t.Parallel()
-	w := &AssetWorker{alertPriceMovePct: 5.0}
+	w, mock, notif := newMockAssetWorker(t, 3)
+	notif.err = errors.New("telegram down")
+	batches := make(map[uint64]*UserAlertBatch)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
 
-	lastAlertedPrice := 50000.0
-	subscriber := SubscriberData{
-		UserID:              1,
-		AlertType:           "price_threshold",
-		PriceUpperUSD:       floatPtr(50000),
-		TelegramAssetChatID: 1000,
-		AlertCooldownHours:  4,
-		PreferredLanguage:   "id",
-		LastAlertedPriceUSD: &lastAlertedPrice,
-		// Cooldown (4h) alerted 1h ago -> still 3h remaining.
-		CooldownUntil: timePtr(time.Now().Add(3 * time.Hour)),
+	// sqlmock does not report unexpected calls, and applyPatch only logs its
+	// error, so "no UPDATE expected" alone proves nothing. Instead, set a trap:
+	// an UPDATE expectation that must stay unmatched after a failed send.
+	mock.MatchExpectationsInOrder(false)
+	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	ok := w.dispatchUserBatch(batches[1], "01 Jan 2026 00:00 WIB")
+
+	assert.False(t, ok)
+	err := mock.ExpectationsWereMet()
+	require.Error(t, err, "OnSent was written although the send failed: the alert would be lost")
+	assert.Contains(t, err.Error(), "UPDATE asset_rules", "only the UPDATE trap may stay unmatched")
+}
+
+func TestProcessSymbol_CryptoWeek52FailureDoesNotBlockPriceRules(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	w.cache = &fakeMarket{
+		data:      map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150, PriceIDR: 2400000}},
+		week52Err: errors.New("coingecko 429"),
 	}
+	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(ruleColumns).
+		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, int64(1000), int64(4), "en").
+		AddRow(int64(2), int64(1), "week52_break", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, int64(1000), int64(4), "en"))
+	batches := make(map[uint64]*UserAlertBatch)
 
-	// Price is still beyond the threshold, but has only moved 0.2% since
-	// the last alert -- well under alertPriceMovePct (5%) -- so the
-	// cooldown should still suppress it.
-	fetchResult := sampleFetchResultFor("BTC", 50100)
-
-	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 50100*16000, false)
+	res, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto", NeedsWeek52: true}, runScope{}, batches)
 
 	require.NoError(t, err)
-	assert.False(t, triggered, "cooldown should suppress an alert when price hasn't moved enough to bypass it")
-	assert.Equal(t, AlertItem{}, item)
+	assert.Equal(t, symbolResult{checked: 2, triggered: 1, dataErrors: 1}, res)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestBatchCooldownBypassedByPriceMove(t *testing.T) {
-	t.Parallel()
-	w := &AssetWorker{alertPriceMovePct: 5.0}
+func TestRun_OneFailingSymbolDoesNotBlockOthers(t *testing.T) {
+	w, mock, _ := newMockAssetWorker(t, 3)
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"ETH": {Symbol: "ETH", PriceUSD: 90, PriceIDR: 1}}}
+	mock.ExpectQuery(`SELECT asset_symbol, MIN\(asset_type\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"asset_symbol", "asset_type", "needs_week52"}).
+			AddRow("BRK-B", "stock", int64(0)).
+			AddRow("ETH", "crypto", int64(0)))
+	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("ETH").WillReturnRows(sqlmock.NewRows(ruleColumns).
+		AddRow(int64(3), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, int64(1000), int64(4), "en"))
+	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?`).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	lastAlertedPrice := 50000.0
-	subscriber := SubscriberData{
-		UserID:              1,
-		AlertType:           "price_threshold",
-		PriceUpperUSD:       floatPtr(50000),
-		TelegramAssetChatID: 1000,
-		AlertCooldownHours:  4,
-		PreferredLanguage:   "id",
-		LastAlertedPriceUSD: &lastAlertedPrice,
-		CooldownUntil:       timePtr(time.Now().Add(3 * time.Hour)),
-	}
-
-	// Price has moved 6% since the last alert -- over alertPriceMovePct
-	// (5%) -- so the alert should fire despite the active cooldown.
-	fetchResult := sampleFetchResultFor("BTC", 53000)
-
-	item, triggered, err := w.evaluateSubscriber(subscriber, fetchResult, 53000*16000, false)
+	res, err := w.run(runScope{})
 
 	require.NoError(t, err)
-	require.True(t, triggered, "a price move beyond alertPriceMovePct should bypass an active cooldown")
-	assert.Equal(t, "BTC", item.Symbol)
-	assert.Equal(t, "upper", item.TriggerType)
+	assert.Equal(t, AssetRunResult{RulesChecked: 1, Errors: 1}, res)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestBuildAssetItemBlock_HasNoAICommentaryLine(t *testing.T) {
-	t.Parallel()
-	block := buildAssetItemBlock("en", AlertItem{
-		Symbol:      "BTC",
-		PriceUSD:    65000,
-		PriceIDR:    65000 * 16000,
-		ChangePct:   3.2,
-		TriggerType: "upper",
-	})
-
-	assert.Contains(t, block, "BTC")
-	assert.Contains(t, block, "Upper Bound")
-	assert.Equal(t, 3, strings.Count(block, "\n"), "block must be exactly 4 lines: symbol, price, 24h, trigger")
-}
-
-func TestRunForUser_WaitsForLockAndHandlesNoSubscriptions(t *testing.T) {
-	w, mock, _ := newMockAssetWorker(t, 5.0)
-	w.maxUniqueSymbols = 100
-	mock.ExpectQuery(`SELECT DISTINCT asset_symbol, asset_type`).
+func TestRunForUser_WaitsForLockAndHandlesNoRules(t *testing.T) {
+	w, mock, _ := newMockAssetWorker(t, 3)
+	mock.ExpectQuery(`FROM asset_rules[\s\S]*AND user_id = \?`).
 		WithArgs(7, 100).
-		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type"}))
+		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type", "needs_week52"}))
 
 	w.mu.Lock()
 	done := make(chan AssetRunResult, 1)
@@ -256,54 +245,91 @@ func TestRunForUser_WaitsForLockAndHandlesNoSubscriptions(t *testing.T) {
 
 	select {
 	case res := <-done:
-		assert.Equal(t, AssetRunResult{}, res, "no subscriptions means an all-zero summary, not an error")
+		assert.Equal(t, AssetRunResult{}, res)
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunForUser never ran after the lock was released")
 	}
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestLoadSubscribers_ScopedToUser(t *testing.T) {
-	w, mock, _ := newMockAssetWorker(t, 5.0)
-	mock.ExpectQuery(`AND sub\.user_id = \?`).
-		WithArgs("BTC", 7).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"user_id", "alert_type", "price_lower_usd", "price_upper_usd", "pct_change_threshold",
-			"telegram_asset_chat_id", "alert_cooldown_hours", "preferred_language",
-			"last_alert_type", "last_alerted_price_usd", "cooldown_until",
-		}))
-
-	subs, err := w.loadSubscribers(context.Background(), "BTC", 7)
-	require.NoError(t, err)
-	assert.Empty(t, subs)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestEvaluateSubscriber_SkipCooldownForManualRun(t *testing.T) {
-	t.Parallel()
-	w := &AssetWorker{alertPriceMovePct: 5.0}
-	lastAlertedPrice := 50000.0
-	subscriber := SubscriberData{
-		UserID: 1, AlertType: "price_threshold", PriceUpperUSD: floatPtr(50000),
-		TelegramAssetChatID: 1000, AlertCooldownHours: 4, PreferredLanguage: "id",
-		LastAlertedPriceUSD: &lastAlertedPrice, CooldownUntil: timePtr(time.Now().Add(3 * time.Hour)),
-	}
-
-	_, triggered, err := w.evaluateSubscriber(subscriber, sampleFetchResultFor("BTC", 50100), 50100*16000, true)
-	require.NoError(t, err)
-	assert.True(t, triggered, "a manual run must ignore the cooldown")
-}
-
 func TestRun_ReturnsErrorWhenEverySymbolFailed(t *testing.T) {
-	w, mock, _ := newMockAssetWorker(t, 5.0)
-	w.maxUniqueSymbols = 100
-	mock.ExpectQuery(`SELECT DISTINCT asset_symbol, asset_type`).
-		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type"}).AddRow("BTC", "crypto"))
+	w, mock, _ := newMockAssetWorker(t, 3)
+	w.cache = &fakeMarket{}
+	mock.ExpectQuery(`SELECT asset_symbol, MIN\(asset_type\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type", "needs_week52"}).AddRow("BTC", "crypto", int64(0)))
 
-	// cache is nil, so fetching market data fails for the only symbol —
-	// the same outcome as running with no network.
-	err := w.Run()
-
-	assert.Error(t, err, "a periodic run where nothing could be fetched must be recorded as failed so it is retried")
+	assert.Error(t, w.Run(), "a periodic run where nothing could be fetched must be retried")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBuildAssetItemBlock_FourLines(t *testing.T) {
+	t.Parallel()
+	block := buildAssetItemBlock("en", AlertItem{
+		Symbol: "BTC", PriceUSD: 65000, PriceIDR: 65000 * 16000, ChangePct: floatPtr(-3.2),
+		Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, Intent: rules.IntentTakeProfit, LevelUSD: 64000},
+	})
+	assert.Contains(t, block, "BTC")
+	assert.Contains(t, block, `\-3\.20%`)
+	// "$" is not a MarkdownV2 special character; "-", "(", ")" and "." are.
+	assert.Contains(t, block, `Reached your take\-profit level \($64,000\.00\)`)
+	assert.Equal(t, 3, strings.Count(block, "\n"), "symbol, price, 24h, trigger")
+}
+
+func TestBuildAssetItemBlock_UnknownChangeIsNA(t *testing.T) {
+	t.Parallel()
+	block := buildAssetItemBlock("id", AlertItem{Symbol: "ANTAM", PriceUSD: 146, PriceIDR: 2392157,
+		Trigger: rules.Trigger{Type: rules.TypePctChange24h, Pct: 2}})
+	assert.Contains(t, block, "24h: n/a")
+}
+
+func TestTriggerLine(t *testing.T) {
+	cases := []struct {
+		lang string
+		trig rules.Trigger
+		want string
+	}{
+		{"en", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentBuyTarget, LevelUSD: 90000}, "Reached your buy target ($90,000.00)"},
+		{"id", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentStopLoss, LevelUSD: 85000}, "Mencapai level stop-loss kamu ($85,000.00)"},
+		{"en", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: 120000}, "Above $120,000.00"},
+		{"id", rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, LevelUSD: 1}, "Di bawah $1.00"},
+		{"en", rules.Trigger{Type: rules.TypePctChange24h, Pct: 5}, "24h change beyond ±5%"},
+		{"id", rules.Trigger{Type: rules.TypePctChange24h, Pct: 2.5}, "Perubahan 24 jam melewati ±2.5%"},
+		{"en", rules.Trigger{Type: rules.TypeTrailingStop, Pct: 10, PeakPriceUSD: 126080}, "Down 10% or more from peak $126,080.00"},
+		{"id", rules.Trigger{Type: rules.TypeTrailingStop, Pct: 10, PeakPriceUSD: 100}, "Turun 10% atau lebih dari peak $100.00"},
+		{"en", rules.Trigger{Type: rules.TypeWeek52Break, Direction: rules.DirectionAbove, PrevRefUSD: 348.15}, "New 52-week high (previous $348.15)"},
+		{"id", rules.Trigger{Type: rules.TypeWeek52Break, Direction: rules.DirectionBelow, PrevRefUSD: 243.42}, "52-week low baru (sebelumnya $243.42)"},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, triggerLine(tc.lang, tc.trig))
+	}
+}
+
+func TestFormatUSD_SmallPrices(t *testing.T) {
+	assert.Equal(t, "$61,633.00", formatUSD(61633))
+	assert.Equal(t, "$0.5", formatUSD(0.5))
+	assert.Equal(t, "$0.00001234", formatUSD(0.00001234))
+	assert.Equal(t, "$0.12345679", formatUSD(0.123456789), "at most 8 decimals, like the UI")
+}
+
+func TestFormatIDR_SmallPrices(t *testing.T) {
+	assert.Equal(t, "Rp 1,108,743,364", formatIDR(1108743364))
+	assert.Equal(t, "Rp 0.1966", formatIDR(0.19663), "SHIB in IDR must not read as Rp 0")
+	assert.Equal(t, "Rp 0", formatIDR(0))
+}
+
+func TestProcessSymbol_ZeroPriceIsAnError(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	// CoinGecko can return "current_price": null, which decodes to 0. Evaluating
+	// that would fire every armed trailing stop and "below" level.
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 0}}}
+	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(ruleColumns).
+		AddRow(int64(1), int64(1), "trailing_stop", nil, nil, nil, 10.0, int64(1), false, nil, 100.0, nil, nil, nil, int64(1000), int64(4), "en"))
+	batches := map[uint64]*UserAlertBatch{}
+
+	_, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, runScope{}, batches)
+
+	require.Error(t, err)
+	assert.Empty(t, batches, "a zero price must never fire a rule")
+	assert.Error(t, mock.ExpectationsWereMet(), "rules must not even be loaded for an invalid price")
 }
