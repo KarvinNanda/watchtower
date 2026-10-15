@@ -2,8 +2,8 @@
 // CSS variables are both built from this file. Do not write color literals
 // anywhere else: guards.test.js rejects them in .vue files.
 //
-// Text tokens are checked for 4.5:1 contrast on surface and bg in
-// tokens.test.js. The dark primary is lighter than before (#7c6af7 → #8f80f8)
+// Text tokens are checked for 4.5:1 contrast on surface, bg, surfaceRaised
+// and the highlighted row (firedTint over surface) in tokens.test.js. The dark primary is lighter than before (#7c6af7 → #8f80f8)
 // so it is readable as link text, with dark text on primary buttons.
 export const tokens = {
   dark: {
@@ -26,7 +26,7 @@ export const tokens = {
     fired: '#fbbd23',
     firedHover: '#fccb4f',
     firedPressed: '#e0a710',
-    firedTint: 'rgba(251, 189, 35, 0.12)',
+    firedTint: 'rgba(251, 189, 35, 0.08)',
     armed: '#a99cfa',
     stale: '#fb923c',
     danger: '#f87272',
@@ -36,7 +36,7 @@ export const tokens = {
   light: {
     bg: '#f8fafc',
     surface: '#ffffff',
-    surfaceRaised: '#f1f5f9',
+    surfaceRaised: '#f5f7fa',
     border: '#e2e8f0',
     text: '#1e293b',
     textMuted: '#42536b',
@@ -53,7 +53,7 @@ export const tokens = {
     fired: '#a16207',
     firedHover: '#854d0e',
     firedPressed: '#713f12',
-    firedTint: 'rgba(161, 98, 7, 0.10)',
+    firedTint: 'rgba(161, 98, 7, 0.06)',
     armed: '#5b46d1',
     stale: '#c2410c',
     danger: '#b91c1c',

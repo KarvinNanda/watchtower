@@ -9,6 +9,14 @@ function luminance(hex) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
+// composite blends an rgba() tint over an opaque #rrggbb background.
+function composite(rgba, hex) {
+  const [r, g, b, alpha] = rgba.match(/[\d.]+/g).map(Number)
+  const base = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+  const mixed = [r, g, b].map((c, i) => Math.round(c * alpha + base[i] * (1 - alpha)))
+  return '#' + mixed.map((c) => c.toString(16).padStart(2, '0')).join('')
+}
+
 function contrast(a, b) {
   const [x, y] = [luminance(a), luminance(b)]
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
@@ -33,6 +41,17 @@ describe('tokens', () => {
     for (const key of TEXT_TOKENS) {
       expect(contrast(t[key], t.surface), `${key} on surface`).toBeGreaterThanOrEqual(4.5)
       expect(contrast(t[key], t.bg), `${key} on bg`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  // Text is also drawn on the card header (surfaceRaised) and on a row
+  // highlighted with firedTint over surface.
+  it.each(['dark', 'light'])('%s text tokens reach 4.5:1 on surfaceRaised and the highlighted row', (name) => {
+    const t = tokens[name]
+    const highlighted = composite(t.firedTint, t.surface)
+    for (const key of TEXT_TOKENS) {
+      expect(contrast(t[key], t.surfaceRaised), `${key} on surfaceRaised`).toBeGreaterThanOrEqual(4.5)
+      expect(contrast(t[key], highlighted), `${key} on highlighted row`).toBeGreaterThanOrEqual(4.5)
     }
   })
 
