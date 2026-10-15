@@ -1,15 +1,20 @@
 package scheduler
 
 import (
+	"strconv"
+
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 )
 
 // formatUSD renders amount as a thousands-separated USD string, e.g.
-// formatUSD(61633.0) == "$61,633.00". Used wherever a price appears in a
-// Telegram alert message — fmt.Sprintf's "%.2f" alone has no thousands
-// separator and would render as the much harder to read "$61633.00".
+// formatUSD(61633.0) == "$61,633.00". Amounts below $1 keep up to 8
+// significant decimals (formatUSD(0.00001234) == "$0.00001234") so small
+// crypto prices never collapse to "$0.00".
 func formatUSD(amount float64) string {
+	if amount > -1 && amount < 1 && amount != 0 {
+		return "$" + strconv.FormatFloat(amount, 'f', -1, 64)
+	}
 	p := message.NewPrinter(language.English)
 	return p.Sprintf("$%.2f", amount)
 }

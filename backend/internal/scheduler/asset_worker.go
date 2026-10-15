@@ -7,7 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +18,7 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/cache"
 	"github.com/karvin-nanda/watchtower/internal/currency"
 	"github.com/karvin-nanda/watchtower/internal/notifier"
+	"github.com/karvin-nanda/watchtower/internal/rules"
 )
 
 const (
@@ -32,13 +33,17 @@ type NotifierInterface interface {
 	SendAssetAlert(chatID int64, message string) error
 }
 
+// marketSource is the subset of cache.Cache the worker reads from,
+// allowing tests to inject fake market data.
+type marketSource interface {
+	GetMarketData(ctx context.Context, symbol, assetType string) (*cache.MarketData, error)
+	GetCryptoWeek52(ctx context.Context, symbol string) (high, low float64, err error)
+}
+
 // AssetWorker periodically fetches market data (via the Redis/MySQL cache
-// layer), evaluates every active asset subscription for alert conditions,
-// and notifies subscribers whose thresholds are breached. Every triggered
-// alert for a given user within one run is batched into a single Telegram
-// message (see UserAlertBatch) rather than sent as separate messages per
-// symbol, to avoid spamming a user who subscribes to several assets that
-// trigger in the same run.
+// layer), evaluates every active asset rule with rules.Evaluate, and
+// notifies users whose rules fire. Every alert for a given user within one
+// run is batched into a single Telegram message (see UserAlertBatch).
 type AssetWorker struct {
 	db       *sql.DB
 	redis    *redis.Client
@@ -46,7 +51,7 @@ type AssetWorker struct {
 
 	mu sync.Mutex // serializes periodic and manual asset runs
 
-	cache             *cache.Cache
+	cache             marketSource
 	notifLogs         *notifier.LogRepository
 	maxUniqueSymbols  int
 	alertPriceMovePct float64
@@ -75,41 +80,30 @@ func NewAssetWorker(
 	}
 }
 
-// SymbolInfo identifies a distinct subscribed asset symbol and its type.
+// SymbolInfo identifies a distinct symbol with at least one active rule.
+// NeedsWeek52 is true when one of those rules is a week52_break.
 type SymbolInfo struct {
-	Symbol    string
-	AssetType string
-}
-
-// SubscriberData is one user's subscription to a symbol, joined with their
-// notification preferences and their current alert cooldown state.
-type SubscriberData struct {
-	UserID              uint64
-	AlertType           string
-	PriceLowerUSD       *float64
-	PriceUpperUSD       *float64
-	PctChangeThreshold  *float64
-	TelegramAssetChatID int64
-	AlertCooldownHours  int
-	PreferredLanguage   string
-	LastAlertType       *string
-	LastAlertedPriceUSD *float64
-	CooldownUntil       *time.Time
-}
-
-// AlertItem is one triggered symbol alert for a single user, collected
-// during a run and rendered as one section of that user's batched message.
-type AlertItem struct {
 	Symbol      string
-	PriceUSD    float64
-	PriceIDR    float64
-	ChangePct   *float64
-	TriggerType string
+	AssetType   string
+	NeedsWeek52 bool
 }
 
-// UserAlertBatch accumulates every AlertItem triggered for one user during
-// a single AssetWorker.Run, so they can be delivered as one combined
-// Telegram message instead of one message per symbol.
+// AlertItem is one fired rule for a single user, collected during a run
+// and rendered as one block of that user's batched message. OnSent is
+// applied to the rule only after the message was delivered.
+type AlertItem struct {
+	RuleID        uint64
+	ParamsVersion uint32
+	Symbol        string
+	PriceUSD      float64
+	PriceIDR      float64
+	ChangePct     *float64
+	Trigger       rules.Trigger
+	OnSent        rules.Patch
+}
+
+// UserAlertBatch accumulates every AlertItem fired for one user during a
+// single run, so they can be delivered as one combined Telegram message.
 type UserAlertBatch struct {
 	UserID   uint64
 	ChatID   int64
@@ -132,9 +126,16 @@ type AssetRunResult struct {
 	Errors       int
 }
 
-// Run is the periodic entry point: every active subscription, cooldowns
-// respected. A run where symbols failed and none was checked (typically
-// no network) returns an error so the Pipeline records it as failed and
+// symbolResult is processSymbol's per-symbol tally. dataErrors counts
+// optional data that could not be fetched (crypto 52-week range) while the
+// symbol's other rules were still evaluated.
+type symbolResult struct {
+	checked, triggered, dataErrors int
+}
+
+// Run is the periodic entry point: every active rule, cooldowns respected.
+// A run where symbols failed and no rule was checked (typically no
+// network) returns an error so the Pipeline records it as failed and
 // retries soon instead of after a full interval.
 func (w *AssetWorker) Run() error {
 	res, err := w.run(runScope{})
@@ -147,15 +148,15 @@ func (w *AssetWorker) Run() error {
 	return nil
 }
 
-// RunForUser evaluates only userID's subscriptions and ignores their
-// cooldown. alert_states is still updated on send, so the next periodic
-// run does not repeat the same alert.
+// RunForUser evaluates only userID's rules and ignores cooldown (not
+// crossing or one-shot). Rule state is still written on send, so the next
+// periodic run does not repeat the same alert.
 func (w *AssetWorker) RunForUser(userID uint64) (AssetRunResult, error) {
 	return w.run(runScope{userID: userID, skipCooldown: true})
 }
 
 // run holds w.mu for its whole duration so a periodic run and a manual run
-// never interleave (which could double-send and race on alert_states). It
+// never interleave (which could double-send and race on rule state). It
 // never panics — any recovered panic is returned as an error.
 func (w *AssetWorker) run(scope runScope) (result AssetRunResult, err error) {
 	w.mu.Lock()
@@ -177,20 +178,19 @@ func (w *AssetWorker) run(scope runScope) (result AssetRunResult, err error) {
 	}
 
 	batches := make(map[uint64]*UserAlertBatch)
-	cooldownHoursByUser := make(map[uint64]int)
-
 	for _, symbol := range symbols {
-		checked, triggered, procErr := w.processSymbolSafe(symbol, scope, batches, cooldownHoursByUser)
+		res, procErr := w.processSymbolSafe(symbol, scope, batches)
 		if procErr != nil {
 			result.Errors++
 			log.Printf("[ERROR] AssetWorker.run: process symbol %s failed: %v", symbol.Symbol, procErr)
 			continue
 		}
-		result.RulesChecked += checked
-		result.Triggered += triggered
+		result.RulesChecked += res.checked
+		result.Triggered += res.triggered
+		result.Errors += res.dataErrors
 	}
 
-	alertsSent, usersNotified := w.dispatchBatches(batches, cooldownHoursByUser)
+	alertsSent, usersNotified := w.dispatchBatches(batches)
 	result.Sent = alertsSent
 
 	log.Printf("[INFO] AssetWorker.run: completed in %s (user=%d) — symbols: %d, rules checked: %d, "+
@@ -202,22 +202,21 @@ func (w *AssetWorker) run(scope runScope) (result AssetRunResult, err error) {
 }
 
 // getUniqueActiveSymbols returns every distinct symbol with at least one
-// active subscription (only userID's when userID != 0), capped at
-// maxUniqueSymbols.
+// active rule (only userID's when userID != 0), capped at maxUniqueSymbols.
 func (w *AssetWorker) getUniqueActiveSymbols(userID uint64) ([]SymbolInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
 	query := `
-		SELECT DISTINCT asset_symbol, asset_type
-		FROM asset_subscriptions
+		SELECT asset_symbol, MIN(asset_type), MAX(rule_type = 'week52_break') AS needs_week52
+		FROM asset_rules
 		WHERE is_active = true`
 	args := []interface{}{}
 	if userID != 0 {
 		query += ` AND user_id = ?`
 		args = append(args, userID)
 	}
-	query += ` LIMIT ?`
+	query += ` GROUP BY asset_symbol LIMIT ?`
 	args = append(args, w.maxUniqueSymbols)
 
 	rows, err := w.db.QueryContext(ctx, query, args...)
@@ -229,7 +228,7 @@ func (w *AssetWorker) getUniqueActiveSymbols(userID uint64) ([]SymbolInfo, error
 	var symbols []SymbolInfo
 	for rows.Next() {
 		var s SymbolInfo
-		if err := rows.Scan(&s.Symbol, &s.AssetType); err != nil {
+		if err := rows.Scan(&s.Symbol, &s.AssetType, &s.NeedsWeek52); err != nil {
 			return nil, fmt.Errorf("scan symbol info: %w", err)
 		}
 		symbols = append(symbols, s)
@@ -239,323 +238,156 @@ func (w *AssetWorker) getUniqueActiveSymbols(userID uint64) ([]SymbolInfo, error
 
 // processSymbolSafe wraps processSymbol with panic recovery so a failure
 // processing one symbol never stops the run for the remaining symbols.
-func (w *AssetWorker) processSymbolSafe(
-	symbol SymbolInfo,
-	scope runScope,
-	batches map[uint64]*UserAlertBatch,
-	cooldownHoursByUser map[uint64]int,
-) (checked, triggered int, err error) {
+func (w *AssetWorker) processSymbolSafe(symbol SymbolInfo, scope runScope, batches map[uint64]*UserAlertBatch) (res symbolResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[ERROR] processSymbolSafe: recovered from panic processing %s: %v", symbol.Symbol, r)
 			err = fmt.Errorf("recovered from panic: %v", r)
 		}
 	}()
-	return w.processSymbol(symbol, scope, batches, cooldownHoursByUser)
+	return w.processSymbol(symbol, scope, batches)
 }
 
-// processSymbol fetches fresh market data for symbol via the cache layer,
-// loads every active subscriber, and evaluates each subscriber's alert
-// conditions — appending a triggered alert to that subscriber's
-// UserAlertBatch in batches rather than sending anything directly. Actual
-// delivery happens once per user after every symbol has been processed,
-// via dispatchBatches.
-func (w *AssetWorker) processSymbol(
-	symbol SymbolInfo,
-	scope runScope,
-	batches map[uint64]*UserAlertBatch,
-	cooldownHoursByUser map[uint64]int,
-) (int, int, error) {
+// processSymbol fetches market data for symbol via the cache layer, loads
+// its active rules, and evaluates each one — appending fired alerts to the
+// owner's UserAlertBatch instead of sending anything directly.
+func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches map[uint64]*UserAlertBatch) (symbolResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
 	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType)
 	if err != nil {
-		return 0, 0, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
+		return symbolResult{}, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
 	}
 
-	subscribers, err := w.loadSubscribers(ctx, symbol.Symbol, scope.userID)
+	rows, err := w.loadRules(ctx, symbol.Symbol, scope.userID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("load subscribers for %s: %w", symbol.Symbol, err)
+		return symbolResult{}, fmt.Errorf("load rules for %s: %w", symbol.Symbol, err)
 	}
-	if len(subscribers) == 0 {
-		return 0, 0, nil
+	if len(rows) == 0 {
+		return symbolResult{}, nil
 	}
 
-	fetchResult := &asset.FetchResult{
-		Symbol:       marketData.Symbol,
+	res := symbolResult{checked: len(rows)}
+	market := rules.Market{
 		PriceUSD:     marketData.PriceUSD,
 		ChangePct24h: marketData.ChangePct24h,
-		Source:       marketData.Source,
-		FetchedAt:    marketData.LastFetched,
+		Week52High:   marketData.Week52HighUSD,
+		Week52Low:    marketData.Week52LowUSD,
+	}
+	if symbol.NeedsWeek52 && symbol.AssetType == "crypto" {
+		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
+		if wErr != nil {
+			res.dataErrors++
+			log.Printf("[ERROR] processSymbol: 52-week range for %s: %v", symbol.Symbol, wErr)
+		} else {
+			market.Week52High, market.Week52Low = &high, &low
+		}
 	}
 
-	usdToIDR, rateErr := currency.GetUSDToIDR()
-	if rateErr != nil {
-		log.Printf("[ERROR] processSymbol: get USD/IDR rate for %s: %v", symbol.Symbol, rateErr)
+	priceIDR := marketData.PriceIDR
+	if priceIDR == 0 {
+		if rate, rateErr := currency.GetUSDToIDR(); rateErr == nil {
+			priceIDR = marketData.PriceUSD * rate
+		} else {
+			log.Printf("[ERROR] processSymbol: get USD/IDR rate for %s: %v", symbol.Symbol, rateErr)
+		}
 	}
-	priceIDR := fetchResult.PriceUSD * usdToIDR
 
-	return len(subscribers), w.appendTriggeredAlerts(subscribers, fetchResult, priceIDR, scope.skipCooldown, batches, cooldownHoursByUser), nil
+	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, priceIDR, scope, batches)
+	return res, nil
 }
 
-// appendTriggeredAlerts evaluates every subscriber in subscribers against
-// fetchResult, appending a triggered AlertItem to that subscriber's entry in
-// batches (creating it on first use) and recording their cooldown hours.
-// batches is intentionally never replaced/reset here — it is created once
-// by Run() before the symbol loop begins, so alerts triggered by different
-// symbols for the same user accumulate into a single UserAlertBatch instead
-// of one batch per symbol.
-func (w *AssetWorker) appendTriggeredAlerts(
-	subscribers []SubscriberData,
-	fetchResult *asset.FetchResult,
+// evaluateRules evaluates every row against market, persists each rule's
+// Observed state, and appends fired rules to their owner's batch. batches
+// is created once per run, so alerts from different symbols for the same
+// user accumulate into one message.
+func (w *AssetWorker) evaluateRules(
+	ctx context.Context,
+	rows []ruleRow,
+	symbol string,
+	market rules.Market,
 	priceIDR float64,
-	skipCooldown bool,
+	scope runScope,
 	batches map[uint64]*UserAlertBatch,
-	cooldownHoursByUser map[uint64]int,
 ) int {
+	now := time.Now()
 	triggered := 0
-	for _, sub := range subscribers {
-		item, ok, evalErr := w.evaluateSubscriberSafe(sub, fetchResult, priceIDR, skipCooldown)
-		if evalErr != nil {
-			log.Printf("[ERROR] appendTriggeredAlerts: evaluate alert for user %d symbol %s failed: %v", sub.UserID, fetchResult.Symbol, evalErr)
+	for _, row := range rows {
+		out, err := evaluateRuleSafe(row.Rule, market, now, rules.Options{
+			SkipCooldown:      scope.skipCooldown,
+			AlertPriceMovePct: w.alertPriceMovePct,
+			CooldownHours:     row.AlertCooldownHours,
+		})
+		if err != nil {
+			log.Printf("[ERROR] evaluateRules: rule %d (%s): %v", row.Rule.ID, symbol, err)
 			continue
 		}
-		if !ok {
+		if err := w.applyPatch(ctx, row.Rule.ID, row.ParamsVersion, out.Observed); err != nil {
+			log.Printf("[ERROR] evaluateRules: persist state for rule %d: %v", row.Rule.ID, err)
+		}
+		if !out.Fire {
 			continue
 		}
 
-		cooldownHoursByUser[sub.UserID] = sub.AlertCooldownHours
-
-		batch, exists := batches[sub.UserID]
+		batch, exists := batches[row.UserID]
 		if !exists {
-			batch = &UserAlertBatch{
-				UserID:   sub.UserID,
-				ChatID:   sub.TelegramAssetChatID,
-				Language: sub.PreferredLanguage,
-			}
-			batches[sub.UserID] = batch
+			batch = &UserAlertBatch{UserID: row.UserID, ChatID: row.TelegramAssetChatID, Language: row.PreferredLanguage}
+			batches[row.UserID] = batch
 		}
-
-		// asset_subscriptions has no uniqueness constraint on
-		// (user_id, asset_symbol) — a user can end up with two active
-		// subscription rows for the same symbol (e.g. subscribing twice
-		// from the UI), so loadSubscribers can return the same user twice
-		// for this symbol, each independently triggering here. Without
-		// this guard that produces two AlertItems for the same symbol in
-		// one user's batch, i.e. the symbol appears twice in a single
-		// Telegram message.
-		alreadyInBatch := false
-		for _, existing := range batch.Alerts {
-			if existing.Symbol == item.Symbol {
-				alreadyInBatch = true
-				break
-			}
-		}
-		if alreadyInBatch {
-			continue
-		}
-
-		batch.Alerts = append(batch.Alerts, item)
+		batch.Alerts = append(batch.Alerts, AlertItem{
+			RuleID:        row.Rule.ID,
+			ParamsVersion: row.ParamsVersion,
+			Symbol:        symbol,
+			PriceUSD:      market.PriceUSD,
+			PriceIDR:      priceIDR,
+			ChangePct:     market.ChangePct24h,
+			Trigger:       out.Trigger,
+			OnSent:        out.OnSent,
+		})
 		triggered++
 	}
-
 	return triggered
 }
 
-// loadSubscribers returns every active subscriber for symbol who has an
-// active account with a Telegram asset chat ID configured, joined with
-// their most recent alert_states row if one exists.
-func (w *AssetWorker) loadSubscribers(ctx context.Context, symbol string, userID uint64) ([]SubscriberData, error) {
-	query := `
-		SELECT
-			sub.user_id,
-			sub.alert_type,
-			sub.price_lower_usd,
-			sub.price_upper_usd,
-			sub.pct_change_threshold,
-			u.telegram_asset_chat_id,
-			u.alert_cooldown_hours,
-			u.preferred_language,
-			al.last_alert_type,
-			al.last_alerted_price_usd,
-			al.cooldown_until
-		FROM asset_subscriptions sub
-		JOIN users u ON u.id = sub.user_id
-		LEFT JOIN alert_states al
-			ON al.user_id = sub.user_id
-			AND al.asset_symbol = sub.asset_symbol
-		WHERE sub.asset_symbol = ?
-			AND sub.is_active = true
-			AND u.is_active = true
-			AND u.telegram_asset_chat_id IS NOT NULL`
-	args := []interface{}{symbol}
-	if userID != 0 {
-		query += ` AND sub.user_id = ?`
-		args = append(args, userID)
-	}
-
-	rows, err := w.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query subscribers for %s: %w", symbol, err)
-	}
-	defer rows.Close()
-
-	var subscribers []SubscriberData
-	for rows.Next() {
-		var (
-			s                  SubscriberData
-			priceLower         sql.NullFloat64
-			priceUpper         sql.NullFloat64
-			pctChangeThreshold sql.NullFloat64
-			lastAlertType      sql.NullString
-			lastAlertedPrice   sql.NullFloat64
-			cooldownUntil      sql.NullTime
-		)
-
-		if err := rows.Scan(
-			&s.UserID, &s.AlertType, &priceLower, &priceUpper, &pctChangeThreshold,
-			&s.TelegramAssetChatID, &s.AlertCooldownHours, &s.PreferredLanguage,
-			&lastAlertType, &lastAlertedPrice, &cooldownUntil,
-		); err != nil {
-			return nil, fmt.Errorf("scan subscriber row for %s: %w", symbol, err)
-		}
-
-		if priceLower.Valid {
-			s.PriceLowerUSD = &priceLower.Float64
-		}
-		if priceUpper.Valid {
-			s.PriceUpperUSD = &priceUpper.Float64
-		}
-		if pctChangeThreshold.Valid {
-			s.PctChangeThreshold = &pctChangeThreshold.Float64
-		}
-		if lastAlertType.Valid {
-			s.LastAlertType = &lastAlertType.String
-		}
-		if lastAlertedPrice.Valid {
-			s.LastAlertedPriceUSD = &lastAlertedPrice.Float64
-		}
-		if cooldownUntil.Valid {
-			s.CooldownUntil = &cooldownUntil.Time
-		}
-
-		subscribers = append(subscribers, s)
-	}
-
-	return subscribers, rows.Err()
-}
-
-// evaluateSubscriberSafe wraps evaluateSubscriber with panic recovery so a
-// failure evaluating one subscriber never stops evaluation of the rest.
-func (w *AssetWorker) evaluateSubscriberSafe(
-	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, skipCooldown bool,
-) (item AlertItem, triggered bool, err error) {
+// evaluateRuleSafe keeps one bad rule from stopping the others.
+func evaluateRuleSafe(r rules.Rule, m rules.Market, now time.Time, opt rules.Options) (out rules.Outcome, err error) {
 	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[ERROR] evaluateSubscriberSafe: recovered from panic for user %d: %v", subscriber.UserID, r)
-			err = fmt.Errorf("recovered from panic: %v", r)
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("recovered from panic: %v", rec)
 		}
 	}()
-	return w.evaluateSubscriber(subscriber, fetchResult, priceIDR, skipCooldown)
+	return rules.Evaluate(r, m, now, opt), nil
 }
 
-// evaluateSubscriber implements the cooldown + threshold evaluation for a
-// single subscriber against fetchResult:
-//
-//  1. If the subscriber is still within cooldown AND the price hasn't
-//     moved by at least ALERT_PRICE_MOVE_PCT since the last alert, skip.
-//  2. Otherwise evaluate the subscription's threshold(s); if none are
-//     breached, skip.
-//  3. Return the AlertItem to be appended to this subscriber's batch —
-//     delivery and cooldown persistence happen later, once per user, in
-//     dispatchBatches.
-func (w *AssetWorker) evaluateSubscriber(
-	subscriber SubscriberData, fetchResult *asset.FetchResult, priceIDR float64, skipCooldown bool,
-) (AlertItem, bool, error) {
-	if !skipCooldown && subscriber.CooldownUntil != nil && time.Now().Before(*subscriber.CooldownUntil) {
-		priceMovePct := 0.0
-		if subscriber.LastAlertedPriceUSD != nil && *subscriber.LastAlertedPriceUSD != 0 {
-			priceMovePct = math.Abs(fetchResult.PriceUSD-*subscriber.LastAlertedPriceUSD) / *subscriber.LastAlertedPriceUSD * 100
-		}
-		if priceMovePct < w.alertPriceMovePct {
-			return AlertItem{}, false, nil
-		}
-	}
-
-	triggerType, triggered := evaluateThreshold(subscriber, fetchResult)
-	if !triggered {
-		return AlertItem{}, false, nil
-	}
-
-	item := AlertItem{
-		Symbol:      fetchResult.Symbol,
-		PriceUSD:    fetchResult.PriceUSD,
-		PriceIDR:    priceIDR,
-		ChangePct:   fetchResult.ChangePct24h,
-		TriggerType: triggerType,
-	}
-	return item, true, nil
-}
-
-// evaluateThreshold checks subscriber's alert_type against fetchResult and
-// returns the triggered alert type ("lower", "upper", or "pct_change") and
-// whether any threshold was actually breached.
-func evaluateThreshold(subscriber SubscriberData, fetchResult *asset.FetchResult) (string, bool) {
-	checkPriceThreshold := subscriber.AlertType == "price_threshold" || subscriber.AlertType == "both"
-	checkPctChange := subscriber.AlertType == "pct_change" || subscriber.AlertType == "both"
-
-	if checkPriceThreshold {
-		if subscriber.PriceLowerUSD != nil && fetchResult.PriceUSD < *subscriber.PriceLowerUSD {
-			return "lower", true
-		}
-		if subscriber.PriceUpperUSD != nil && fetchResult.PriceUSD > *subscriber.PriceUpperUSD {
-			return "upper", true
-		}
-	}
-
-	if checkPctChange && subscriber.PctChangeThreshold != nil && fetchResult.ChangePct24h != nil {
-		if math.Abs(*fetchResult.ChangePct24h) > *subscriber.PctChangeThreshold {
-			return "pct_change", true
-		}
-	}
-
-	return "", false
-}
-
-// dispatchBatches sends one combined Telegram message per user in batches
-// (splitting into multiple messages only if the combined text would exceed
-// Telegram's 4096-character limit — see buildBatchedMessages), persists
-// alert_states for every alert successfully delivered, and records exactly
-// one notification_logs entry per user for the run.
-func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch, cooldownHoursByUser map[uint64]int) (alertsSent, usersNotified int) {
+// dispatchBatches sends one combined Telegram message per user (split only
+// past Telegram's 4096-character limit — see buildBatchedMessages), applies
+// OnSent for every delivered alert, and records one notification_logs
+// entry per user for the run.
+func (w *AssetWorker) dispatchBatches(batches map[uint64]*UserAlertBatch) (alertsSent, usersNotified int) {
 	if len(batches) == 0 {
 		return 0, 0
 	}
 
-	now := time.Now()
-	timestamp := now.In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
+	timestamp := time.Now().In(time.FixedZone("WIB", wibOffsetSeconds)).Format("02 Jan 2006 15:04") + " WIB"
 	timestampEscaped := notifier.EscapeTelegramMarkdown(timestamp)
 
 	for _, batch := range batches {
 		if len(batch.Alerts) == 0 {
 			continue
 		}
-		if w.dispatchUserBatch(batch, cooldownHoursByUser[batch.UserID], timestampEscaped, now) {
+		if w.dispatchUserBatch(batch, timestampEscaped) {
 			alertsSent += len(batch.Alerts)
 		}
 		usersNotified++
 	}
-
 	return alertsSent, usersNotified
 }
 
-// dispatchUserBatch sends batch as one or more Telegram messages (per
-// buildBatchedMessages), then — only if every message part sent
-// successfully — upserts alert_states for each included alert so the next
-// run's cooldown check has the correct baseline. Exactly one
-// notification_logs row is recorded for the whole batch either way.
-func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, cooldownHours int, timestampEscaped string, now time.Time) bool {
+// dispatchUserBatch sends batch, then — only if every message part was
+// delivered — applies each alert's OnSent state. A failed send leaves the
+// rules untouched, so the next run fires them again.
+func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, timestampEscaped string) bool {
 	blocks := make([]string, 0, len(batch.Alerts))
 	for _, alert := range batch.Alerts {
 		blocks = append(blocks, buildAssetItemBlock(batch.Language, alert))
@@ -581,24 +413,26 @@ func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, cooldownHours int
 	if !allSent {
 		status = notifier.StatusFailed
 	} else {
-		cooldownUntil := now.Add(time.Duration(cooldownHours) * time.Hour)
 		for _, alert := range batch.Alerts {
-			if err := w.upsertAlertState(ctx, batch.UserID, alert.Symbol, alert.TriggerType, alert.PriceUSD, now, cooldownUntil); err != nil {
-				log.Printf("[ERROR] dispatchUserBatch: upsert alert state for user %d symbol %s failed: %v", batch.UserID, alert.Symbol, err)
+			if err := w.applyPatch(ctx, alert.RuleID, alert.ParamsVersion, alert.OnSent); err != nil {
+				log.Printf("[ERROR] dispatchUserBatch: persist sent state for rule %d: %v", alert.RuleID, err)
 			}
 		}
 	}
 
+	seen := make(map[string]bool)
 	symbols := make([]string, 0, len(batch.Alerts))
 	for _, alert := range batch.Alerts {
-		symbols = append(symbols, alert.Symbol)
+		if !seen[alert.Symbol] {
+			seen[alert.Symbol] = true
+			symbols = append(symbols, alert.Symbol)
+		}
 	}
-	summary := strings.Join(symbols, ", ") + " alert triggered"
 
 	if err := w.notifLogs.Record(ctx, notifier.LogEntry{
 		UserID:         batch.UserID,
 		NotifType:      notifier.TypeAsset,
-		ContentSummary: summary,
+		ContentSummary: strings.Join(symbols, ", ") + " alert triggered",
 		Status:         status,
 	}); err != nil {
 		log.Printf("[ERROR] dispatchUserBatch: log notification for user %d failed: %v", batch.UserID, err)
@@ -607,81 +441,77 @@ func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, cooldownHours int
 	return allSent
 }
 
-// upsertAlertState records the alert just sent so the next run's cooldown
-// check has the correct baseline.
-func (w *AssetWorker) upsertAlertState(ctx context.Context, userID uint64, symbol, alertType string, price float64, alertedAt, cooldownUntil time.Time) error {
-	_, err := w.db.ExecContext(ctx, `
-		INSERT INTO alert_states (user_id, asset_symbol, last_alert_type, last_alerted_price_usd, last_alerted_at, cooldown_until)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE
-			last_alert_type = VALUES(last_alert_type),
-			last_alerted_price_usd = VALUES(last_alerted_price_usd),
-			last_alerted_at = VALUES(last_alerted_at),
-			cooldown_until = VALUES(cooldown_until)`,
-		userID, symbol, alertType, price, alertedAt, cooldownUntil,
-	)
-	if err != nil {
-		return fmt.Errorf("upsert alert_states: %w", err)
-	}
-	return nil
-}
-
-// buildAssetItemBlock formats a single triggered symbol's section within a
-// batched alert message, in the subscriber's preferred language ('en' for
-// English, anything else — including the 'id' default — for Indonesian).
-// Every dynamic field is escaped for Telegram's MarkdownV2 parse mode via
-// notifier.EscapeTelegramMarkdown, including the formatted price/percentage
-// text — formatUSD/formatIDR's thousands-separator commas are harmless to
-// escape (comma isn't a MarkdownV2 special character) but their decimal
-// points are. The leading "*"/trailing bold marker around the symbol and
-// the "(", ")" wrapping the IDR amount are static template characters, not
-// dynamic data — they're hardcoded with their own required MarkdownV2
-// backslash escapes directly in the format string below.
+// buildAssetItemBlock formats one fired rule as a 4-line block in the
+// user's language ('en' for English, anything else — including the 'id'
+// default — for Indonesian). Every dynamic field is escaped for Telegram's
+// MarkdownV2 via notifier.EscapeTelegramMarkdown; the "*" bold markers and
+// the escaped "(", ")" around the IDR amount are static template text.
 func buildAssetItemBlock(lang string, item AlertItem) string {
 	symbol := notifier.EscapeTelegramMarkdown(item.Symbol)
 	priceUSDText := notifier.EscapeTelegramMarkdown(formatUSD(item.PriceUSD))
 	priceIDRText := notifier.EscapeTelegramMarkdown(formatIDR(item.PriceIDR))
+
 	changeText := "n/a"
 	if item.ChangePct != nil {
 		changeText = fmt.Sprintf("%.2f%%", *item.ChangePct)
 	}
-	changePctText := notifier.EscapeTelegramMarkdown(changeText)
 
 	priceLabel := "💰 Harga"
-	triggerLabel := triggerLabelID(item.TriggerType)
 	if lang == "en" {
 		priceLabel = "💰 Price"
-		triggerLabel = triggerLabelEN(item.TriggerType)
 	}
 
 	return fmt.Sprintf(
 		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s\n⚠️ Trigger: %s",
-		symbol, priceLabel, priceUSDText, priceIDRText, changePctText, notifier.EscapeTelegramMarkdown(triggerLabel),
+		symbol, priceLabel, priceUSDText, priceIDRText,
+		notifier.EscapeTelegramMarkdown(changeText),
+		notifier.EscapeTelegramMarkdown(triggerLine(lang, item.Trigger)),
 	)
 }
 
-func triggerLabelID(triggerType string) string {
-	switch triggerType {
-	case "lower":
-		return "Lower Bound"
-	case "upper":
-		return "Upper Bound"
-	case "pct_change":
-		return "Perubahan %"
-	default:
-		return triggerType
+// triggerLine describes why a rule fired. Intent wording repeats the
+// user's own plan; it is never advice (spec §6.4).
+func triggerLine(lang string, t rules.Trigger) string {
+	en := lang == "en"
+	pick := func(enText, idText string) string {
+		if en {
+			return enText
+		}
+		return idText
 	}
+	level := formatUSD(t.LevelUSD)
+	pct := formatPct(t.Pct)
+
+	switch t.Type {
+	case rules.TypePriceLevel:
+		switch t.Intent {
+		case rules.IntentBuyTarget:
+			return pick("Reached your buy target ("+level+")", "Mencapai buy target kamu ("+level+")")
+		case rules.IntentTakeProfit:
+			return pick("Reached your take-profit level ("+level+")", "Mencapai level take-profit kamu ("+level+")")
+		case rules.IntentStopLoss:
+			return pick("Reached your stop-loss level ("+level+")", "Mencapai level stop-loss kamu ("+level+")")
+		}
+		if t.Direction == rules.DirectionAbove {
+			return pick("Above "+level, "Di atas "+level)
+		}
+		return pick("Below "+level, "Di bawah "+level)
+	case rules.TypePctChange24h:
+		return pick("24h change beyond ±"+pct, "Perubahan 24 jam melewati ±"+pct)
+	case rules.TypeTrailingStop:
+		peak := formatUSD(t.PeakPriceUSD)
+		return pick("Down "+pct+" or more from peak "+peak, "Turun "+pct+" atau lebih dari peak "+peak)
+	case rules.TypeWeek52Break:
+		prev := formatUSD(t.PrevRefUSD)
+		if t.Direction == rules.DirectionBelow {
+			return pick("New 52-week low (previous "+prev+")", "52-week low baru (sebelumnya "+prev+")")
+		}
+		return pick("New 52-week high (previous "+prev+")", "52-week high baru (sebelumnya "+prev+")")
+	}
+	return string(t.Type)
 }
 
-func triggerLabelEN(triggerType string) string {
-	switch triggerType {
-	case "lower":
-		return "Lower Bound"
-	case "upper":
-		return "Upper Bound"
-	case "pct_change":
-		return "% Change"
-	default:
-		return triggerType
-	}
+// formatPct renders a threshold without trailing zeros: 5 -> "5%", 2.5 -> "2.5%".
+func formatPct(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64) + "%"
 }
