@@ -259,6 +259,11 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	if err != nil {
 		return symbolResult{}, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
 	}
+	// A missing price (e.g. CoinGecko "current_price": null decodes to 0)
+	// would fire every armed trailing stop and "below" level.
+	if marketData.PriceUSD <= 0 {
+		return symbolResult{}, fmt.Errorf("invalid price %v for %s", marketData.PriceUSD, symbol.Symbol)
+	}
 
 	rows, err := w.loadRules(ctx, symbol.Symbol, scope.userID)
 	if err != nil {

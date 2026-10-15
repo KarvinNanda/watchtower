@@ -309,3 +309,20 @@ func TestFormatUSD_SmallPrices(t *testing.T) {
 	assert.Equal(t, "$0.5", formatUSD(0.5))
 	assert.Equal(t, "$0.00001234", formatUSD(0.00001234))
 }
+
+func TestProcessSymbol_ZeroPriceIsAnError(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	// CoinGecko can return "current_price": null, which decodes to 0. Evaluating
+	// that would fire every armed trailing stop and "below" level.
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 0}}}
+	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(ruleColumns).
+		AddRow(int64(1), int64(1), "trailing_stop", nil, nil, nil, 10.0, int64(1), false, nil, 100.0, nil, nil, nil, int64(1000), int64(4), "en"))
+	batches := map[uint64]*UserAlertBatch{}
+
+	_, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, runScope{}, batches)
+
+	require.Error(t, err)
+	assert.Empty(t, batches, "a zero price must never fire a rule")
+	assert.Error(t, mock.ExpectationsWereMet(), "rules must not even be loaded for an invalid price")
+}
