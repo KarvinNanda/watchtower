@@ -50,8 +50,13 @@ type FetchResult struct {
 	// stocks. Crypto uses FetchCryptoWeek52; gold has no source.
 	Week52HighUSD *float64
 	Week52LowUSD  *float64
-	Source        string
-	FetchedAt     time.Time
+	// HighUSD is the source's recent high and HighSince the start of the
+	// window it covers: crypto = the last 24 h, stock = the current (or
+	// last) trading session. Both nil when unknown; gold has no source.
+	HighUSD   *float64
+	HighSince *time.Time
+	Source    string
+	FetchedAt time.Time
 }
 
 // AssetFetcher fetches live market data for stocks, crypto, and gold. The
@@ -121,25 +126,36 @@ func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
 		return nil, fmt.Errorf("asset: coingecko returned status %d for %s", resp.StatusCode, symbol)
 	}
 
+	return decodeCoinGeckoMarkets(resp.Body, symbol, time.Now())
+}
+
+// decodeCoinGeckoMarkets parses a /coins/markets response. high_24h covers
+// the 24 h before now, so its window starts at now - 24 h.
+func decodeCoinGeckoMarkets(r io.Reader, symbol string, now time.Time) (*FetchResult, error) {
 	var results []struct {
 		CurrentPrice             float64  `json:"current_price"`
 		PriceChangePercentage24h *float64 `json:"price_change_percentage_24h"`
+		High24h                  *float64 `json:"high_24h"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+	if err := json.NewDecoder(r).Decode(&results); err != nil {
 		return nil, fmt.Errorf("asset: decode coingecko response for %s: %w", symbol, err)
 	}
 	if len(results) == 0 {
 		return nil, fmt.Errorf("asset: coingecko returned no data for %s", symbol)
 	}
 
-	return &FetchResult{
+	res := &FetchResult{
 		Symbol:       symbol,
 		PriceUSD:     results[0].CurrentPrice,
 		ChangePct24h: results[0].PriceChangePercentage24h,
 		Source:       "coingecko",
-		FetchedAt:    time.Now(),
-	}, nil
+		FetchedAt:    now,
+	}
+	if h := results[0].High24h; h != nil && *h > 0 {
+		since := now.Add(-24 * time.Hour)
+		res.HighUSD, res.HighSince = h, &since
+	}
+	return res, nil
 }
 
 var errTwelveDataRateLimit = errors.New("twelve data rate limit exceeded")
@@ -210,6 +226,8 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 	var raw struct {
 		Close         string `json:"close"`
 		PercentChange string `json:"percent_change"`
+		High          string `json:"high"`
+		Timestamp     int64  `json:"timestamp"`
 		FiftyTwoWeek  struct {
 			High string `json:"high"`
 			Low  string `json:"low"`
@@ -234,7 +252,7 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		return nil, fmt.Errorf("asset: parse price for %s: %w", symbol, err)
 	}
 
-	return &FetchResult{
+	res := &FetchResult{
 		Symbol:        symbol,
 		PriceUSD:      price,
 		ChangePct24h:  parseOptionalFloat(raw.PercentChange),
@@ -242,7 +260,14 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		Week52LowUSD:  parseOptionalFloat(raw.FiftyTwoWeek.Low),
 		Source:        "twelve_data",
 		FetchedAt:     time.Now(),
-	}, nil
+	}
+	// high is the session's high; timestamp is the session's start. A high
+	// without its window start cannot be used safely, so both or neither.
+	if h := parseOptionalFloat(raw.High); h != nil && *h > 0 && raw.Timestamp > 0 {
+		since := time.Unix(raw.Timestamp, 0).UTC()
+		res.HighUSD, res.HighSince = h, &since
+	}
+	return res, nil
 }
 
 func parseOptionalFloat(s string) *float64 {
