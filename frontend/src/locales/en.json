@@ -96,7 +96,7 @@
       "rearm_success": "Rule re-armed",
       "help_intent": "The label is your own plan. WatchTower only repeats it in the alert and never gives buy or sell advice.",
       "help_trailing": "Peak = the highest price WatchTower has checked since the rule was created or re-armed.",
-      "help_interval": "Prices refresh every {hours} hours (scheduler interval). Check now uses the latest fetched price.",
+      "help_interval": "Prices refresh every {hours} hours (scheduler interval). Check now fetches a new price when the last one is older than 15 minutes.",
       "error_level": "Enter a level greater than 0.",
       "error_pct": "Enter a percent of at least 0.01 and at most 100.",
       "error_pct_trailing": "Enter a percent of at least 0.01 and below 100.",

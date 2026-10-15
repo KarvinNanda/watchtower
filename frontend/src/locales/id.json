@@ -96,7 +96,7 @@
       "rearm_success": "Rule berhasil di-re-arm",
       "help_intent": "Label adalah rencana kamu sendiri. WatchTower hanya mengulangnya di alert dan tidak pernah memberi saran beli atau jual.",
       "help_trailing": "Peak = harga tertinggi yang dicek WatchTower sejak rule dibuat atau di-re-arm.",
-      "help_interval": "Harga diperbarui setiap {hours} jam (interval scheduler). Check now memakai harga terakhir yang sudah diambil.",
+      "help_interval": "Harga diperbarui setiap {hours} jam (interval scheduler). Cek sekarang mengambil harga baru kalau harga terakhir lebih tua dari 15 menit.",
       "error_level": "Isi level lebih dari 0.",
       "error_pct": "Isi persen minimal 0.01 dan maksimal 100.",
       "error_pct_trailing": "Isi persen minimal 0.01 dan di bawah 100.",

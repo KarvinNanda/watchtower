@@ -25,6 +25,9 @@ describe('asset rules help text', () => {
     ['id', id],
   ])('%s interval help uses the configured hours', (_, messages) => {
     expect(messages.asset.rules.help_interval).toContain('{hours}')
+    // Check now refreshes prices older than 15 minutes (#20); the help
+    // must not say it only reuses the last fetched price.
+    expect(messages.asset.rules.help_interval).toContain('15')
   })
 })
 
