@@ -27,7 +27,10 @@ import (
 )
 
 const (
-	marketKeyPrefix = "market:"
+	// v2: entries written before migration 000013 stored an unknown 24h
+	// change as 0 (fake "0.00%" for gold). Bumping the prefix makes every
+	// pre-upgrade entry a miss, so the corrected MySQL row is used (#30).
+	marketKeyPrefix = "market:v2:"
 	week52KeyPrefix = "week52:"
 	week52TTL       = 24 * time.Hour
 
