@@ -994,6 +994,18 @@ type dashboardResponse struct {
 	RecentNotifications []notificationLogResponse `json:"recent_notifications"`
 }
 
+// countActiveSymbols counts distinct assets with at least one active rule,
+// so four rules on BTC still count as one tracked asset.
+func countActiveSymbols(rules []user.AssetRule) int {
+	seen := make(map[string]bool)
+	for _, r := range rules {
+		if r.IsActive {
+			seen[r.AssetSymbol] = true
+		}
+	}
+	return len(seen)
+}
+
 func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
@@ -1007,12 +1019,7 @@ func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 			respondUserServiceError(c, err)
 			return
 		}
-		activeAssetCount := 0
-		for _, s := range assetRules {
-			if s.IsActive {
-				activeAssetCount++
-			}
-		}
+		activeAssetCount := countActiveSymbols(assetRules)
 
 		keywordSubs, err := userService.GetKeywordSubscriptions(userID)
 		if err != nil {
