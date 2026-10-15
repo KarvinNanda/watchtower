@@ -301,6 +301,7 @@ onMounted(async () => {
             :min="0"
             :max="form.ruleType === 'trailing_stop' ? 99.99 : 100"
             :step="0.1"
+            :precision="2"
             clearable
           />
         </n-form-item>

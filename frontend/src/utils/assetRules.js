@@ -5,6 +5,9 @@
 export const RULE_TYPES = ['price_level', 'pct_change_24h', 'trailing_stop', 'week52_break']
 export const INTENTS = ['none', 'buy_target', 'take_profit', 'stop_loss']
 
+// Smallest percent the API accepts: pct is stored as DECIMAL(5,2).
+export const MIN_PCT = 0.01
+
 export function emptyRuleForm() {
   return { assetType: null, assetSymbol: null, ruleType: null, intent: 'none', direction: null, levelUsd: null, pct: null }
 }
@@ -28,9 +31,9 @@ export function validateRuleForm(form) {
       if (form.intent === 'none' && !form.direction) return 'asset.rules.error_direction'
       return ''
     case 'pct_change_24h':
-      return form.pct > 0 && form.pct <= 100 ? '' : 'asset.rules.error_pct'
+      return form.pct >= MIN_PCT && form.pct <= 100 ? '' : 'asset.rules.error_pct'
     case 'trailing_stop':
-      return form.pct > 0 && form.pct < 100 ? '' : 'asset.rules.error_pct_trailing'
+      return form.pct >= MIN_PCT && form.pct < 100 ? '' : 'asset.rules.error_pct_trailing'
     case 'week52_break':
       return form.direction ? '' : 'asset.rules.error_direction'
     default:

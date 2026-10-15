@@ -18,8 +18,8 @@ var (
 	ErrInvalidDirection        = errors.New("direction must be one of: above, below")
 	ErrInvalidIntent           = errors.New("intent must be one of: buy_target, take_profit, stop_loss")
 	ErrIntentDirectionConflict = errors.New("direction conflicts with intent")
-	ErrMissingLevel            = errors.New("level_usd is required for price_level and must be positive and at most 999999999")
-	ErrInvalidPct              = errors.New("pct must be greater than 0 and at most 100 (below 100 for trailing_stop)")
+	ErrMissingLevel            = errors.New("level_usd is required for price_level and must be at least 0.00000001 and at most 999999999")
+	ErrInvalidPct              = errors.New("pct must be at least 0.01 and at most 100 (below 100 for trailing_stop)")
 	ErrFieldNotAllowed         = errors.New("a field was set that does not apply to this rule_type")
 	ErrWeek52NotForGold        = errors.New("week52_break is not available for gold")
 	ErrDuplicateRule           = errors.New("an identical active rule already exists")
@@ -33,6 +33,11 @@ const (
 	ruleTypeTrailingStop = "trailing_stop"
 	ruleTypeWeek52Break  = "week52_break"
 	maxRulePct           = 100
+	// The smallest values the columns can store (pct DECIMAL(5,2),
+	// level_usd DECIMAL(20,8)). Anything smaller would be saved as 0: a
+	// 0% trailing stop fires on the next run, a 0% change rule on any move.
+	minRulePct  = 0.01
+	minLevelUSD = 1e-8
 )
 
 var validRuleTypes = map[string]bool{
@@ -115,7 +120,7 @@ func normalizeAssetRule(in AssetRuleInput) (AssetRuleInput, error) {
 		if in.Pct != nil {
 			return AssetRuleInput{}, ErrFieldNotAllowed
 		}
-		if in.LevelUSD == nil || !isValidPrice(*in.LevelUSD) {
+		if in.LevelUSD == nil || !isValidPrice(*in.LevelUSD) || *in.LevelUSD < minLevelUSD {
 			return AssetRuleInput{}, ErrMissingLevel
 		}
 		dir, err := resolveDirection(in.Direction, in.Intent)
@@ -128,7 +133,7 @@ func normalizeAssetRule(in AssetRuleInput) (AssetRuleInput, error) {
 		if in.Direction != nil || in.Intent != nil || in.LevelUSD != nil {
 			return AssetRuleInput{}, ErrFieldNotAllowed
 		}
-		ok := in.Pct != nil && *in.Pct > 0 && *in.Pct <= maxRulePct
+		ok := in.Pct != nil && *in.Pct >= minRulePct && *in.Pct <= maxRulePct
 		if ok && out.RuleType == ruleTypeTrailingStop {
 			ok = *in.Pct < maxRulePct
 		}

@@ -39,6 +39,8 @@ describe('validateRuleForm', () => {
     [{ ruleType: 'pct_change_24h', pct: 100 }, ''],
     [{ ruleType: 'pct_change_24h', pct: 100.5 }, 'asset.rules.error_pct'],
     [{ ruleType: 'trailing_stop', pct: 100 }, 'asset.rules.error_pct_trailing'],
+    [{ ruleType: 'trailing_stop', pct: 0.001 }, 'asset.rules.error_pct_trailing'],
+    [{ ruleType: 'pct_change_24h', pct: 0.01 }, ''],
     [{ ruleType: 'week52_break', direction: 'above' }, ''],
     [{ ruleType: null }, 'common.required_field'],
   ])('%o -> %s', (form, key) => {
