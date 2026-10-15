@@ -40,11 +40,18 @@ var CoinGeckoBaseURL = defaultCoinGeckoBaseURL
 // FetchResult is a normalized market price snapshot for a single asset
 // symbol, regardless of source.
 type FetchResult struct {
-	Symbol       string
-	PriceUSD     float64
-	ChangePct24h float64
-	Source       string
-	FetchedAt    time.Time
+	Symbol   string
+	PriceUSD float64
+	// PriceIDR is set only for gold, which the source quotes in IDR.
+	PriceIDR float64
+	// ChangePct24h is nil when the source gives no usable 24h change.
+	ChangePct24h *float64
+	// Week52HighUSD and Week52LowUSD come from Twelve Data's /quote for
+	// stocks. Crypto uses FetchCryptoWeek52; gold has no source.
+	Week52HighUSD *float64
+	Week52LowUSD  *float64
+	Source        string
+	FetchedAt     time.Time
 
 	// Technical indicators, populated only for stock symbols — see
 	// enrichWithTechnicalIndicators in technical.go. FetchCrypto/FetchGold
@@ -129,8 +136,8 @@ func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
 	}
 
 	var results []struct {
-		CurrentPrice             float64 `json:"current_price"`
-		PriceChangePercentage24h float64 `json:"price_change_percentage_24h"`
+		CurrentPrice             float64  `json:"current_price"`
+		PriceChangePercentage24h *float64 `json:"price_change_percentage_24h"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
@@ -208,15 +215,25 @@ func (f *AssetFetcher) fetchStockOnce(symbol string) (*FetchResult, error) {
 	}
 	defer resp.Body.Close()
 
+	return decodeTwelveDataQuote(resp.Body, symbol)
+}
+
+// decodeTwelveDataQuote parses a Twelve Data /quote response. Every numeric
+// field arrives as a JSON string; a missing or unparsable optional field
+// becomes nil rather than 0.
+func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 	var raw struct {
 		Close         string `json:"close"`
 		PercentChange string `json:"percent_change"`
-		Status        string `json:"status"`
-		Code          int    `json:"code"`
-		Message       string `json:"message"`
+		FiftyTwoWeek  struct {
+			High string `json:"high"`
+			Low  string `json:"low"`
+		} `json:"fifty_two_week"`
+		Status  string `json:"status"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("asset: decode twelve data response for %s: %w", symbol, err)
 	}
 
@@ -231,18 +248,24 @@ func (f *AssetFetcher) fetchStockOnce(symbol string) (*FetchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("asset: parse price for %s: %w", symbol, err)
 	}
-	changePct, err := strconv.ParseFloat(raw.PercentChange, 64)
-	if err != nil {
-		changePct = 0
-	}
 
 	return &FetchResult{
-		Symbol:       symbol,
-		PriceUSD:     price,
-		ChangePct24h: changePct,
-		Source:       "twelve_data",
-		FetchedAt:    time.Now(),
+		Symbol:        symbol,
+		PriceUSD:      price,
+		ChangePct24h:  parseOptionalFloat(raw.PercentChange),
+		Week52HighUSD: parseOptionalFloat(raw.FiftyTwoWeek.High),
+		Week52LowUSD:  parseOptionalFloat(raw.FiftyTwoWeek.Low),
+		Source:        "twelve_data",
+		FetchedAt:     time.Now(),
 	}, nil
+}
+
+func parseOptionalFloat(s string) *float64 {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil
+	}
+	return &v
 }
 
 // jsonLDPattern extracts the contents of every <script type="application/ld+json">
@@ -289,9 +312,10 @@ func (f *AssetFetcher) FetchGold() (*FetchResult, error) {
 	return &FetchResult{
 		Symbol:   "XAU",
 		PriceUSD: priceIDR / rate,
-		// harga-emas.org's JSON-LD structured data exposes only a single
-		// point-in-time price, with no 24h delta available to compute here.
-		ChangePct24h: 0,
+		PriceIDR: priceIDR,
+		// harga-emas.org exposes only a point-in-time price. The cache layer
+		// computes the 24h change from its own snapshots (price_snapshots).
+		ChangePct24h: nil,
 		Source:       "harga-emas.org",
 		FetchedAt:    time.Now(),
 	}, nil
@@ -341,7 +365,7 @@ func extractGoldPriceIDR(body []byte) (float64, error) {
 	return 0, errors.New("gold price not found in harga-emas.org JSON-LD data")
 }
 
-// validSymbols is the whitelist of asset symbols this fetcher will ever
+// symbolAssetTypes is the whitelist of asset symbols this fetcher will ever
 // call an external API for — mirroring the frontend's ASSET_OPTIONS list
 // (frontend/src/constants/assets.js). Every caller (the scheduler via
 // cache.Cache, cmd/test_fetch) reaches an external API only through
@@ -349,26 +373,34 @@ func extractGoldPriceIDR(body []byte) (float64, error) {
 // an arbitrary/malformed symbol from ever being sent to CoinGecko/Twelve
 // Data, rather than relying solely on the format-only checks upstream in
 // internal/user's subscription validation.
-var validSymbols = map[string]bool{
-	"BTC": true, "ETH": true, "BNB": true, "SOL": true,
-	"XRP": true, "DOGE": true, "ADA": true, "TRX": true,
-	"AVAX": true, "SHIB": true, "TON": true, "LINK": true,
-	"DOT": true, "MATIC": true, "DAI": true, "UNI": true,
-	"ATOM": true, "LTC": true, "BCH": true, "NEAR": true,
-	"AAPL": true, "MSFT": true, "NVDA": true, "GOOGL": true,
-	"AMZN": true, "META": true, "TSLA": true, "NFLX": true,
-	"TSM": true, "AVGO": true, "JPM": true, "LLY": true,
-	"V": true, "UNH": true, "XOM": true, "MA": true,
-	"JNJ": true, "PG": true, "HD": true, "COST": true,
-	"ANTAM": true, "XAU": true,
+var symbolAssetTypes = map[string]string{
+	"BTC": "crypto", "ETH": "crypto", "BNB": "crypto", "SOL": "crypto",
+	"XRP": "crypto", "DOGE": "crypto", "ADA": "crypto", "TRX": "crypto",
+	"AVAX": "crypto", "SHIB": "crypto", "TON": "crypto", "LINK": "crypto",
+	"DOT": "crypto", "MATIC": "crypto", "DAI": "crypto", "UNI": "crypto",
+	"ATOM": "crypto", "LTC": "crypto", "BCH": "crypto", "NEAR": "crypto",
+	"AAPL": "stock", "MSFT": "stock", "NVDA": "stock", "GOOGL": "stock",
+	"AMZN": "stock", "META": "stock", "TSLA": "stock", "NFLX": "stock",
+	"TSM": "stock", "AVGO": "stock", "JPM": "stock", "LLY": "stock",
+	"V": "stock", "UNH": "stock", "XOM": "stock", "MA": "stock",
+	"JNJ": "stock", "PG": "stock", "HD": "stock", "COST": "stock",
+	"ANTAM": "gold", "XAU": "gold",
+}
+
+// SymbolAssetType reports which asset type a whitelisted symbol belongs to.
+// It is the single source of truth for the API's symbol validation and for
+// FetchAsset's guard.
+func SymbolAssetType(symbol string) (string, bool) {
+	t, ok := symbolAssetTypes[strings.ToUpper(symbol)]
+	return t, ok
 }
 
 // FetchAsset routes to the correct fetch method based on assetType
 // ("stock", "crypto", or "gold"), after checking symbol against
-// validSymbols.
+// symbolAssetTypes (see SymbolAssetType).
 func (f *AssetFetcher) FetchAsset(symbol, assetType string) (*FetchResult, error) {
-	if !validSymbols[strings.ToUpper(symbol)] {
-		return nil, fmt.Errorf("asset: unsupported symbol: %s", symbol)
+	if t, ok := SymbolAssetType(symbol); !ok || t != assetType {
+		return nil, fmt.Errorf("asset: unsupported symbol %s for asset type %s", symbol, assetType)
 	}
 
 	switch assetType {
@@ -381,4 +413,61 @@ func (f *AssetFetcher) FetchAsset(symbol, assetType string) (*FetchResult, error
 	default:
 		return nil, fmt.Errorf("asset: unknown asset type %q", assetType)
 	}
+}
+
+// maxMarketChartBytes caps the market_chart body (about 38 KB in practice).
+const maxMarketChartBytes = 1 << 20
+
+// FetchCryptoWeek52 returns the highest and lowest USD price of a crypto
+// ticker over the last 365 days from CoinGecko's market_chart endpoint.
+// The values are daily prices, not intraday highs and lows (spec §2).
+func (f *AssetFetcher) FetchCryptoWeek52(symbol string) (high, low float64, err error) {
+	if t, ok := SymbolAssetType(symbol); !ok || t != "crypto" {
+		return 0, 0, fmt.Errorf("asset: unsupported crypto symbol: %s", symbol)
+	}
+	time.Sleep(cryptoRateLimitDelay)
+
+	endpoint := fmt.Sprintf("%s/coins/%s/market_chart?vs_currency=usd&days=365",
+		CoinGeckoBaseURL, url.PathEscape(coinGeckoID(symbol)))
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("asset: build coingecko market_chart request for %s: %w", symbol, err)
+	}
+	resp, err := f.httpClient.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("asset: fetch coingecko market_chart for %s: %w", symbol, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("asset: coingecko market_chart returned status %d for %s", resp.StatusCode, symbol)
+	}
+	return decodeMarketChartRange(io.LimitReader(resp.Body, maxMarketChartBytes))
+}
+
+// decodeMarketChartRange returns max and min of prices[*][1], skipping
+// malformed points.
+func decodeMarketChartRange(r io.Reader) (high, low float64, err error) {
+	var raw struct {
+		Prices [][]float64 `json:"prices"`
+	}
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		return 0, 0, fmt.Errorf("asset: decode coingecko market_chart: %w", err)
+	}
+	found := false
+	for _, p := range raw.Prices {
+		if len(p) < 2 {
+			continue
+		}
+		if !found || p[1] > high {
+			high = p[1]
+		}
+		if !found || p[1] < low {
+			low = p[1]
+		}
+		found = true
+	}
+	if !found {
+		return 0, 0, errors.New("asset: coingecko market_chart has no prices")
+	}
+	return high, low, nil
 }

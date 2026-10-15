@@ -103,7 +103,7 @@ type AlertItem struct {
 	Symbol      string
 	PriceUSD    float64
 	PriceIDR    float64
-	ChangePct   float64
+	ChangePct   *float64
 	TriggerType string
 }
 
@@ -514,8 +514,8 @@ func evaluateThreshold(subscriber SubscriberData, fetchResult *asset.FetchResult
 		}
 	}
 
-	if checkPctChange && subscriber.PctChangeThreshold != nil {
-		if math.Abs(fetchResult.ChangePct24h) > *subscriber.PctChangeThreshold {
+	if checkPctChange && subscriber.PctChangeThreshold != nil && fetchResult.ChangePct24h != nil {
+		if math.Abs(*fetchResult.ChangePct24h) > *subscriber.PctChangeThreshold {
 			return "pct_change", true
 		}
 	}
@@ -641,7 +641,11 @@ func buildAssetItemBlock(lang string, item AlertItem) string {
 	symbol := notifier.EscapeTelegramMarkdown(item.Symbol)
 	priceUSDText := notifier.EscapeTelegramMarkdown(formatUSD(item.PriceUSD))
 	priceIDRText := notifier.EscapeTelegramMarkdown(formatIDR(item.PriceIDR))
-	changePctText := notifier.EscapeTelegramMarkdown(fmt.Sprintf("%.2f", item.ChangePct))
+	changeText := "n/a"
+	if item.ChangePct != nil {
+		changeText = fmt.Sprintf("%.2f%%", *item.ChangePct)
+	}
+	changePctText := notifier.EscapeTelegramMarkdown(changeText)
 
 	priceLabel := "💰 Harga"
 	triggerLabel := triggerLabelID(item.TriggerType)
@@ -651,7 +655,7 @@ func buildAssetItemBlock(lang string, item AlertItem) string {
 	}
 
 	return fmt.Sprintf(
-		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s%%\n⚠️ Trigger: %s",
+		"📊 *%s*\n%s: %s \\(%s\\)\n📈 24h: %s\n⚠️ Trigger: %s",
 		symbol, priceLabel, priceUSDText, priceIDRText, changePctText, notifier.EscapeTelegramMarkdown(triggerLabel),
 	)
 }

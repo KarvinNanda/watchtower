@@ -71,7 +71,7 @@ func sampleFetchResultFor(symbol string, price float64) *asset.FetchResult {
 	return &asset.FetchResult{
 		Symbol:       symbol,
 		PriceUSD:     price,
-		ChangePct24h: 1.0,
+		ChangePct24h: floatPtr(1.0),
 		Source:       "test",
 		FetchedAt:    time.Now(),
 	}
@@ -223,7 +223,7 @@ func TestBuildAssetItemBlock_HasNoAICommentaryLine(t *testing.T) {
 		Symbol:      "BTC",
 		PriceUSD:    65000,
 		PriceIDR:    65000 * 16000,
-		ChangePct:   3.2,
+		ChangePct:   floatPtr(3.2),
 		TriggerType: "upper",
 	})
 
@@ -306,4 +306,11 @@ func TestRun_ReturnsErrorWhenEverySymbolFailed(t *testing.T) {
 
 	assert.Error(t, err, "a periodic run where nothing could be fetched must be recorded as failed so it is retried")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBuildAssetItemBlock_UnknownChangeIsNA(t *testing.T) {
+	t.Parallel()
+	block := buildAssetItemBlock("en", AlertItem{Symbol: "ANTAM", PriceUSD: 146, PriceIDR: 2392157, TriggerType: "lower"})
+	assert.Contains(t, block, "24h: n/a")
+	assert.NotContains(t, block, "0.00%")
 }
