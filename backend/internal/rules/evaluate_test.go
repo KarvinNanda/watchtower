@@ -134,6 +134,11 @@ func TestPatchIsEmpty(t *testing.T) {
 
 func TestTrailingStop(t *testing.T) {
 	trail := func(st State) Rule { return Rule{ID: 2, Type: TypeTrailingStop, Pct: 10, State: st} }
+	// tracked is a peak recorded since two days ago.
+	tracked := func(peak float64) State { return State{PeakPriceUSD: f(peak), PeakSince: at(-48 * time.Hour)} }
+	withHigh := func(price, high float64, since time.Duration) Market {
+		return Market{PriceUSD: price, HighUSD: f(high), HighSince: at(since)}
+	}
 	fired := func(peak, price float64, observed Patch) Outcome {
 		return Outcome{
 			Fire:     true,
@@ -147,23 +152,46 @@ func TestTrailingStop(t *testing.T) {
 		name string
 		rule Rule
 		mkt  Market
-		opt  Options
 		want Outcome
 	}{
-		{"first run records the peak", trail(State{}), market(100), opts, Outcome{Observed: Patch{PeakPriceUSD: f(100)}}},
-		{"a higher price raises the peak", trail(State{PeakPriceUSD: f(100)}), market(110), opts, Outcome{Observed: Patch{PeakPriceUSD: f(110)}}},
-		{"a small dip does nothing", trail(State{PeakPriceUSD: f(100)}), market(90.01), opts, Outcome{}},
-		{"exactly the drop fires", trail(State{PeakPriceUSD: f(100)}), market(90), opts, fired(100, 90, Patch{})},
-		{"cooldown never holds a trailing stop", trail(State{PeakPriceUSD: f(100), LastAlertedPriceUSD: f(80), CooldownUntil: at(time.Hour)}), market(80), opts, fired(100, 80, Patch{})},
-		{"odd percentages still fire at the boundary", Rule{Type: TypeTrailingStop, Pct: 7.3, State: State{PeakPriceUSD: f(0.3)}}, market(0.3 * (1 - 0.073)), opts,
+		{"first run records the peak and when tracking started", trail(State{}), market(100),
+			Outcome{Observed: Patch{PeakPriceUSD: f(100), PeakSince: at(0)}}},
+		{"a higher price raises the peak", trail(tracked(100)), market(110), Outcome{Observed: Patch{PeakPriceUSD: f(110)}}},
+		{"a small dip does nothing", trail(tracked(100)), market(90.01), Outcome{}},
+		{"exactly the drop fires", trail(tracked(100)), market(90), fired(100, 90, Patch{})},
+		{"cooldown never holds a trailing stop",
+			trail(State{PeakPriceUSD: f(100), PeakSince: at(-48 * time.Hour), LastAlertedPriceUSD: f(80), CooldownUntil: at(time.Hour)}),
+			market(80), fired(100, 80, Patch{})},
+		// #21: a spike between two runs counts once its window started after tracking did.
+		{"a high after tracking started raises the peak", trail(tracked(100)), withHigh(100, 105, -24*time.Hour),
+			Outcome{Observed: Patch{PeakPriceUSD: f(105)}}},
+		{"a high after tracking started can fire the rule", trail(tracked(118)), withHigh(110, 125, -24*time.Hour),
+			fired(125, 110, Patch{PeakPriceUSD: f(125)})},
+		// The #21 example: created 10:00 (7 h ago), BTC hit 125k at 03:00, now 110k.
+		{"a high from before tracking started is ignored", trail(State{PeakPriceUSD: f(118), PeakSince: at(-7 * time.Hour)}),
+			withHigh(110, 125, -24*time.Hour), Outcome{}},
+		// Market closed: /quote still returns the last session, which began before the rule.
+		{"closed market: last session's high predates tracking", trail(State{PeakPriceUSD: f(118), PeakSince: at(-30 * time.Hour)}),
+			withHigh(110, 125, -40*time.Hour), Outcome{}},
+		{"legacy peak: start tracking now, ignore the high", trail(State{PeakPriceUSD: f(100)}), withHigh(95, 200, -time.Hour),
+			Outcome{Observed: Patch{PeakSince: at(0)}}},
+		{"an unknown high is ignored", trail(tracked(100)), Market{PriceUSD: 95, HighUSD: nil, HighSince: at(-time.Hour)}, Outcome{}},
+		{"a zero high is ignored", trail(tracked(100)), withHigh(95, 0, -time.Hour), Outcome{}},
+		{"a high without its window start is ignored", trail(tracked(100)), Market{PriceUSD: 95, HighUSD: f(200)}, Outcome{}},
+		{"odd percentages still fire at the boundary",
+			Rule{Type: TypeTrailingStop, Pct: 7.3, State: State{PeakPriceUSD: f(0.3), PeakSince: at(-48 * time.Hour)}}, market(0.3 * (1 - 0.073)),
 			Outcome{Fire: true, Trigger: Trigger{Type: TypeTrailingStop, Pct: 7.3, PeakPriceUSD: 0.3},
 				OnSent: Patch{Fired: &FiredMark{At: now, PriceUSD: 0.3 * (1 - 0.073)}, Alert: &AlertMark{At: now, PriceUSD: 0.3 * (1 - 0.073)}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, Evaluate(tc.rule, tc.mkt, now, tc.opt))
+			assert.Equal(t, tc.want, Evaluate(tc.rule, tc.mkt, now, opts))
 		})
 	}
+}
+
+func TestPatchIsEmpty_PeakSince(t *testing.T) {
+	assert.False(t, Patch{PeakSince: at(0)}.IsEmpty())
 }
 
 func TestWeek52Break(t *testing.T) {
