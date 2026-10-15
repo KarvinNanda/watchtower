@@ -62,3 +62,8 @@ Thumbs.db
 # Local design docs (specs/plans), not committed
 # =========================================
 docs/
+
+# =========================================
+# Local Claude Code instructions, not committed
+# =========================================
+CLAUDE.md
