@@ -247,10 +247,7 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 	protected.GET("/user/profile", getUserProfileHandler(userService))
 	protected.PUT("/user/profile", updateUserProfileHandler(userService))
 
-	protected.GET("/subscriptions/assets", listAssetSubsHandler(userService))
-	protected.POST("/subscriptions/assets", createAssetSubHandler(userService))
-	protected.PUT("/subscriptions/assets/:id", updateAssetSubHandler(userService))
-	protected.DELETE("/subscriptions/assets/:id", deleteAssetSubHandler(userService))
+	registerAssetRuleRoutes(protected, userService)
 
 	protected.GET("/subscriptions/keywords", listKeywordSubsHandler(userService))
 	protected.POST("/subscriptions/keywords", createKeywordSubHandler(userService))
@@ -459,12 +456,19 @@ func meHandler(authService *auth.Service) gin.HandlerFunc {
 // errors without exposing their technical detail to the client.
 func respondUserServiceError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, user.ErrUserNotFound), errors.Is(err, user.ErrSubscriptionNotFound):
+	case errors.Is(err, user.ErrUserNotFound),
+		errors.Is(err, user.ErrSubscriptionNotFound),
+		errors.Is(err, user.ErrRuleNotFound):
 		respondFail(c, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, user.ErrInvalidAssetType),
-		errors.Is(err, user.ErrInvalidAlertType),
-		errors.Is(err, user.ErrMissingPriceThreshold),
-		errors.Is(err, user.ErrMissingPctThreshold),
+		errors.Is(err, user.ErrInvalidRuleType),
+		errors.Is(err, user.ErrInvalidDirection),
+		errors.Is(err, user.ErrInvalidIntent),
+		errors.Is(err, user.ErrIntentDirectionConflict),
+		errors.Is(err, user.ErrMissingLevel),
+		errors.Is(err, user.ErrInvalidPct),
+		errors.Is(err, user.ErrFieldNotAllowed),
+		errors.Is(err, user.ErrWeek52NotForGold),
 		errors.Is(err, user.ErrEmptyKeyword),
 		errors.Is(err, user.ErrKeywordTooLong),
 		errors.Is(err, user.ErrInvalidExpertiseLevel),
@@ -473,7 +477,9 @@ func respondUserServiceError(c *gin.Context, err error) {
 		errors.Is(err, user.ErrInvalidPriceValue),
 		errors.Is(err, user.ErrInvalidTelegramChatID):
 		respondFail(c, http.StatusBadRequest, "validation_error", err.Error())
-	case errors.Is(err, user.ErrDuplicateKeyword):
+	case errors.Is(err, user.ErrDuplicateKeyword),
+		errors.Is(err, user.ErrDuplicateRule),
+		errors.Is(err, user.ErrCannotRearm):
 		respondFail(c, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, user.ErrMaxUniqueSymbolsReached):
 		respondFail(c, http.StatusUnprocessableEntity, "limit_reached", err.Error())
@@ -569,159 +575,192 @@ func updateUserProfileHandler(userService *user.UserService) gin.HandlerFunc {
 	}
 }
 
-type assetSubResponse struct {
-	ID                 uint64    `json:"id"`
-	AssetType          string    `json:"asset_type"`
-	AssetSymbol        string    `json:"asset_symbol"`
-	AlertType          string    `json:"alert_type"`
-	PriceLowerUSD      *float64  `json:"price_lower_usd,omitempty"`
-	PriceUpperUSD      *float64  `json:"price_upper_usd,omitempty"`
-	PctChangeThreshold *float64  `json:"pct_change_threshold,omitempty"`
-	IsActive           bool      `json:"is_active"`
-	CreatedAt          time.Time `json:"created_at"`
+type assetRuleResponse struct {
+	ID                uint64     `json:"id"`
+	AssetType         string     `json:"asset_type"`
+	AssetSymbol       string     `json:"asset_symbol"`
+	RuleType          string     `json:"rule_type"`
+	Direction         *string    `json:"direction"`
+	Intent            *string    `json:"intent"`
+	LevelUSD          *float64   `json:"level_usd"`
+	Pct               *float64   `json:"pct"`
+	IsActive          bool       `json:"is_active"`
+	PeakPriceUSD      *float64   `json:"peak_price_usd"`
+	TriggeredAt       *time.Time `json:"triggered_at"`
+	TriggeredPriceUSD *float64   `json:"triggered_price_usd"`
+	LastAlertedAt     *time.Time `json:"last_alerted_at"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
-func toAssetSubResponse(s user.AssetSubscription) assetSubResponse {
-	return assetSubResponse{
-		ID:                 s.ID,
-		AssetType:          s.AssetType,
-		AssetSymbol:        s.AssetSymbol,
-		AlertType:          s.AlertType,
-		PriceLowerUSD:      s.PriceLowerUSD,
-		PriceUpperUSD:      s.PriceUpperUSD,
-		PctChangeThreshold: s.PctChangeThreshold,
-		IsActive:           s.IsActive,
-		CreatedAt:          s.CreatedAt,
+func toAssetRuleResponse(r user.AssetRule) assetRuleResponse {
+	return assetRuleResponse{
+		ID: r.ID, AssetType: r.AssetType, AssetSymbol: r.AssetSymbol, RuleType: r.RuleType,
+		Direction: r.Direction, Intent: r.Intent, LevelUSD: r.LevelUSD, Pct: r.Pct, IsActive: r.IsActive,
+		PeakPriceUSD: r.PeakPriceUSD, TriggeredAt: r.TriggeredAt, TriggeredPriceUSD: r.TriggeredPriceUSD,
+		LastAlertedAt: r.LastAlertedAt, CreatedAt: r.CreatedAt,
 	}
 }
 
-func listAssetSubsHandler(userService *user.UserService) gin.HandlerFunc {
+// assetRuleBody is a rule definition. It has no state fields, so a client
+// can never set peak_price_usd, baseline_pending, params_version, etc.
+// (unknown JSON fields are ignored by binding).
+type assetRuleBody struct {
+	AssetType   string   `json:"asset_type" binding:"required"`
+	AssetSymbol string   `json:"asset_symbol" binding:"required"`
+	RuleType    string   `json:"rule_type" binding:"required"`
+	Direction   *string  `json:"direction"`
+	Intent      *string  `json:"intent"`
+	LevelUSD    *float64 `json:"level_usd"`
+	Pct         *float64 `json:"pct"`
+}
+
+func (b assetRuleBody) toInput() user.AssetRuleInput {
+	return user.AssetRuleInput{
+		AssetType: b.AssetType, AssetSymbol: b.AssetSymbol, RuleType: b.RuleType,
+		Direction: b.Direction, Intent: b.Intent, LevelUSD: b.LevelUSD, Pct: b.Pct,
+	}
+}
+
+// updateAssetRuleBody is either a full definition (rule_type set, with
+// asset_type and asset_symbol), an is_active toggle, or both.
+type updateAssetRuleBody struct {
+	AssetType   *string  `json:"asset_type"`
+	AssetSymbol *string  `json:"asset_symbol"`
+	RuleType    *string  `json:"rule_type"`
+	Direction   *string  `json:"direction"`
+	Intent      *string  `json:"intent"`
+	LevelUSD    *float64 `json:"level_usd"`
+	Pct         *float64 `json:"pct"`
+	IsActive    *bool    `json:"is_active"`
+}
+
+func registerAssetRuleRoutes(g *gin.RouterGroup, svc *user.UserService) {
+	g.GET("/rules/assets", listAssetRulesHandler(svc))
+	g.POST("/rules/assets", createAssetRuleHandler(svc))
+	g.PUT("/rules/assets/:id", updateAssetRuleHandler(svc))
+	g.DELETE("/rules/assets/:id", deleteAssetRuleHandler(svc))
+	g.POST("/rules/assets/:id/rearm", rearmAssetRuleHandler(svc))
+}
+
+func listAssetRulesHandler(svc *user.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
 		if err != nil {
 			respondFail(c, http.StatusUnauthorized, "unauthorized", err.Error())
 			return
 		}
-
-		subs, err := userService.GetAssetSubscriptions(userID)
+		list, err := svc.GetAssetRules(userID)
 		if err != nil {
 			respondUserServiceError(c, err)
 			return
 		}
-
-		result := make([]assetSubResponse, 0, len(subs))
-		for _, s := range subs {
-			result = append(result, toAssetSubResponse(s))
+		result := make([]assetRuleResponse, 0, len(list))
+		for _, r := range list {
+			result = append(result, toAssetRuleResponse(r))
 		}
-
-		respondSuccess(c, http.StatusOK, result, "asset subscriptions retrieved")
+		respondSuccess(c, http.StatusOK, result, "asset rules retrieved")
 	}
 }
 
-type createAssetSubRequestBody struct {
-	AssetType          string   `json:"asset_type" binding:"required"`
-	AssetSymbol        string   `json:"asset_symbol" binding:"required"`
-	AlertType          string   `json:"alert_type" binding:"required"`
-	PriceLowerUSD      *float64 `json:"price_lower_usd"`
-	PriceUpperUSD      *float64 `json:"price_upper_usd"`
-	PctChangeThreshold *float64 `json:"pct_change_threshold"`
-}
-
-func createAssetSubHandler(userService *user.UserService) gin.HandlerFunc {
+func createAssetRuleHandler(svc *user.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
 		if err != nil {
 			respondFail(c, http.StatusUnauthorized, "unauthorized", err.Error())
 			return
 		}
+		var body assetRuleBody
+		if err := c.ShouldBindJSON(&body); err != nil {
+			respondFail(c, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		id, err := svc.CreateAssetRule(userID, body.toInput())
+		if err != nil {
+			respondUserServiceError(c, err)
+			return
+		}
+		respondSuccess(c, http.StatusCreated, gin.H{"id": id}, "asset rule created")
+	}
+}
 
-		var req createAssetSubRequestBody
-		if err := c.ShouldBindJSON(&req); err != nil {
+func updateAssetRuleHandler(svc *user.UserService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, err := auth.GetCurrentUserID(c)
+		if err != nil {
+			respondFail(c, http.StatusUnauthorized, "unauthorized", err.Error())
+			return
+		}
+		ruleID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			respondFail(c, http.StatusBadRequest, "validation_error", "invalid rule id")
+			return
+		}
+		var body updateAssetRuleBody
+		if err := c.ShouldBindJSON(&body); err != nil {
 			respondFail(c, http.StatusBadRequest, "validation_error", err.Error())
 			return
 		}
 
-		err = userService.CreateAssetSubscription(userID, user.CreateAssetSubRequest{
-			AssetType:          req.AssetType,
-			AssetSymbol:        req.AssetSymbol,
-			AlertType:          req.AlertType,
-			PriceLowerUSD:      req.PriceLowerUSD,
-			PriceUpperUSD:      req.PriceUpperUSD,
-			PctChangeThreshold: req.PctChangeThreshold,
-		})
-		if err != nil {
+		req := user.UpdateAssetRuleRequest{IsActive: body.IsActive}
+		hasDefinitionField := body.AssetType != nil || body.AssetSymbol != nil || body.RuleType != nil ||
+			body.Direction != nil || body.Intent != nil || body.LevelUSD != nil || body.Pct != nil
+		if hasDefinitionField {
+			if body.RuleType == nil || body.AssetType == nil || body.AssetSymbol == nil {
+				respondFail(c, http.StatusBadRequest, "validation_error",
+					"asset_type, asset_symbol and rule_type are required to change a rule")
+				return
+			}
+			req.Rule = &user.AssetRuleInput{
+				AssetType: *body.AssetType, AssetSymbol: *body.AssetSymbol, RuleType: *body.RuleType,
+				Direction: body.Direction, Intent: body.Intent, LevelUSD: body.LevelUSD, Pct: body.Pct,
+			}
+		}
+
+		if err := svc.UpdateAssetRule(userID, ruleID, req); err != nil {
 			respondUserServiceError(c, err)
 			return
 		}
-
-		respondSuccess(c, http.StatusCreated, nil, "asset subscription created")
+		respondSuccess(c, http.StatusOK, nil, "asset rule updated")
 	}
 }
 
-type updateAssetSubRequestBody struct {
-	PriceLowerUSD      *float64 `json:"price_lower_usd"`
-	PriceUpperUSD      *float64 `json:"price_upper_usd"`
-	PctChangeThreshold *float64 `json:"pct_change_threshold"`
-	AlertType          *string  `json:"alert_type"`
-	IsActive           *bool    `json:"is_active"`
-}
-
-func updateAssetSubHandler(userService *user.UserService) gin.HandlerFunc {
+func deleteAssetRuleHandler(svc *user.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
 		if err != nil {
 			respondFail(c, http.StatusUnauthorized, "unauthorized", err.Error())
 			return
 		}
-
-		subID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		ruleID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 		if err != nil {
-			respondFail(c, http.StatusBadRequest, "validation_error", "invalid subscription id")
+			respondFail(c, http.StatusBadRequest, "validation_error", "invalid rule id")
 			return
 		}
-
-		var req updateAssetSubRequestBody
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondFail(c, http.StatusBadRequest, "validation_error", err.Error())
-			return
-		}
-
-		err = userService.UpdateAssetSubscription(userID, subID, user.UpdateAssetSubRequest{
-			PriceLowerUSD:      req.PriceLowerUSD,
-			PriceUpperUSD:      req.PriceUpperUSD,
-			PctChangeThreshold: req.PctChangeThreshold,
-			AlertType:          req.AlertType,
-			IsActive:           req.IsActive,
-		})
-		if err != nil {
+		if err := svc.DeleteAssetRule(userID, ruleID); err != nil {
 			respondUserServiceError(c, err)
 			return
 		}
-
-		respondSuccess(c, http.StatusOK, nil, "asset subscription updated")
+		respondSuccess(c, http.StatusOK, nil, "asset rule deleted")
 	}
 }
 
-func deleteAssetSubHandler(userService *user.UserService) gin.HandlerFunc {
+func rearmAssetRuleHandler(svc *user.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, err := auth.GetCurrentUserID(c)
 		if err != nil {
 			respondFail(c, http.StatusUnauthorized, "unauthorized", err.Error())
 			return
 		}
-
-		subID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		ruleID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 		if err != nil {
-			respondFail(c, http.StatusBadRequest, "validation_error", "invalid subscription id")
+			respondFail(c, http.StatusBadRequest, "validation_error", "invalid rule id")
 			return
 		}
-
-		if err := userService.DeleteAssetSubscription(userID, subID); err != nil {
+		if err := svc.RearmAssetRule(userID, ruleID); err != nil {
 			respondUserServiceError(c, err)
 			return
 		}
-
-		respondSuccess(c, http.StatusOK, nil, "asset subscription deleted")
+		respondSuccess(c, http.StatusOK, nil, "asset rule re-armed")
 	}
 }
 
@@ -957,13 +996,13 @@ func dashboardHandler(userService *user.UserService) gin.HandlerFunc {
 			return
 		}
 
-		assetSubs, err := userService.GetAssetSubscriptions(userID)
+		assetRules, err := userService.GetAssetRules(userID)
 		if err != nil {
 			respondUserServiceError(c, err)
 			return
 		}
 		activeAssetCount := 0
-		for _, s := range assetSubs {
+		for _, s := range assetRules {
 			if s.IsActive {
 				activeAssetCount++
 			}
