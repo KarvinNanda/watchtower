@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -292,6 +293,12 @@ func (s *UserService) updateRule(userID, ruleID uint64, def *AssetRuleInput, isA
 		return ErrCannotRearm
 	}
 
+	// Saving an edit form without changes must not reset state, or a
+	// crossed level alerts again and a trailing stop loses its peak.
+	if def != nil && sameDefinition(*def, cur.def) {
+		def = nil
+	}
+
 	target := cur.def
 	if def != nil {
 		target = *def
@@ -336,6 +343,28 @@ func (s *UserService) updateRule(userID, ruleID uint64, def *AssetRuleInput, isA
 		return fmt.Errorf("user: commit asset rule update: %w", err)
 	}
 	return nil
+}
+
+// sameDefinition compares two rule definitions at the precision MySQL
+// stores them (level_usd DECIMAL(20,8), pct DECIMAL(5,2)).
+func sameDefinition(a, b AssetRuleInput) bool {
+	return a.AssetType == b.AssetType && a.AssetSymbol == b.AssetSymbol && a.RuleType == b.RuleType &&
+		sameString(a.Direction, b.Direction) && sameString(a.Intent, b.Intent) &&
+		sameRounded(a.LevelUSD, b.LevelUSD, 1e8) && sameRounded(a.Pct, b.Pct, 1e2)
+}
+
+func sameString(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func sameRounded(a, b *float64, scale float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return math.Round(*a*scale) == math.Round(*b*scale)
 }
 
 // loadRuleForUpdate locks ruleID's row. Not found and not owned by userID

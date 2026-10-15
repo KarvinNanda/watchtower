@@ -153,3 +153,23 @@ func TestGetAssetRules_MapsState(t *testing.T) {
 	require.NotNil(t, got[0].TriggeredAt)
 	assert.Equal(t, 126080.0, *got[0].PeakPriceUSD)
 }
+
+func TestUpdateAssetRule_UnchangedSaveKeepsState(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockUserService(t, 100)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WillReturnRows(sqlmock.NewRows(lockColumns).
+		AddRow("crypto", "BTC", "price_level", "above", "take_profit", 120000.0, nil, true, false))
+	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(false))
+	// Same definition as stored: no definition columns and no state reset,
+	// otherwise a crossed level would alert again on the next run.
+	mock.ExpectExec(`^UPDATE asset_rules SET is_active = \?, params_version = params_version \+ 1 WHERE id = \? AND user_id = \?$`).
+		WithArgs(true, 5, 7).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := svc.UpdateAssetRule(7, 5, user.UpdateAssetRuleRequest{Rule: &user.AssetRuleInput{
+		AssetType: "crypto", AssetSymbol: "btc", RuleType: "price_level", Intent: strPtr("take_profit"), LevelUSD: floatPtr(120000),
+	}})
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
