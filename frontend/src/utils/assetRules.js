@@ -8,8 +8,24 @@ export const INTENTS = ['none', 'buy_target', 'take_profit', 'stop_loss']
 // Smallest percent the API accepts: pct is stored as DECIMAL(5,2).
 export const MIN_PCT = 0.01
 
+// IDR levels (#40): the backend stores level_idr DECIMAL(24,8).
+export const MIN_LEVEL_IDR = 0.0001
+export const MAX_LEVEL_IDR = 999999999999
+
+// Gold (ANTAM) is quoted in rupiah at the source; everything else in USD.
+export function defaultCurrency(assetType) {
+  return assetType === 'gold' ? 'IDR' : 'USD'
+}
+
+// setCurrency switches the level currency. A typed level is cleared, never
+// converted: the USD/IDR rate updates once a day (Spec 4b, Q6).
+export function setCurrency(form, currency) {
+  if (form.currency === currency) return form
+  return { ...form, currency, level: null }
+}
+
 export function emptyRuleForm() {
-  return { assetType: null, assetSymbol: null, ruleType: null, intent: 'none', direction: null, levelUsd: null, pct: null }
+  return { assetType: null, assetSymbol: null, ruleType: null, intent: 'none', direction: null, level: null, currency: 'USD', pct: null }
 }
 
 export function ruleToForm(rule) {
@@ -19,7 +35,8 @@ export function ruleToForm(rule) {
     ruleType: rule.rule_type,
     intent: rule.intent ?? 'none',
     direction: rule.intent ? null : rule.direction,
-    levelUsd: rule.level_usd,
+    currency: rule.level_currency === 'IDR' ? 'IDR' : 'USD',
+    level: rule.level_currency === 'IDR' ? rule.level_idr : rule.level_usd,
     pct: rule.pct,
   }
 }
@@ -27,7 +44,11 @@ export function ruleToForm(rule) {
 export function validateRuleForm(form) {
   switch (form.ruleType) {
     case 'price_level':
-      if (!(form.levelUsd > 0)) return 'asset.rules.error_level'
+      if (form.currency === 'IDR') {
+        if (!(form.level >= MIN_LEVEL_IDR && form.level <= MAX_LEVEL_IDR)) return 'asset.rules.error_level_idr'
+      } else if (!(form.level > 0)) {
+        return 'asset.rules.error_level'
+      }
       if (form.intent === 'none' && !form.direction) return 'asset.rules.error_direction'
       return ''
     case 'pct_change_24h':
@@ -44,9 +65,11 @@ export function validateRuleForm(form) {
 export function buildRulePayload(form) {
   const base = { asset_type: form.assetType, asset_symbol: form.assetSymbol, rule_type: form.ruleType }
   switch (form.ruleType) {
-    case 'price_level':
-      if (form.intent && form.intent !== 'none') return { ...base, intent: form.intent, level_usd: form.levelUsd }
-      return { ...base, direction: form.direction, level_usd: form.levelUsd }
+    case 'price_level': {
+      const level = form.currency === 'IDR' ? { level_idr: form.level } : { level_usd: form.level }
+      if (form.intent && form.intent !== 'none') return { ...base, intent: form.intent, ...level }
+      return { ...base, direction: form.direction, ...level }
+    }
     case 'pct_change_24h':
     case 'trailing_stop':
       return { ...base, pct: form.pct }
@@ -81,8 +104,12 @@ export function formatIDR(value) {
   }).format(value)
 }
 
+export function formatLevel(rule) {
+  return rule.level_currency === 'IDR' ? formatIDR(rule.level_idr) : formatUSD(rule.level_usd)
+}
+
 export function ruleSummary(rule, t) {
-  const level = formatUSD(rule.level_usd)
+  const level = formatLevel(rule)
   switch (rule.rule_type) {
     case 'price_level':
       if (rule.intent) return t('asset.rules.summary_intent', { intent: t(`asset.rules.intent_${rule.intent}`), level })
