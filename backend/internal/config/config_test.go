@@ -163,3 +163,17 @@ func TestLoad_WhitespaceOnlySettingFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MAX_UNIQUE_SYMBOLS")
 }
+
+// #65: the optional CoinGecko Demo key comes from the environment.
+func TestLoad_CoinGeckoAPIKey(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	cfg, err := Load("does-not-exist.env")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.ExternalAPI.CoinGeckoAPIKey, "unset by default")
+
+	t.Setenv("COINGECKO_API_KEY", "demo-key-123")
+	cfg, err = Load("does-not-exist.env")
+	require.NoError(t, err)
+	assert.Equal(t, "demo-key-123", cfg.ExternalAPI.CoinGeckoAPIKey)
+}

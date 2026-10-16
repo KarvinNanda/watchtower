@@ -61,8 +61,11 @@ type TelegramConfig struct {
 type ExternalAPIConfig struct {
 	TwelveDataAPIKey string
 	CoinGeckoBaseURL string
-	OpenERBaseURL    string
-	GitHubToken      string
+	// CoinGeckoAPIKey is an optional Demo API key (#65); empty uses the
+	// keyless public API.
+	CoinGeckoAPIKey string
+	OpenERBaseURL   string
+	GitHubToken     string
 }
 
 type SchedulerConfig struct {
@@ -122,6 +125,7 @@ var envBindings = map[string]string{
 	"telegram_mode":                     "TELEGRAM_MODE",
 	"twelve_data_api_key":               "TWELVE_DATA_API_KEY",
 	"coingecko_base_url":                "COINGECKO_BASE_URL",
+	"coingecko_api_key":                 "COINGECKO_API_KEY",
 	"open_er_base_url":                  "OPEN_ER_BASE_URL",
 	"github_token":                      "GITHUB_TOKEN",
 	"asset_scheduler_interval_hours":    "ASSET_SCHEDULER_INTERVAL_HOURS",
@@ -195,6 +199,7 @@ func Load(envPath string) (*Config, error) {
 		ExternalAPI: ExternalAPIConfig{
 			TwelveDataAPIKey: v.GetString("twelve_data_api_key"),
 			CoinGeckoBaseURL: v.GetString("coingecko_base_url"),
+			CoinGeckoAPIKey:  v.GetString("coingecko_api_key"),
 			OpenERBaseURL:    v.GetString("open_er_base_url"),
 			GitHubToken:      v.GetString("github_token"),
 		},

@@ -47,6 +47,7 @@ func main() {
 
 	notif := notifier.NewNotifier(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 	assetFetcher := asset.NewAssetFetcher(cfg.ExternalAPI.TwelveDataAPIKey)
+	assetFetcher.SetCoinGeckoAPIKey(cfg.ExternalAPI.CoinGeckoAPIKey)
 	sentinelFetcher := sentinel.NewSentinelFetcher(cfg.ExternalAPI.GitHubToken)
 
 	assetInterval := time.Duration(cfg.Scheduler.AssetIntervalHours) * time.Hour

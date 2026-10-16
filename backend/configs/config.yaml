@@ -29,6 +29,7 @@ telegram_mode: polling
 
 twelve_data_api_key: ""
 coingecko_base_url: https://api.coingecko.com/api/v3
+coingecko_api_key: ""
 open_er_base_url: https://open.er-api.com/v6/latest/USD
 github_token: ""
 

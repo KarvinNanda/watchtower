@@ -15,6 +15,10 @@ const twelveDataMinGap = 8 * time.Second
 // to at most 24 per minute on the public API, which has no key (#48).
 const coinGeckoMinGap = 2500 * time.Millisecond
 
+// coinGeckoKeyedMinGap applies with a Demo API key (#65): at most 50 calls
+// per minute, half the Demo plan's 100, leaving room for jitter.
+const coinGeckoKeyedMinGap = 1200 * time.Millisecond
+
 // pacer makes consecutive calls wait until at least gap has passed since
 // the previous one. It is per process; only the scheduler calls the paced
 // providers.
