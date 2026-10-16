@@ -73,6 +73,9 @@ func TestAssetReportMessages_Golden(t *testing.T) {
 		{"report_en_rate_unavailable", "en", Rate{}, reportSymbols()},
 		{"report_id_stale", "id", testRate, stale},
 		{"report_en_split", "en", testRate, split},
+		{"report_id_antam_trailing_idr", "id", testRate, []ReportSymbol{{Symbol: "ANTAM", PriceUSD: 134.03, NativeIDR: 2400000, ChangePct: f64(0.4),
+			Rules: []ReportRule{{RuleID: 9, Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: 10, Currency: rules.CurrencyIDR},
+				Distance: rules.Distance{Kind: rules.DistanceLevel, Level: 2250000, PeakIDR: 2500000, Pct: -6.25}}}}}},
 		{"report_id_oversized_symbol", "id", testRate, oversized},
 	}
 	for _, tc := range cases {

@@ -89,8 +89,11 @@ func reportRuleText(lang string, rate Rate, r ReportRule) string {
 		case rules.DistanceWaitingPeak:
 			return label + pick(lang, " · waiting for a peak", " · menunggu puncak")
 		case rules.DistanceLevel:
-			return label + ": stop " + amount(rate, d.Level) + pick(lang, " (peak ", " (puncak ") +
-				amount(rate, d.PeakUSD) + ")" + distanceTail(lang, d)
+			stop, peak := amount(rate, d.Level), amount(rate, d.PeakUSD)
+			if t.Currency == rules.CurrencyIDR {
+				stop, peak = idrAmount(rate, d.Level), idrAmount(rate, d.PeakIDR) // gold, in rupiah (#58)
+			}
+			return label + ": stop " + stop + pick(lang, " (peak ", " (puncak ") + peak + ")" + distanceTail(lang, d)
 		}
 		return label + distanceTail(lang, d)
 	case rules.TypePctChange24h:

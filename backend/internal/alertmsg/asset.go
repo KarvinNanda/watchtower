@@ -171,9 +171,15 @@ func levelAmount(rate Rate, t rules.Trigger) string {
 	if t.Currency != rules.CurrencyIDR {
 		return amount(rate, t.LevelUSD)
 	}
-	s := formatIDR(t.LevelIDR)
+	return idrAmount(rate, t.LevelIDR)
+}
+
+// idrAmount renders a rupiah amount first, with its USD equivalent after "≈"
+// only when a real rate is known (#40, #58).
+func idrAmount(rate Rate, idr float64) string {
+	s := formatIDR(idr)
 	if rate.available() {
-		s += " ≈ " + formatUSD(t.LevelIDR/rate.Value)
+		s += " ≈ " + formatUSD(idr/rate.Value)
 	}
 	return s
 }
@@ -228,6 +234,9 @@ func triggerSentence(lang string, rate Rate, t rules.Trigger) string {
 		return pick(lang, "24h change beyond ±"+pct, "Perubahan 24 jam melewati ±"+pct)
 	case rules.TypeTrailingStop:
 		peak := amount(rate, t.PeakPriceUSD)
+		if t.Currency == rules.CurrencyIDR {
+			peak = idrAmount(rate, t.PeakPriceIDR) // gold is tracked in rupiah (#58)
+		}
 		return pick(lang, "Down "+pct+" or more from peak "+peak, "Turun "+pct+" atau lebih dari peak "+peak)
 	case rules.TypeWeek52Break:
 		prev := amount(rate, t.PrevRefUSD)
