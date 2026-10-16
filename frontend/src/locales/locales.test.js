@@ -96,3 +96,13 @@ describe('status report texts (#7)', () => {
     expect(messages.run.asset_report_unavailable).toContain('{errors}')
   })
 })
+
+describe('rate-limit text fits both run buttons (#7)', () => {
+  it.each([
+    ['en', en, /check/i],
+    ['id', id, /mengecek/i],
+  ])('%s error_too_many does not say "check"', (_, messages, word) => {
+    expect(messages.run.error_too_many).toContain('{seconds}')
+    expect(messages.run.error_too_many).not.toMatch(word)
+  })
+})

@@ -223,7 +223,7 @@
     "failed": "Pengecekan gagal: {reason}",
     "error_scheduler_offline": "Scheduler tidak berjalan. Jalankan dengan: docker compose up -d",
     "error_telegram_not_linked": "Hubungkan chat Telegram untuk tipe alert ini dulu (halaman Setup Telegram).",
-    "error_too_many": "Tunggu {seconds} detik sebelum mengecek lagi.",
+    "error_too_many": "Tunggu {seconds} detik sebelum menjalankan ini lagi.",
     "reason_timed_out": "waktunya habis",
     "reason_failed": "run gagal; cek log scheduler",
     "finished_at": "Selesai pukul {time}",
