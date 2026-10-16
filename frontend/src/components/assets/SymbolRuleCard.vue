@@ -40,6 +40,9 @@ function levelText(rule) {
     }
     case 'pct_change_24h':
       return `±${rule.pct}%`
+    case 'week52_break':
+      // The 52-week extreme the rule compares with (#52); none before its first run.
+      return rule.week52_ref_usd > 0 ? formatUSD(rule.week52_ref_usd) : '—'
     default:
       return '—'
   }

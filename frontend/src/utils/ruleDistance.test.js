@@ -102,3 +102,19 @@ describe('ruleDistance: IDR price_level', () => {
     expect(ruleDistance(antam({ intent: 'buy_target', level_idr: 2350000 }), { price_usd: 130, price_idr: null })).toBeNull()
   })
 })
+
+// #52: mirrors TestDistanceTo_Week52 in backend/internal/rules/distance_test.go.
+describe('ruleDistance: week52_break', () => {
+  const w52 = (extra) => ({ id: 4, rule_type: 'week52_break', supported: true, ...extra })
+
+  it('measures against the stored 52-week reference', () => {
+    expect(ruleDistance(w52({ direction: 'above', week52_ref_usd: 120 }), market(100)))
+      .toEqual({ kind: 'level', level: 120, pct: 20, passed: false, near: false })
+    expect(ruleDistance(w52({ direction: 'below', week52_ref_usd: 80 }), market(79)).passed).toBe(true)
+    expect(ruleDistance(w52({ direction: 'below', week52_ref_usd: 80 }), market(82)).near).toBe(true)
+  })
+
+  it('not evaluated yet (no reference) → null', () => {
+    expect(ruleDistance(w52({ direction: 'above', week52_ref_usd: null }), market(100))).toBeNull()
+  })
+})
