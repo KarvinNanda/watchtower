@@ -24,6 +24,16 @@ export function setCurrency(form, currency) {
   return { ...form, currency, level: null }
 }
 
+// changeAssetType applies a new asset type from the form's select. Picking
+// the type that is already set changes nothing, so editing a legacy gold USD
+// rule never flips it to IDR (Spec 4b, Q7). A real change clears the symbol,
+// drops week52_break for gold and applies the type's default currency.
+export function changeAssetType(form, assetType) {
+  if (form.assetType === assetType) return form
+  const ruleType = assetType === 'gold' && form.ruleType === 'week52_break' ? null : form.ruleType
+  return setCurrency({ ...form, assetType, assetSymbol: null, ruleType }, defaultCurrency(assetType))
+}
+
 export function emptyRuleForm() {
   return { assetType: null, assetSymbol: null, ruleType: null, intent: 'none', direction: null, level: null, currency: 'USD', pct: null }
 }

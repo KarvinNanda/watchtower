@@ -13,6 +13,7 @@ import {
   defaultCurrency,
   setCurrency,
   formatLevel,
+  changeAssetType,
 } from './assetRules'
 
 const t = (key, params) => (params ? `${key}|${JSON.stringify(params)}` : key)
@@ -150,5 +151,28 @@ describe('level currency', () => {
   it('summarises an IDR level in rupiah', () => {
     expect(ruleSummary({ rule_type: 'price_level', intent: 'buy_target', level_currency: 'IDR', level_idr: 1350000 }, t))
       .toBe(`asset.rules.summary_intent|${JSON.stringify({ intent: 'asset.rules.intent_buy_target', level: formatIDR(1350000) })}`)
+  })
+})
+
+describe('changeAssetType', () => {
+  const legacyAntam = { ...emptyRuleForm(), assetType: 'gold', assetSymbol: 'ANTAM', ruleType: 'price_level', intent: 'buy_target', level: 80, currency: 'USD' }
+
+  it('re-picking the same type changes nothing (a legacy gold USD rule stays USD, Q7)', () => {
+    expect(changeAssetType(legacyAntam, 'gold')).toEqual(legacyAntam)
+  })
+
+  it('a real change clears the symbol and applies the new default currency', () => {
+    const form = { ...emptyRuleForm(), assetType: 'crypto', assetSymbol: 'BTC', ruleType: 'price_level', level: 90000, currency: 'USD' }
+    expect(changeAssetType(form, 'gold')).toMatchObject({ assetType: 'gold', assetSymbol: null, currency: 'IDR', level: null })
+  })
+
+  it('keeps the level when the default currency does not change', () => {
+    const form = { ...emptyRuleForm(), assetType: 'crypto', assetSymbol: 'BTC', ruleType: 'price_level', level: 90000, currency: 'USD' }
+    expect(changeAssetType(form, 'stock')).toMatchObject({ assetType: 'stock', assetSymbol: null, currency: 'USD', level: 90000 })
+  })
+
+  it('drops week52_break when switching to gold', () => {
+    const form = { ...emptyRuleForm(), assetType: 'crypto', ruleType: 'week52_break', direction: 'above' }
+    expect(changeAssetType(form, 'gold').ruleType).toBeNull()
   })
 })

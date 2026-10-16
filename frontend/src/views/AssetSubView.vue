@@ -15,7 +15,7 @@ import { message } from '@/plugins/naive'
 import { ASSET_OPTIONS } from '@/constants/assets'
 import {
   RULE_TYPES, INTENTS, emptyRuleForm, ruleToForm, validateRuleForm, buildRulePayload, ruleSummary,
-  defaultCurrency, setCurrency,
+  setCurrency, changeAssetType,
 } from '@/utils/assetRules'
 import { groupRulesBySymbol } from '@/utils/groupRules'
 import { runChangedRuleIds } from '@/utils/runHighlight'
@@ -97,11 +97,10 @@ const formRules = {
 
 const modalTitle = computed(() => (editingId.value ? t('asset.edit_title') : t('asset.add_title')))
 
-function handleAssetTypeChange() {
-  form.value.assetSymbol = null
-  if (form.value.assetType === 'gold' && form.value.ruleType === 'week52_break') form.value.ruleType = null
-  // Gold defaults to rupiah; a level typed in the old currency is cleared.
-  form.value = setCurrency(form.value, defaultCurrency(form.value.assetType))
+// Not v-model: the handler needs the old type to tell a real change from
+// re-picking the same one.
+function handleAssetTypeChange(assetType) {
+  form.value = changeAssetType(form.value, assetType)
 }
 
 function handleRuleTypeChange() {
@@ -273,7 +272,7 @@ onUnmounted(() => marketStore.stopAutoRefresh())
       <n-alert v-if="formError" type="error" role="alert" style="margin-bottom: 16px">{{ formError }}</n-alert>
       <n-form ref="formRef" :model="form" :rules="formRules" label-placement="top">
         <n-form-item :label="t('asset.type')" path="assetType">
-          <n-select v-model:value="form.assetType" :options="assetTypeOptions" @update:value="handleAssetTypeChange" />
+          <n-select :value="form.assetType" :options="assetTypeOptions" @update:value="handleAssetTypeChange" />
         </n-form-item>
         <n-form-item :label="t('asset.symbol')" path="assetSymbol">
           <n-select
