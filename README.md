@@ -37,6 +37,48 @@ You clone it, run one setup script, and the whole thing (database, API, web app,
 - **Two Telegram bots** from [@BotFather](https://t.me/BotFather): one for asset alerts, one for sentinel. Keep each bot's token and username.
 - **Optional:** a free [Twelve Data](https://twelvedata.com) API key (needed for stock alerts) and a GitHub token (raises sentinel's GitHub rate limit).
 
+### Getting the tokens, keys and chat IDs
+
+Everything below goes into `.env` in the project root (the setup script creates it and asks for the two bot tokens). `.env` is gitignored: treat every value in it like a password and never commit, paste or screenshot it.
+
+| What | Required | `.env` variable | Where it comes from |
+|---|---|---|---|
+| Asset bot token | Yes | `TELEGRAM_ASSET_BOT_TOKEN` | @BotFather, step 1 below |
+| Sentinel bot token | Yes | `TELEGRAM_SENTINEL_BOT_TOKEN` | @BotFather, step 1 below |
+| Bot usernames | Yes | `VITE_ASSET_BOT_USERNAME`, `VITE_SENTINEL_BOT_USERNAME` | @BotFather, step 1 below (without the `@`) |
+| Chat IDs | Yes | none: saved per user in the web app | The bots themselves, step 2 below |
+| Twelve Data API key | For stock alerts | `TWELVE_DATA_API_KEY` | Step 3 below |
+| CoinGecko Demo key | No | `COINGECKO_API_KEY` | Step 4 below |
+| GitHub token | No | `GITHUB_TOKEN` | Step 5 below |
+| USD/IDR rate | No key needed | none | open.er-api.com, free and keyless |
+
+**1. Telegram bot tokens and usernames.** WatchTower uses two bots, so asset and security alerts can go to different chats and a leaked token exposes only one stream. For each bot:
+
+1. In Telegram, open [@BotFather](https://t.me/BotFather) and send `/newbot`.
+2. Send a display name (for example `WatchTower Assets`), then a username that ends in `bot` (for example `my_watchtower_assets_bot`).
+3. BotFather replies with a token like `123456789:AAH...`. Put it in `TELEGRAM_ASSET_BOT_TOKEN` (or `TELEGRAM_SENTINEL_BOT_TOKEN` for the second bot) and the username, without the `@`, in `VITE_ASSET_BOT_USERNAME` (or `VITE_SENTINEL_BOT_USERNAME`).
+4. Repeat for the second bot, then run `docker compose up -d --build` so the web app picks up the usernames.
+
+If a token leaks, send `/revoke` to @BotFather, pick the bot, and put the new token in `.env`. Each token can be used by only one running WatchTower at a time (`TELEGRAM_MODE=polling`); a second copy using the same token makes the bot stop answering.
+
+**2. Telegram chat IDs.** You do not look these up yourself; the bots tell you, and each user saves their own in the web app:
+
+1. Start WatchTower, open the web app, register and log in.
+2. Open the **Telegram Setup** page and click **Open Bot in Telegram** for the asset bot (or search for its username in Telegram).
+3. Press **Start** or send `/start`. The bot replies with "Chat ID kamu: `123456789`".
+4. Copy that number into **Asset Bot Chat ID** on the **Profile** page and save.
+5. Repeat with the sentinel bot for **Sentinel Bot Chat ID**. The Telegram Setup page shows both as connected once they are saved.
+
+If the bot does not reply to `/start`, check that the API is running (`docker compose ps`; the API is the process that answers `/start`) and that the token in `.env` belongs to that bot.
+
+**3. Twelve Data API key (stock alerts).** Sign up at [twelvedata.com](https://twelvedata.com), open the API Keys section of your dashboard and copy the key into `TWELVE_DATA_API_KEY`. The free tier allows 800 calls a day and 8 a minute; WatchTower paces its calls for that (see *Known tradeoffs*). Without a key, crypto and gold alerts still work, stock alerts do not.
+
+**4. CoinGecko Demo key (optional).** Crypto prices work without a key through CoinGecko's keyless public API (roughly 10 to 30 calls a minute, depending on load). If you track many crypto symbols, create a free Demo key in the [CoinGecko developer dashboard](https://www.coingecko.com/en/developers/dashboard) and put it in `COINGECKO_API_KEY`. The Demo plan allows 100 calls a minute and 10,000 a month.
+
+**5. GitHub token (optional).** The sentinel searches public GitHub data, which works without a token at 10 requests a minute. A token raises that to 30. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with access to public repositories only and no extra permissions, and put it in `GITHUB_TOKEN`. Give it an expiry date, and revoke it on GitHub if it leaks.
+
+After changing `.env`, run `docker compose up -d --build`.
+
 ### Setup
 
 ```bash
