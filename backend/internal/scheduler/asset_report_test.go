@@ -45,7 +45,7 @@ func expectReportSymbols(mock sqlmock.Sqlmock, symbols ...[2]string) {
 	for _, s := range symbols {
 		rows.AddRow(s[0], s[1], false)
 	}
-	mock.ExpectQuery(`FROM asset_rules[\s\S]*AND user_id = \?`).WithArgs(7, 100).WillReturnRows(rows)
+	mock.ExpectQuery(`FROM asset_rules[\s\S]*AND user_id = \?`).WithArgs(7).WillReturnRows(rows)
 }
 
 // One active "above 100" USD rule of user 7; last_beyond false, so a price

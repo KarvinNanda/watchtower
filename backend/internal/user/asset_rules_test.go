@@ -313,3 +313,10 @@ func TestUpdateAssetRule_UnchangedIDRSaveKeepsState(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// #56: the symbol limit protects the shared Twelve Data quota, so it counts
+// every user's symbols; the error says so instead of looking like a
+// personal limit.
+func TestErrMaxUniqueSymbols_SaysTheLimitIsShared(t *testing.T) {
+	assert.Contains(t, user.ErrMaxUniqueSymbolsReached.Error(), "all users")
+}

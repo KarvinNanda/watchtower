@@ -150,9 +150,11 @@ const maxKeywordLength = 50
 // Errors returned by UserService. Handlers can compare against these with
 // errors.Is to decide which HTTP status/code to respond with.
 var (
-	ErrUserNotFound            = errors.New("user: not found")
-	ErrInvalidAssetType        = errors.New("asset_type must be one of: stock, crypto, gold")
-	ErrMaxUniqueSymbolsReached = errors.New("maximum number of unique tracked symbols reached")
+	ErrUserNotFound     = errors.New("user: not found")
+	ErrInvalidAssetType = errors.New("asset_type must be one of: stock, crypto, gold")
+	// The limit counts every user's active symbols: it protects the shared
+	// Twelve Data quota of the instance (#56).
+	ErrMaxUniqueSymbolsReached = errors.New("this instance already tracks its maximum number of distinct symbols (MAX_UNIQUE_SYMBOLS, shared by all users)")
 	ErrSubscriptionNotFound    = errors.New("subscription not found")
 	ErrEmptyKeyword            = errors.New("keyword cannot be empty")
 	ErrKeywordTooLong          = errors.New("keyword must be at most 50 characters")

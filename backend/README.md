@@ -104,7 +104,7 @@ All routes live directly under `/api` — there is no version prefix. "Cookie" i
 | `GITHUB_TOKEN` | No | *(empty)* | Raises the sentinel's GitHub API rate limit from 10 to 30 req/min |
 | `ASSET_SCHEDULER_INTERVAL_HOURS` | No | `4` | How often the asset worker polls prices |
 | `SENTINEL_SCHEDULER_INTERVAL_HOURS` | No | `6` | How often the sentinel worker polls threat-intel sources |
-| `MAX_UNIQUE_SYMBOLS` | No | `100` | System-wide cap on distinct tracked asset symbols |
+| `MAX_UNIQUE_SYMBOLS` | No | `100` | Cap on distinct asset symbols with an active rule, counted across **all users** because they share the instance's price-data quota. A new rule on an untracked symbol is refused at the cap; if the cap is lowered below what is already tracked, the scheduler checks the symbols whose rules are oldest and logs the skipped ones |
 | `ALERT_COOLDOWN_HOURS` | No | `4` | Default minimum gap between repeat alerts for the same subscription |
 | `ALERT_PRICE_MOVE_PCT` | No | `3` | Price move (%) since the last alert required to bypass an active cooldown |
 | `TWELVE_DATA_MANUAL_DAILY_CREDITS` | No | `400` | Twelve Data credits per UTC day that Check now may spend refreshing stale stock prices; `0` turns manual stock refresh off |

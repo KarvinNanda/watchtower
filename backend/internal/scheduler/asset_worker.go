@@ -223,6 +223,8 @@ func (w *AssetWorker) run(scope runScope) (result AssetRunResult, err error) {
 
 // getUniqueActiveSymbols returns every distinct symbol with at least one
 // active rule (only userID's when userID != 0), capped at maxUniqueSymbols.
+// Past the cap it keeps the symbols whose earliest active rule is oldest,
+// so the cut is deterministic, and logs the skipped ones (#56).
 func (w *AssetWorker) getUniqueActiveSymbols(userID uint64) ([]SymbolInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
@@ -236,8 +238,9 @@ func (w *AssetWorker) getUniqueActiveSymbols(userID uint64) ([]SymbolInfo, error
 		query += ` AND user_id = ?`
 		args = append(args, userID)
 	}
-	query += ` GROUP BY asset_symbol LIMIT ?`
-	args = append(args, w.maxUniqueSymbols)
+	query += `
+		GROUP BY asset_symbol
+		ORDER BY MIN(created_at), asset_symbol`
 
 	rows, err := w.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -253,7 +256,19 @@ func (w *AssetWorker) getUniqueActiveSymbols(userID uint64) ([]SymbolInfo, error
 		}
 		symbols = append(symbols, s)
 	}
-	return symbols, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(symbols) > w.maxUniqueSymbols {
+		skipped := make([]string, 0, len(symbols)-w.maxUniqueSymbols)
+		for _, s := range symbols[w.maxUniqueSymbols:] {
+			skipped = append(skipped, s.Symbol)
+		}
+		log.Printf("[WARN] AssetWorker: %d active symbol(s) over MAX_UNIQUE_SYMBOLS=%d are not checked: %s",
+			len(skipped), w.maxUniqueSymbols, strings.Join(skipped, ", "))
+		symbols = symbols[:w.maxUniqueSymbols]
+	}
+	return symbols, nil
 }
 
 // processSymbolSafe wraps processSymbol with panic recovery so a failure
