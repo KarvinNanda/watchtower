@@ -239,13 +239,15 @@ func (f *AssetFetcher) fetchStockOnce(symbol string) (*FetchResult, error) {
 	f.stockPacer.wait()
 	recordStockAPICall()
 
-	endpoint := fmt.Sprintf("%s?symbol=%s&apikey=%s",
-		twelveDataQuoteURL, url.QueryEscape(symbol), url.QueryEscape(f.twelveDataKey))
+	// The key goes in the Authorization header, never in the URL: a network
+	// error quotes the full URL, and that error is logged (#74).
+	endpoint := fmt.Sprintf("%s?symbol=%s", twelveDataQuoteURL, url.QueryEscape(symbol))
 
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("asset: build twelve data request for %s: %w", symbol, err)
 	}
+	req.Header.Set("Authorization", "apikey "+f.twelveDataKey)
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {

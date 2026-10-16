@@ -74,6 +74,7 @@ func main() {
 	}
 
 	authService := auth.NewService(database.SQL, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
+	authService.SetDefaultAlertCooldownHours(cfg.Limits.AlertCooldownHours)
 	userService := user.NewUserService(database.SQL, cfg.Limits.MaxUniqueSymbols)
 	botHandler := telegram.NewBotHandler(cfg.Telegram.AssetBotToken, cfg.Telegram.SentinelBotToken)
 

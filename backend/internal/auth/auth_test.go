@@ -73,9 +73,15 @@ func (m bcryptHashMatcher) Match(v driver.Value) bool {
 }
 
 func expectSuccessfulRegister(mock sqlmock.Sqlmock, email, password string) {
+	expectRegisterWithCooldown(mock, email, password, 4)
+}
+
+// expectRegisterWithCooldown expects a new user row with the given default
+// alert cooldown (#75).
+func expectRegisterWithCooldown(mock sqlmock.Sqlmock, email, password string, cooldown int) {
 	mock.ExpectBegin()
-	mock.ExpectExec(`INSERT INTO users`).
-		WithArgs(email, bcryptHashMatcher{plaintext: password}).
+	mock.ExpectExec(`INSERT INTO users \(email, password_hash, alert_cooldown_hours\)`).
+		WithArgs(email, bcryptHashMatcher{plaintext: password}, cooldown).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO user_profiles`).
 		WithArgs(int64(1)).
@@ -109,7 +115,7 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO users`).
-		WithArgs(email, bcryptHashMatcher{plaintext: password}).
+		WithArgs(email, bcryptHashMatcher{plaintext: password}, 4).
 		WillReturnError(&mysqldriver.MySQLError{Number: 1062, Message: "Duplicate entry"})
 	mock.ExpectRollback()
 
@@ -429,4 +435,17 @@ func TestHashPassword_ComparePassword(t *testing.T) {
 
 	assert.True(t, auth.ComparePassword(hash, "Valid1Pass!"))
 	assert.False(t, auth.ComparePassword(hash, "WrongPassword!"))
+}
+
+// #75: ALERT_COOLDOWN_HOURS is the cooldown a new user starts with.
+func TestRegister_UsesTheConfiguredDefaultCooldown(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockService(t)
+	svc.SetDefaultAlertCooldownHours(12)
+	expectRegisterWithCooldown(mock, "new@example.com", "Valid1Pass!", 12)
+
+	err := svc.Register(context.Background(), "new@example.com", "Valid1Pass!")
+
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
