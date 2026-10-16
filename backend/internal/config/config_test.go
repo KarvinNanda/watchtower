@@ -116,3 +116,37 @@ func TestLoad_NegativeManualCreditsFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "TWELVE_DATA_MANUAL_DAILY_CREDITS")
 }
+
+// #50: viper's GetInt turns a typo into 0 silently (e.g. manual stock
+// refresh off). A setting that is not a number or a boolean stops startup
+// and every bad one is named.
+func TestLoad_NonNumericSettingsFail(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("TWELVE_DATA_MANUAL_DAILY_CREDITS", "abc")
+	t.Setenv("MAX_UNIQUE_SYMBOLS", "1.5")
+	t.Setenv("ALERT_PRICE_MOVE_PCT", "3%")
+	t.Setenv("COOKIE_SECURE", "maybe")
+
+	_, err := Load("does-not-exist.env")
+
+	require.Error(t, err)
+	for _, name := range []string{"TWELVE_DATA_MANUAL_DAILY_CREDITS", "MAX_UNIQUE_SYMBOLS", "ALERT_PRICE_MOVE_PCT", "COOKIE_SECURE"} {
+		assert.Contains(t, err.Error(), name)
+	}
+}
+
+func TestLoad_NumericSettingsWithSpacesAreRead(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("MAX_UNIQUE_SYMBOLS", " 50 ")
+	t.Setenv("ALERT_PRICE_MOVE_PCT", "2.5")
+	t.Setenv("COOKIE_SECURE", "true")
+
+	cfg, err := Load("does-not-exist.env")
+
+	require.NoError(t, err)
+	assert.Equal(t, 50, cfg.Limits.MaxUniqueSymbols)
+	assert.Equal(t, 2.5, cfg.Limits.AlertPriceMovePct)
+	assert.True(t, cfg.Server.CookieSecure)
+}
