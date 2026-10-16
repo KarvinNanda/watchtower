@@ -7,7 +7,8 @@ export function runResultText(result, t) {
   if (result.status === 'done') {
     const summary = result.summary ?? {}
     if (result.type === 'asset_report') {
-      if (!summary.symbols) return t('run.asset_report_empty')
+      // No symbols with errors means rules exist but could not be loaded.
+      if (!summary.symbols) return t(summary.errors > 0 ? 'run.asset_report_failed' : 'run.asset_report_empty')
       if (!summary.sent) return t('run.asset_report_failed')
     }
     let text = t(`run.${result.type}_summary`, summary)
@@ -30,7 +31,8 @@ export function runResultText(result, t) {
 export function runOk(result) {
   if (result?.status !== 'done') return false
   const summary = result.summary ?? {}
-  return !(result.type === 'asset_report' && summary.symbols > 0 && !summary.sent)
+  if (result.type !== 'asset_report') return true
+  return summary.symbols > 0 ? summary.sent > 0 : !(summary.errors > 0)
 }
 
 export function runTitleKey(type) {

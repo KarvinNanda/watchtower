@@ -59,7 +59,8 @@ func (w *AssetWorker) ReportForUser(userID uint64) (result AssetReportResult, er
 		}
 		chatID, lang = rows[0].TelegramAssetChatID, rows[0].PreferredLanguage
 		result.Symbols++
-		result.Rules += len(rows)
+		// Only rendered rules count, so the panel matches the Telegram header.
+		result.Rules += len(item.Rules)
 		if item.Unavailable {
 			result.Errors++
 		}
@@ -69,6 +70,12 @@ func (w *AssetWorker) ReportForUser(userID uint64) (result AssetReportResult, er
 		items = append(items, item)
 	}
 
+	// Active rules exist but none loaded (typically the chat was unlinked
+	// after the click): count it so the panel does not say "no active rules".
+	if len(symbols) > 0 && len(items) == 0 && result.Errors == 0 {
+		result.Errors++
+		log.Printf("[WARN] AssetWorker.ReportForUser: user=%d has active rules but none could be loaded (Telegram chat unlinked?)", userID)
+	}
 	if len(items) > 0 && w.sendReport(userID, chatID, lang, items) {
 		result.Sent = 1
 	}

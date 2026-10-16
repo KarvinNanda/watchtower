@@ -70,6 +70,11 @@ describe('asset_report results', () => {
     expect(runOk(done({ symbols: 0, sent: 0 }))).toBe(true)
   })
 
+  it('no symbols because rules could not be loaded is a failure, not "no active rules"', () => {
+    expect(runResultText(done({ symbols: 0, rules: 0, sent: 0, errors: 1, stale: 0 }), t)).toBe('run.asset_report_failed')
+    expect(runOk(done({ symbols: 0, sent: 0, errors: 1 }))).toBe(false)
+  })
+
   it('a report that could not be sent is not ok', () => {
     expect(runResultText(done({ symbols: 1, rules: 1, sent: 0, errors: 0, stale: 0 }), t)).toBe('run.asset_report_failed')
     expect(runOk(done({ symbols: 1, sent: 0 }))).toBe(false)

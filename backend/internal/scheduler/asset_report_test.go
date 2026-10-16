@@ -95,7 +95,9 @@ func TestReportForUser_UnavailablePriceIsListed(t *testing.T) {
 	res, err := w.ReportForUser(7)
 
 	require.NoError(t, err)
-	assert.Equal(t, AssetReportResult{Symbols: 2, Rules: 2, Sent: 1, Errors: 1}, res)
+	// Rules counts only rendered rules, like the Telegram header: the
+	// unavailable symbol lists none.
+	assert.Equal(t, AssetReportResult{Symbols: 2, Rules: 1, Sent: 1, Errors: 1}, res)
 	require.Len(t, notif.calls, 1)
 	assert.Contains(t, notif.calls[0].Message, "price unavailable")
 }
@@ -142,7 +144,9 @@ func TestReportForUser_NoLinkedRulesSendsNothing(t *testing.T) {
 	res, err := w.ReportForUser(7)
 
 	require.NoError(t, err)
-	assert.Equal(t, AssetReportResult{}, res)
+	// Active rules exist but none could be loaded: an error, so the panel
+	// does not claim there are no active rules.
+	assert.Equal(t, AssetReportResult{Errors: 1}, res)
 	assert.Empty(t, notif.calls)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
