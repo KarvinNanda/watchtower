@@ -109,8 +109,8 @@ func TestListRules_ExplicitNulls(t *testing.T) {
 	r, mock := newRuleTestRouter(t)
 	mock.ExpectQuery(`FROM asset_rules`).WillReturnRows(sqlmock.NewRows([]string{
 		"id", "asset_type", "asset_symbol", "rule_type", "direction", "intent", "level_usd", "pct", "is_active",
-		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd",
-	}).AddRow(int64(1), "crypto", "BTC", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC), "USD", nil, nil))
+		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd", "peak_price_idr", "triggered_price_idr",
+	}).AddRow(int64(1), "crypto", "BTC", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC), "USD", nil, nil, nil, nil))
 
 	w := do(r, http.MethodGet, "/rules/assets", "")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -118,6 +118,8 @@ func TestListRules_ExplicitNulls(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"peak_price_usd":null`)
 	assert.Contains(t, w.Body.String(), `"level_idr":null`)
 	assert.Contains(t, w.Body.String(), `"week52_ref_usd":null`)
+	assert.Contains(t, w.Body.String(), `"peak_price_idr":null`)
+	assert.Contains(t, w.Body.String(), `"triggered_price_idr":null`)
 }
 
 func TestCreateRule_SymbolOfAnotherTypeIs400WithClearMessage(t *testing.T) {

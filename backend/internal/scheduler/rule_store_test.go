@@ -16,7 +16,7 @@ var ruleColumns = []string{
 	"id", "user_id", "rule_type", "direction", "intent", "level_usd", "pct", "params_version",
 	"baseline_pending", "last_beyond", "peak_price_usd", "peak_since", "week52_ref_usd",
 	"last_alerted_price_usd", "cooldown_until",
-	"telegram_asset_chat_id", "alert_cooldown_hours", "preferred_language", "level_currency", "level_idr",
+	"telegram_asset_chat_id", "alert_cooldown_hours", "preferred_language", "level_currency", "level_idr", "peak_price_idr",
 }
 
 func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
@@ -26,7 +26,7 @@ func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
 		WithArgs("BTC", 7).
 		WillReturnRows(sqlmock.NewRows(ruleColumns).
 			AddRow(int64(11), int64(7), "price_level", "above", "take_profit", 120000.0, nil, int64(3),
-				false, true, 118000.0, time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC), nil, 119000.0, cooldown, int64(7000), int64(4), "en", "IDR", 2150000000.0))
+				false, true, 118000.0, time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC), nil, 119000.0, cooldown, int64(7000), int64(4), "en", "IDR", 2150000000.0, 2600000.0))
 
 	rows, err := w.loadRules(context.Background(), "BTC", 7)
 	require.NoError(t, err)
@@ -39,6 +39,8 @@ func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
 	assert.Equal(t, 120000.0, r.Rule.LevelUSD)
 	assert.Equal(t, rules.CurrencyIDR, r.Rule.Currency)
 	assert.Equal(t, 2150000000.0, r.Rule.LevelIDR)
+	require.NotNil(t, r.Rule.State.PeakPriceIDR)
+	assert.Equal(t, 2600000.0, *r.Rule.State.PeakPriceIDR)
 	assert.Equal(t, uint32(3), r.ParamsVersion)
 	require.NotNil(t, r.Rule.State.LastBeyond)
 	assert.True(t, *r.Rule.State.LastBeyond)
@@ -103,4 +105,33 @@ func TestApplyPatch_EmptyPatchWritesNothing(t *testing.T) {
 	w, mock, _ := newMockAssetWorker(t, 3)
 	require.NoError(t, w.applyPatch(context.Background(), 11, 3, rules.Patch{}))
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// #58: the rupiah peak and fired price are written like their USD twins.
+func TestBuildPatchUpdate_RupiahColumns(t *testing.T) {
+	peak := 2600000.0
+	clauses, args := buildPatchUpdate(rules.Patch{PeakPriceIDR: &peak})
+	assert.Equal(t, []string{"peak_price_idr = ?"}, clauses)
+	assert.Equal(t, []interface{}{2600000.0}, args)
+
+	at := time.Date(2026, 10, 16, 1, 0, 0, 0, time.UTC)
+	clauses, args = buildPatchUpdate(rules.Patch{Fired: &rules.FiredMark{At: at, PriceUSD: 125, PriceIDR: 2250000}})
+	assert.Equal(t, []string{"is_active = FALSE", "triggered_at = ?", "triggered_price_usd = ?", "triggered_price_idr = ?"}, clauses)
+	assert.Equal(t, []interface{}{at, 125.0, 2250000.0}, args)
+
+	clauses, _ = buildPatchUpdate(rules.Patch{Fired: &rules.FiredMark{At: at, PriceUSD: 125}})
+	assert.NotContains(t, clauses, "triggered_price_idr = ?", "a USD rule writes no rupiah price")
+}
+
+func TestMarkGoldTrailing(t *testing.T) {
+	rows := []ruleRow{
+		{Rule: rules.Rule{ID: 1, Type: rules.TypeTrailingStop}},
+		{Rule: rules.Rule{ID: 2, Type: rules.TypePriceLevel, Currency: rules.CurrencyUSD}},
+	}
+	markGoldTrailing(rows, "crypto")
+	assert.Empty(t, rows[0].Rule.Currency, "crypto stays USD")
+
+	markGoldTrailing(rows, "gold")
+	assert.Equal(t, rules.CurrencyIDR, rows[0].Rule.Currency)
+	assert.Equal(t, rules.CurrencyUSD, rows[1].Rule.Currency, "only trailing stops change")
 }

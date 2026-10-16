@@ -361,6 +361,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	if err != nil {
 		return symbolResult{}, fmt.Errorf("load rules for %s: %w", symbol.Symbol, err)
 	}
+	markGoldTrailing(rows, symbol.AssetType)
 	if len(rows) == 0 {
 		return symbolResult{}, nil
 	}

@@ -76,6 +76,10 @@ func TestAssetMessages_Golden(t *testing.T) {
 			Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: float64(i%9 + 1), PeakPriceUSD: 90000}})
 	}
 
+	// #58: an ANTAM trailing stop is tracked and reported in rupiah.
+	antamTrailing := []AssetAlert{{RuleID: 9, Symbol: "ANTAM", PriceUSD: 125.65, NativeIDR: 2250000, ChangePct: f64(-1.1),
+		Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: 10, Currency: rules.CurrencyIDR, PeakPriceIDR: 2500000}}}
+
 	idrLevels := []AssetAlert{
 		{RuleID: 1, Symbol: "ANTAM", PriceUSD: 130.9, NativeIDR: 2344000, ChangePct: f64(-0.3), Trigger: rules.Trigger{
 			Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentBuyTarget, Currency: rules.CurrencyIDR, LevelIDR: 2350000}},
@@ -102,6 +106,9 @@ func TestAssetMessages_Golden(t *testing.T) {
 		{"asset_id_split", "id", testRate, split},
 		{"asset_en_split", "en", testRate, split},
 		{"asset_id_oversized_symbol", "id", testRate, oversized},
+		{"asset_id_antam_trailing_idr", "id", testRate, antamTrailing},
+		{"asset_en_antam_trailing_idr", "en", testRate, antamTrailing},
+		{"asset_id_antam_trailing_idr_no_rate", "id", Rate{}, antamTrailing},
 		{"asset_id_idr_levels", "id", testRate, idrLevels},
 		{"asset_en_idr_levels", "en", testRate, idrLevels},
 		{"asset_id_idr_rate_unavailable", "id", Rate{}, idrLevels},
@@ -112,6 +119,11 @@ func TestAssetMessages_Golden(t *testing.T) {
 			assertGolden(t, tc.name, AssetMessages(tc.lang, at, tc.rate, tc.alerts))
 		})
 	}
+}
+
+func TestIDRAmount(t *testing.T) {
+	assert.Equal(t, "Rp 2.500.000 ≈ $139.60", idrAmount(testRate, 2500000))
+	assert.Equal(t, "Rp 2.500.000", idrAmount(Rate{}, 2500000))
 }
 
 func TestLevelAmount(t *testing.T) {

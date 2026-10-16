@@ -96,6 +96,7 @@ func (w *AssetWorker) reportSymbol(symbol SymbolInfo, userID uint64) (alertmsg.R
 	if err != nil {
 		return item, nil, fmt.Errorf("load rules for %s: %w", symbol.Symbol, err)
 	}
+	markGoldTrailing(rows, symbol.AssetType)
 	if len(rows) == 0 {
 		return item, nil, nil
 	}

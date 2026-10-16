@@ -8,9 +8,16 @@ export const INTENT_SIDE = { buy_target: 'below', take_profit: 'above', stop_los
 // A level within this many percent of the price is shown as "near".
 export const NEAR_PCT = 3
 
+// Gold is quoted in rupiah at its source, so its trailing stop is tracked in
+// rupiah (#58); mirrors markGoldTrailing in the scheduler.
+export function isRupiahTrailing(rule) {
+  return rule.rule_type === 'trailing_stop' && rule.asset_type === 'gold'
+}
+
 export function trailingStopLevel(rule) {
-  if (rule.peak_price_usd == null) return null
-  return rule.peak_price_usd * (1 - rule.pct / 100)
+  const peak = isRupiahTrailing(rule) ? rule.peak_price_idr : rule.peak_price_usd
+  if (peak == null) return null
+  return peak * (1 - rule.pct / 100)
 }
 
 function levelDistance(level, side, price) {
@@ -22,7 +29,7 @@ function levelDistance(level, side, price) {
 export function ruleDistance(rule, market) {
   if (rule.supported === false) return null
   // An IDR price level compares rupiah with rupiah (#40); everything else is USD.
-  const idr = rule.rule_type === 'price_level' && rule.level_currency === 'IDR'
+  const idr = (rule.rule_type === 'price_level' && rule.level_currency === 'IDR') || isRupiahTrailing(rule)
   const price = idr ? market?.price_idr : market?.price_usd
   if (!(price > 0)) return null
 

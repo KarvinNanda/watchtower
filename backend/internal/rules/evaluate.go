@@ -134,6 +134,9 @@ const pctEpsilon = 1e-9
 // creation or re-arm never fires the rule. It is one-shot: OnSent
 // deactivates the rule. No cooldown.
 func evalTrailingStop(r Rule, m Market, now time.Time) Outcome {
+	if r.Currency == CurrencyIDR {
+		return evalTrailingStopIDR(r, m, now)
+	}
 	price := m.PriceUSD
 	if r.State.PeakPriceUSD == nil {
 		return Outcome{Observed: Patch{PeakPriceUSD: floatPtr(price), PeakSince: timePtr(now)}}
@@ -169,6 +172,53 @@ func evalTrailingStop(r Rule, m Market, now time.Time) Outcome {
 		OnSent: Patch{
 			Fired: &FiredMark{At: now, PriceUSD: price},
 			Alert: &AlertMark{At: now, PriceUSD: price},
+		},
+	}
+}
+
+// evalTrailingStopIDR tracks a gold trailing stop on the native rupiah price
+// (#58), so USD/IDR moves do not shift it. Gold has no recent-high source,
+// so only the run's price raises the peak. Without a real IDR price the rule
+// waits (#41). A peak tracked in USD before #58 is converted once at this
+// fetch's own rate.
+func evalTrailingStopIDR(r Rule, m Market, now time.Time) Outcome {
+	if m.PriceIDR == nil {
+		return Outcome{Skip: SkipDataUnavailable}
+	}
+	price := *m.PriceIDR
+
+	var observed Patch
+	var peak float64
+	switch {
+	case r.State.PeakPriceIDR != nil:
+		peak = *r.State.PeakPriceIDR
+	case r.State.PeakPriceUSD != nil && m.PriceUSD > 0:
+		peak = *r.State.PeakPriceUSD * price / m.PriceUSD
+		observed.PeakPriceIDR = floatPtr(peak)
+	default:
+		return Outcome{Observed: Patch{PeakPriceIDR: floatPtr(price), PeakSince: timePtr(now)}}
+	}
+	if r.State.PeakSince == nil {
+		observed.PeakSince = timePtr(now)
+	}
+
+	if price > peak {
+		peak = price
+		observed.PeakPriceIDR = floatPtr(peak)
+	}
+	if peak <= 0 || (peak-price)/peak*100 < r.Pct-pctEpsilon {
+		return Outcome{Observed: observed}
+	}
+
+	trigger := triggerFor(r)
+	trigger.PeakPriceIDR = peak
+	return Outcome{
+		Fire:     true,
+		Trigger:  trigger,
+		Observed: observed,
+		OnSent: Patch{
+			Fired: &FiredMark{At: now, PriceUSD: m.PriceUSD, PriceIDR: price},
+			Alert: &AlertMark{At: now, PriceUSD: m.PriceUSD},
 		},
 	}
 }

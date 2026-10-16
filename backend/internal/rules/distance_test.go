@@ -96,3 +96,20 @@ func TestTriggerOf(t *testing.T) {
 	r := Rule{ID: 4, Type: TypePriceLevel, Direction: DirectionBelow, Intent: IntentStopLoss, LevelUSD: 95, Currency: CurrencyUSD}
 	assert.Equal(t, Trigger{Type: TypePriceLevel, Direction: DirectionBelow, Intent: IntentStopLoss, LevelUSD: 95, Currency: CurrencyUSD}, TriggerOf(r))
 }
+
+// #58: a gold trailing stop's stop and distance are in rupiah.
+func TestDistanceTo_TrailingStopIDR(t *testing.T) {
+	peak := 2500000.0
+	r := Rule{ID: 7, Type: TypeTrailingStop, Pct: 10, Currency: CurrencyIDR, State: State{PeakPriceIDR: &peak}}
+	idr := 2400000.0
+
+	d := DistanceTo(r, Market{PriceUSD: 130, PriceIDR: &idr})
+	assert.Equal(t, DistanceLevel, d.Kind)
+	assert.Equal(t, 2250000.0, d.Level)
+	assert.Equal(t, 2500000.0, d.PeakIDR)
+	assert.InDelta(t, -6.25, d.Pct, 1e-9)
+
+	assert.Equal(t, Distance{Kind: DistanceUnavailable}, DistanceTo(r, Market{PriceUSD: 130}))
+	r.State.PeakPriceIDR = nil
+	assert.Equal(t, Distance{Kind: DistanceWaitingPeak}, DistanceTo(r, Market{PriceUSD: 130, PriceIDR: &idr}))
+}
