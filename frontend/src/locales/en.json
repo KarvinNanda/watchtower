@@ -102,7 +102,7 @@
       "error_validation_error": "Some fields are not valid for this rule type.",
       "error_conflict": "This rule already exists, or this action is not allowed for it.",
       "error_not_found": "This rule no longer exists.",
-      "error_limit_reached": "The maximum number of tracked symbols has been reached.",
+      "error_limit_reached": "This WatchTower instance already tracks its maximum number of distinct symbols. The limit is shared by all users because they share one price-data quota. Use a symbol that is already tracked, or ask the admin to raise MAX_UNIQUE_SYMBOLS.",
       "unsupported": "Symbol not supported",
       "unsupported_hint": "WatchTower cannot fetch this symbol, so this rule never fires. Delete it or create a rule on a listed symbol.",
       "distance": "Distance",

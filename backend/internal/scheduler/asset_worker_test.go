@@ -235,7 +235,7 @@ func TestRun_OneFailingSymbolDoesNotBlockOthers(t *testing.T) {
 func TestRunForUser_WaitsForLockAndHandlesNoRules(t *testing.T) {
 	w, mock, _ := newMockAssetWorker(t, 3)
 	mock.ExpectQuery(`FROM asset_rules[\s\S]*AND user_id = \?`).
-		WithArgs(7, 100).
+		WithArgs(7).
 		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type", "needs_week52"}))
 
 	w.mu.Lock()
@@ -443,4 +443,25 @@ func TestProcessSymbol_IDRRuleSkippedWithoutIDRPrice(t *testing.T) {
 	assert.Equal(t, 1, res.idrWaiting, "#61: the waiting IDR rule is counted")
 	assert.Empty(t, batches)
 	assert.NoError(t, mock.ExpectationsWereMet(), "a skip writes no state")
+}
+
+// #56: past MAX_UNIQUE_SYMBOLS the run keeps the symbols whose active rules
+// are oldest (deterministic, not whatever MySQL returns first) and skips the
+// rest with a warning.
+func TestGetUniqueActiveSymbols_KeepsOldestAndCutsTheRest(t *testing.T) {
+	w, mock, _ := newMockAssetWorker(t, 3)
+	w.maxUniqueSymbols = 2
+	mock.ExpectQuery(`FROM asset_rules[\s\S]*GROUP BY asset_symbol\s+ORDER BY MIN\(created_at\), asset_symbol$`).
+		WillReturnRows(sqlmock.NewRows([]string{"asset_symbol", "asset_type", "needs_week52"}).
+			AddRow("BTC", "crypto", int64(0)).
+			AddRow("AAPL", "stock", int64(1)).
+			AddRow("ETH", "crypto", int64(0)))
+
+	got, err := w.getUniqueActiveSymbols(0)
+
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "BTC", got[0].Symbol)
+	assert.Equal(t, "AAPL", got[1].Symbol)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

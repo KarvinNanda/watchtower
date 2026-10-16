@@ -102,7 +102,7 @@
       "error_validation_error": "Ada field yang tidak valid untuk tipe rule ini.",
       "error_conflict": "Rule ini sudah ada, atau aksi ini tidak bisa dilakukan untuk rule ini.",
       "error_not_found": "Rule ini sudah tidak ada.",
-      "error_limit_reached": "Jumlah maksimum simbol yang dipantau sudah tercapai.",
+      "error_limit_reached": "Instance WatchTower ini sudah memantau jumlah maksimum simbol berbeda. Batas ini berlaku untuk semua pengguna karena kuota data harga dipakai bersama. Pakai simbol yang sudah dipantau, atau minta admin menaikkan MAX_UNIQUE_SYMBOLS.",
       "unsupported": "Simbol tidak didukung",
       "unsupported_hint": "WatchTower tidak bisa mengambil harga simbol ini, jadi rule ini tidak akan pernah fire. Hapus rule ini atau buat rule dengan simbol yang ada di daftar.",
       "distance": "Jarak",

@@ -115,3 +115,13 @@ describe('IDR waiting text (#61)', () => {
     expect(messages.run.idr_waiting).toContain('{idr_waiting}')
   })
 })
+
+describe('shared symbol limit text (#56)', () => {
+  it.each([
+    ['en', en, 'all users'],
+    ['id', id, 'semua pengguna'],
+  ])('%s says the limit is shared and how to raise it', (_, messages, shared) => {
+    expect(messages.asset.rules.error_limit_reached).toContain(shared)
+    expect(messages.asset.rules.error_limit_reached).toContain('MAX_UNIQUE_SYMBOLS')
+  })
+})
