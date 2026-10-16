@@ -237,8 +237,10 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		Close         string `json:"close"`
 		PercentChange string `json:"percent_change"`
 		High          string `json:"high"`
-		Timestamp     int64  `json:"timestamp"`
-		FiftyTwoWeek  struct {
+		// Timestamp is read leniently (#48): a string or empty value must
+		// not fail the decode and lose the price.
+		Timestamp    json.RawMessage `json:"timestamp"`
+		FiftyTwoWeek struct {
 			High string `json:"high"`
 			Low  string `json:"low"`
 		} `json:"fifty_two_week"`
@@ -276,12 +278,27 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		FetchedAt:     time.Now(),
 	}
 	// high is the session's high; timestamp is the session's start. A high
-	// without its window start cannot be used safely, so both or neither.
-	if h := parseOptionalFloat(raw.High); h != nil && *h > 0 && raw.Timestamp > 0 {
-		since := time.Unix(raw.Timestamp, 0).UTC()
-		res.HighUSD, res.HighSince = h, &since
+	// without its window start cannot be used safely, so both or neither. A
+	// window that starts after the fetch is impossible and also unknown.
+	if h := parseOptionalFloat(raw.High); h != nil && *h > 0 {
+		if ts := parseUnixSeconds(raw.Timestamp); ts > 0 {
+			if since := time.Unix(ts, 0).UTC(); !since.After(res.FetchedAt) {
+				res.HighUSD, res.HighSince = h, &since
+			}
+		}
 	}
 	return res, nil
+}
+
+// parseUnixSeconds reads a JSON number or numeric string; anything else
+// (empty, null, text) is 0, meaning unknown.
+func parseUnixSeconds(raw json.RawMessage) int64 {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 func parseOptionalFloat(s string) *float64 {
