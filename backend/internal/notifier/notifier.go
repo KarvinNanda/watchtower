@@ -29,6 +29,11 @@ type Status string
 const (
 	StatusSent   Status = "sent"
 	StatusFailed Status = "failed"
+
+	// StatusReportSummaryPrefix starts the content_summary of an asset
+	// status report (#7). A report is a sent asset message but not an alert,
+	// so queries about alerts exclude it.
+	StatusReportSummaryPrefix = "status report:"
 )
 
 const (

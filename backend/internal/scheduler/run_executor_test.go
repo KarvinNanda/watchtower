@@ -11,8 +11,15 @@ import (
 )
 
 type fakeAssetRunner struct {
-	gotUser uint64
-	res     AssetRunResult
+	gotUser       uint64
+	gotReportUser uint64
+	res           AssetRunResult
+	report        AssetReportResult
+}
+
+func (f *fakeAssetRunner) ReportForUser(userID uint64) (AssetReportResult, error) {
+	f.gotReportUser = userID
+	return f.report, nil
 }
 
 func (f *fakeAssetRunner) RunForUser(userID uint64) (AssetRunResult, error) {
@@ -58,4 +65,18 @@ func TestRunExecutor_UnknownType(t *testing.T) {
 	e := NewRunExecutor(&fakeAssetRunner{}, &fakeSentinelRunner{}, &fakeRecorder{})
 	_, err := e.Execute(context.Background(), &runs.Run{Type: "portfolio"})
 	assert.EqualError(t, err, `scheduler: unknown run type "portfolio"`)
+}
+
+func TestRunExecutor_AssetReport(t *testing.T) {
+	a := &fakeAssetRunner{report: AssetReportResult{Symbols: 2, Rules: 4, Sent: 1, Errors: 1, Stale: 1}}
+	rec := &fakeRecorder{}
+	e := NewRunExecutor(a, &fakeSentinelRunner{}, rec)
+
+	summary, err := e.Execute(context.Background(), &runs.Run{Type: runs.TypeAssetReport, UserID: 7})
+
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), a.gotReportUser)
+	assert.Zero(t, a.gotUser, "a report never runs Check now")
+	assert.Equal(t, map[string]int{"symbols": 2, "rules": 4, "sent": 1, "errors": 1, "stale": 1}, summary)
+	assert.Equal(t, 0, rec.calls)
 }

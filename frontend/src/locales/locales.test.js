@@ -82,3 +82,27 @@ describe('IDR level texts (#40)', () => {
     expect(messages.asset.rules.level).not.toContain('USD')
   })
 })
+
+describe('status report texts (#7)', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s has the report keys', (_, messages) => {
+    for (const key of ['send_report', 'sending_report', 'asset_report_summary', 'asset_report_unavailable', 'asset_report_empty', 'asset_report_failed']) {
+      expect(messages.run[key], key).toBeTruthy()
+    }
+    expect(messages.run.asset_report_summary).toContain('{symbols}')
+    expect(messages.run.asset_report_summary).toContain('{rules}')
+    expect(messages.run.asset_report_unavailable).toContain('{errors}')
+  })
+})
+
+describe('rate-limit text fits both run buttons (#7)', () => {
+  it.each([
+    ['en', en, /check/i],
+    ['id', id, /mengecek/i],
+  ])('%s error_too_many does not say "check"', (_, messages, word) => {
+    expect(messages.run.error_too_many).toContain('{seconds}')
+    expect(messages.run.error_too_many).not.toMatch(word)
+  })
+})

@@ -218,7 +218,8 @@ function handleRunStarted() {
 
 async function handleRunFinished(result) {
   runResult.value = result
-  if (result.status !== 'done') return
+  // A report changes no rule state: nothing to reload or highlight (#7).
+  if (result.status !== 'done' || result.type === 'asset_report') return
   await loadAll()
   if (!rulesError.value) highlightIds.value = runChangedRuleIds(store.assets, result.run)
 }
@@ -238,6 +239,7 @@ onUnmounted(() => marketStore.stopAutoRefresh())
 <template>
   <div class="asset-view">
     <div class="asset-view__toolbar">
+      <run-now-button type="asset_report" @started="handleRunStarted" @finished="handleRunFinished" />
       <run-now-button type="asset" @started="handleRunStarted" @finished="handleRunFinished" />
       <n-button type="primary" @click="openCreateModal">{{ t('asset.add') }}</n-button>
     </div>
@@ -363,6 +365,7 @@ onUnmounted(() => marketStore.stopAutoRefresh())
 <style scoped>
 .asset-view__toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
   margin-bottom: 8px;

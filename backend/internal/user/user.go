@@ -15,6 +15,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/karvin-nanda/watchtower/internal/auth"
+	"github.com/karvin-nanda/watchtower/internal/notifier"
 )
 
 // ErrNotFound is returned when no user matches the given lookup.
@@ -618,9 +619,12 @@ func (s *UserService) GetLastAlertTimestamps(userID uint64) (lastAsset, lastSent
 
 	var assetTime, sentinelTime sql.NullTime
 
+	// A status report (#7) is logged as a sent asset message but is not an
+	// alert, so it does not count as the last asset alert.
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT MAX(sent_at) FROM notification_logs WHERE user_id = ? AND notif_type = 'asset' AND status = 'sent'`,
-		userID,
+		SELECT MAX(sent_at) FROM notification_logs
+		WHERE user_id = ? AND notif_type = 'asset' AND status = 'sent' AND content_summary NOT LIKE ?`,
+		userID, notifier.StatusReportSummaryPrefix+"%",
 	).Scan(&assetTime); err != nil {
 		return nil, nil, fmt.Errorf("user: query last asset alert: %w", err)
 	}

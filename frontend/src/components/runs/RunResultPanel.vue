@@ -4,16 +4,17 @@ import { useI18n } from 'vue-i18n'
 import { NButton, NIcon } from 'naive-ui'
 import { CircleAlert, CircleCheck, X } from '@lucide/vue'
 
-import { runResultText } from '@/utils/runResult'
+import { runOk, runResultText, runTitleKey } from '@/utils/runResult'
 
-// Shows the last Check now result until closed (replaces the toast, Spec 4a).
+// Shows the last Check now or status report result until closed (replaces
+// the toast, Spec 4a).
 const props = defineProps({
   result: { type: Object, default: null },
 })
 const emit = defineEmits(['close'])
 
 const { t } = useI18n()
-const ok = computed(() => props.result?.status === 'done')
+const ok = computed(() => runOk(props.result))
 const text = computed(() => runResultText(props.result, t))
 const finishedAt = computed(() => {
   const at = props.result?.run?.finished_at
@@ -36,7 +37,7 @@ const finishedAt = computed(() => {
       aria-hidden="true"
     />
     <div class="run-result__body">
-      <p v-if="result" class="run-result__title">{{ t('run.check_now') }}</p>
+      <p v-if="result" class="run-result__title">{{ t(runTitleKey(result.type)) }}</p>
       <div role="status" aria-atomic="true">
         <template v-if="result && ok">
           <p class="run-result__text">{{ text }}</p>

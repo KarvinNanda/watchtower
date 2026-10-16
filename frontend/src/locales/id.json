@@ -223,9 +223,15 @@
     "failed": "Pengecekan gagal: {reason}",
     "error_scheduler_offline": "Scheduler tidak berjalan. Jalankan dengan: docker compose up -d",
     "error_telegram_not_linked": "Hubungkan chat Telegram untuk tipe alert ini dulu (halaman Setup Telegram).",
-    "error_too_many": "Tunggu {seconds} detik sebelum mengecek lagi.",
+    "error_too_many": "Tunggu {seconds} detik sebelum menjalankan ini lagi.",
     "reason_timed_out": "waktunya habis",
     "reason_failed": "run gagal; cek log scheduler",
-    "finished_at": "Selesai pukul {time}"
+    "finished_at": "Selesai pukul {time}",
+    "send_report": "Kirim laporan",
+    "sending_report": "Mengirim...",
+    "asset_report_summary": "Laporan terkirim ke Telegram: {symbols} simbol, {rules} rule.",
+    "asset_report_unavailable": "{errors} simbol tanpa harga (lihat log scheduler).",
+    "asset_report_empty": "Tidak ada rule aktif, laporan tidak dikirim.",
+    "asset_report_failed": "Laporan gagal dikirim ke Telegram (lihat log scheduler)."
   }
 }
