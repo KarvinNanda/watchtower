@@ -69,6 +69,9 @@ type AssetFetcher struct {
 	httpClient    *http.Client
 	stockPacer    *pacer
 	cryptoPacer   *pacer
+	// coinGeckoKey is an optional Demo API key (#65), sent only as the
+	// x-cg-demo-api-key header so it never appears in a URL, log or error.
+	coinGeckoKey string
 }
 
 // NewAssetFetcher builds an AssetFetcher using twelveDataKey for Twelve
@@ -81,6 +84,29 @@ func NewAssetFetcher(twelveDataKey string) *AssetFetcher {
 		stockPacer:    newPacer(twelveDataMinGap),
 		cryptoPacer:   newPacer(coinGeckoMinGap),
 	}
+}
+
+// SetCoinGeckoAPIKey sets an optional CoinGecko Demo API key. With a key the
+// CoinGecko calls are paced closer together (coinGeckoKeyedMinGap); an empty
+// key keeps the keyless public API and its pacing.
+func (f *AssetFetcher) SetCoinGeckoAPIKey(key string) {
+	f.coinGeckoKey = key
+	if key != "" {
+		f.cryptoPacer = newPacer(coinGeckoKeyedMinGap)
+	}
+}
+
+// coinGeckoRequest builds a GET for endpoint, adding the Demo key header
+// when one is set.
+func (f *AssetFetcher) coinGeckoRequest(endpoint string) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if f.coinGeckoKey != "" {
+		req.Header.Set("x-cg-demo-api-key", f.coinGeckoKey)
+	}
+	return req, nil
 }
 
 // SetHTTPClient overrides the fetcher's HTTP client, primarily for tests.
@@ -114,7 +140,7 @@ func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
 	coinID := coinGeckoID(symbol)
 	endpoint := fmt.Sprintf("%s/coins/markets?vs_currency=usd&ids=%s", CoinGeckoBaseURL, url.QueryEscape(coinID))
 
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := f.coinGeckoRequest(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("asset: build coingecko request for %s: %w", symbol, err)
 	}
@@ -476,7 +502,7 @@ func (f *AssetFetcher) FetchCryptoWeek52(symbol string) (high, low float64, err 
 
 	endpoint := fmt.Sprintf("%s/coins/%s/market_chart?vs_currency=usd&days=365",
 		CoinGeckoBaseURL, url.PathEscape(coinGeckoID(symbol)))
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := f.coinGeckoRequest(endpoint)
 	if err != nil {
 		return 0, 0, fmt.Errorf("asset: build coingecko market_chart request for %s: %w", symbol, err)
 	}
