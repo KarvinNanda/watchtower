@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runChangedRuleIds } from './runHighlight'
+import { runChangedRuleIds, highlightAfterRun } from './runHighlight'
 
 const run = { created_at: '2026-10-15T03:00:00.100Z', started_at: '2026-10-15T03:00:05.700Z' }
 
@@ -33,5 +33,21 @@ describe('runChangedRuleIds', () => {
   it('no usable run time → empty set', () => {
     expect(runChangedRuleIds([{ id: 1, last_alerted_at: '2026-10-15T03:00:09Z' }], {}).size).toBe(0)
     expect(runChangedRuleIds([{ id: 1, last_alerted_at: '2026-10-15T03:00:09Z' }], null).size).toBe(0)
+  })
+})
+
+// #55: the panel can be closed (or replaced by a newer run) while the rules
+// reload; a highlight set after that has no panel to clear it.
+describe('highlightAfterRun', () => {
+  const result = { status: 'done', type: 'asset', run }
+  const rules = [{ id: 1, last_alerted_at: '2026-10-15T03:00:09Z', triggered_at: null }]
+
+  it('highlights while the same result is still shown', () => {
+    expect([...highlightAfterRun(result, result, rules)]).toEqual([1])
+  })
+
+  it('highlights nothing once the panel was closed or replaced', () => {
+    expect(highlightAfterRun(null, result, rules).size).toBe(0)
+    expect(highlightAfterRun({ ...result }, result, rules).size).toBe(0)
   })
 })

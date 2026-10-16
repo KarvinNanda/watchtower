@@ -171,7 +171,7 @@
     "step4_desc": "Buka halaman Profil, tempel Chat ID di kolom Chat ID Bot Aset, lalu simpan.",
     "step5_title": "Ulangi untuk Bot Sentinel",
     "step5_desc": "Ulangi langkah 1-4 dengan {bot} untuk Chat ID Bot Sentinel.",
-    "auto_open_note": "💡 Catatan: Telegram tidak mengizinkan aplikasi lain untuk membuka chat bot secara otomatis. Setelah bot terbuka, ketik /start secara manual.",
+    "auto_open_note": "Catatan: Telegram tidak mengizinkan aplikasi lain untuk membuka chat bot secara otomatis. Setelah bot terbuka, ketik /start secara manual.",
     "open_bot": "Buka Bot di Telegram →",
     "open_bot_hint": "(Setelah terbuka, ketik /start)",
     "go_to_profile": "Buka Profil",
@@ -212,7 +212,8 @@
     "back": "Kembali",
     "required_field": "Wajib diisi",
     "session_expired": "Sesi Anda telah berakhir. Silakan masuk kembali.",
-    "retry": "Coba lagi"
+    "retry": "Coba lagi",
+    "toggle_navigation": "Buka/tutup navigasi"
   },
   "run": {
     "check_now": "Cek sekarang",

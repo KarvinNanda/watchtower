@@ -4,12 +4,13 @@ import { useI18n } from 'vue-i18n'
 import { NGrid, NGi, NCard, NStatistic, NSpin, NEmpty, NModal, NDescriptions, NDescriptionsItem, NTag } from 'naive-ui'
 
 import * as marketApi from '@/api/market'
+import { formatDateTime } from '@/utils/time'
 import { useMarketStore } from '@/stores/market'
 import { message } from '@/plugins/naive'
 import MarketCard from '@/components/market/MarketCard.vue'
 import NotifCard from '@/components/notifications/NotifCard.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const marketStore = useMarketStore()
 
 const loading = ref(true)
@@ -26,7 +27,7 @@ const detailVisible = ref(false)
 
 function formatTimestamp(value) {
   if (!value) return t('dashboard.never')
-  return new Date(value).toLocaleString()
+  return formatDateTime(value, locale.value)
 }
 
 function openDetail(notification) {

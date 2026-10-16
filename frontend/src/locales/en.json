@@ -171,7 +171,7 @@
     "step4_desc": "Go to the Profile page, paste the Chat ID into the Asset Bot Chat ID field, then save.",
     "step5_title": "Repeat for the Sentinel Bot",
     "step5_desc": "Repeat steps 1-4 with {bot} for the Sentinel Bot Chat ID.",
-    "auto_open_note": "💡 Note: Telegram doesn't allow other apps to open a bot chat automatically. Once the bot opens, type /start manually.",
+    "auto_open_note": "Note: Telegram doesn't allow other apps to open a bot chat automatically. Once the bot opens, type /start manually.",
     "open_bot": "Open Bot in Telegram →",
     "open_bot_hint": "(Once it opens, type /start)",
     "go_to_profile": "Go to Profile",
@@ -212,7 +212,8 @@
     "back": "Back",
     "required_field": "This field is required",
     "session_expired": "Your session has expired. Please sign in again.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "toggle_navigation": "Toggle navigation"
   },
   "run": {
     "check_now": "Check now",

@@ -162,8 +162,8 @@ func TestGetAssetRules_MapsState(t *testing.T) {
 	fired := time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(`FROM asset_rules\s+WHERE user_id = \?`).WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{
 		"id", "asset_type", "asset_symbol", "rule_type", "direction", "intent", "level_usd", "pct", "is_active",
-		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr",
-	}).AddRow(int64(5), "crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, 126080.0, fired, 113400.0, fired, fired, "USD", nil))
+		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd",
+	}).AddRow(int64(5), "crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, 126080.0, fired, 113400.0, fired, fired, "USD", nil, nil))
 
 	got, err := svc.GetAssetRules(7)
 	require.NoError(t, err)
@@ -236,18 +236,22 @@ func TestGetAssetRules_FlagsUnsupportedSymbols(t *testing.T) {
 	now := time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC)
 	cols := []string{
 		"id", "asset_type", "asset_symbol", "rule_type", "direction", "intent", "level_usd", "pct", "is_active",
-		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr",
+		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd",
 	}
 	mock.ExpectQuery(`FROM asset_rules`).WillReturnRows(sqlmock.NewRows(cols).
-		AddRow(int64(1), "crypto", "BTC", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil).
+		AddRow(int64(1), "crypto", "BTC", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil, 118000.0).
 		// A legacy free-form symbol copied by migration 000011: it can never be fetched.
-		AddRow(int64(2), "stock", "BRK-B", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil))
+		AddRow(int64(2), "stock", "BRK-B", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil, nil))
 
 	got, err := svc.GetAssetRules(7)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.True(t, got[0].Supported)
 	assert.False(t, got[1].Supported)
+	// #52: the 52-week reference the engine compares with is returned.
+	require.NotNil(t, got[0].Week52RefUSD)
+	assert.Equal(t, 118000.0, *got[0].Week52RefUSD)
+	assert.Nil(t, got[1].Week52RefUSD)
 }
 
 func TestCreateAssetRule_IDRLevel(t *testing.T) {

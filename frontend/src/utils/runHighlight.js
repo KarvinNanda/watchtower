@@ -19,3 +19,12 @@ export function runChangedRuleIds(rules, run) {
   }
   return ids
 }
+
+// highlightAfterRun returns the rules to highlight once the post-run reload
+// finished, but only while that run's result is still the one shown: a
+// panel closed or replaced during the reload would leave a highlight with
+// nothing to clear it (#55).
+export function highlightAfterRun(shownResult, result, rules) {
+  if (shownResult !== result) return new Set()
+  return runChangedRuleIds(rules, result.run)
+}

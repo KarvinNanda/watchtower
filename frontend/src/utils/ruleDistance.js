@@ -39,6 +39,13 @@ export function ruleDistance(rule, market) {
     }
     case 'pct_change_24h':
       return { kind: 'change24h', current: market.change_pct_24h ?? null, threshold: rule.pct }
+    case 'week52_break': {
+      // The engine compares with the extreme stored at the previous run
+      // (#52); a rule not evaluated yet has none.
+      const ref = rule.week52_ref_usd
+      if (!(ref > 0) || !['above', 'below'].includes(rule.direction)) return null
+      return levelDistance(ref, rule.direction, price)
+    }
     default:
       return null
   }

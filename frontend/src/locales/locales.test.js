@@ -116,6 +116,15 @@ describe('IDR waiting text (#61)', () => {
   })
 })
 
+describe('header navigation label (#55)', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s labels the menu button', (_, messages) => {
+    expect(messages.common.toggle_navigation).toBeTruthy()
+  })
+})
+
 describe('shared symbol limit text (#56)', () => {
   it.each([
     ['en', en, 'all users'],
