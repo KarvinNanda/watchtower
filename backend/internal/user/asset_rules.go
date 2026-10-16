@@ -18,7 +18,7 @@ var (
 	ErrInvalidDirection        = errors.New("direction must be one of: above, below")
 	ErrInvalidIntent           = errors.New("intent must be one of: buy_target, take_profit, stop_loss")
 	ErrIntentDirectionConflict = errors.New("direction conflicts with intent")
-	ErrMissingLevel            = errors.New("level_usd is required for price_level and must be at least 0.00000001 and at most 999999999")
+	ErrMissingLevel            = errors.New("price_level needs exactly one of level_usd (0.00000001 to 999999999) or level_idr (0.0001 to 999999999999)")
 	ErrInvalidPct              = errors.New("pct must be at least 0.01 and at most 100 (below 100 for trailing_stop)")
 	ErrFieldNotAllowed         = errors.New("a field was set that does not apply to this rule_type")
 	ErrWeek52NotForGold        = errors.New("week52_break is not available for gold")
@@ -47,6 +47,12 @@ const (
 	// 0% trailing stop fires on the next run, a 0% change rule on any move.
 	minRulePct  = 0.01
 	minLevelUSD = 1e-8
+	// level_idr DECIMAL(24,8): BTC is about Rp 1.5 billion, far above the
+	// USD cap. Below 0.0001 a rupiah level means nothing.
+	minLevelIDR      = 1e-4
+	maxLevelIDR      = 999999999999
+	levelCurrencyUSD = "USD"
+	levelCurrencyIDR = "IDR"
 )
 
 var validRuleTypes = map[string]bool{
@@ -76,6 +82,8 @@ type AssetRule struct {
 	Direction         *string
 	Intent            *string
 	LevelUSD          *float64
+	LevelCurrency     string // "USD" or "IDR"; price_level rules only differ
+	LevelIDR          *float64
 	Pct               *float64
 	IsActive          bool
 	PeakPriceUSD      *float64
@@ -97,7 +105,11 @@ type AssetRuleInput struct {
 	Direction   *string
 	Intent      *string
 	LevelUSD    *float64
-	Pct         *float64
+	LevelIDR    *float64
+	// LevelCurrency is derived by normalizeAssetRule from the level field
+	// that is set; any value passed in is ignored.
+	LevelCurrency string
+	Pct           *float64
 }
 
 // UpdateAssetRuleRequest replaces the definition (Rule != nil), toggles
@@ -116,7 +128,7 @@ type queryer interface {
 // spec §7.1 and returns the cleaned definition. A field that does not
 // apply to the rule type is rejected, never silently dropped.
 func normalizeAssetRule(in AssetRuleInput) (AssetRuleInput, error) {
-	out := AssetRuleInput{AssetType: in.AssetType, AssetSymbol: sanitizeAssetSymbol(in.AssetSymbol), RuleType: in.RuleType}
+	out := AssetRuleInput{AssetType: in.AssetType, AssetSymbol: sanitizeAssetSymbol(in.AssetSymbol), RuleType: in.RuleType, LevelCurrency: levelCurrencyUSD}
 
 	if !validAssetTypes[out.AssetType] {
 		return AssetRuleInput{}, ErrInvalidAssetType
@@ -140,17 +152,29 @@ func normalizeAssetRule(in AssetRuleInput) (AssetRuleInput, error) {
 		if in.Pct != nil {
 			return AssetRuleInput{}, ErrFieldNotAllowed
 		}
-		if in.LevelUSD == nil || !isValidPrice(*in.LevelUSD) || *in.LevelUSD < minLevelUSD {
+		switch {
+		case in.LevelUSD != nil && in.LevelIDR == nil:
+			if !isValidPrice(*in.LevelUSD) || *in.LevelUSD < minLevelUSD {
+				return AssetRuleInput{}, ErrMissingLevel
+			}
+			out.LevelUSD = in.LevelUSD
+		case in.LevelIDR != nil && in.LevelUSD == nil:
+			// NaN fails both comparisons, +Inf fails the upper bound.
+			if !(*in.LevelIDR >= minLevelIDR && *in.LevelIDR <= maxLevelIDR) {
+				return AssetRuleInput{}, ErrMissingLevel
+			}
+			out.LevelIDR, out.LevelCurrency = in.LevelIDR, levelCurrencyIDR
+		default:
 			return AssetRuleInput{}, ErrMissingLevel
 		}
 		dir, err := resolveDirection(in.Direction, in.Intent)
 		if err != nil {
 			return AssetRuleInput{}, err
 		}
-		out.Direction, out.Intent, out.LevelUSD = &dir, in.Intent, in.LevelUSD
+		out.Direction, out.Intent = &dir, in.Intent
 
 	case ruleTypePctChange24h, ruleTypeTrailingStop:
-		if in.Direction != nil || in.Intent != nil || in.LevelUSD != nil {
+		if in.Direction != nil || in.Intent != nil || in.LevelUSD != nil || in.LevelIDR != nil {
 			return AssetRuleInput{}, ErrFieldNotAllowed
 		}
 		ok := in.Pct != nil && *in.Pct >= minRulePct && *in.Pct <= maxRulePct
@@ -163,7 +187,7 @@ func normalizeAssetRule(in AssetRuleInput) (AssetRuleInput, error) {
 		out.Pct = in.Pct
 
 	case ruleTypeWeek52Break:
-		if in.Intent != nil || in.LevelUSD != nil || in.Pct != nil {
+		if in.Intent != nil || in.LevelUSD != nil || in.LevelIDR != nil || in.Pct != nil {
 			return AssetRuleInput{}, ErrFieldNotAllowed
 		}
 		if out.AssetType == "gold" {
@@ -203,7 +227,7 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, asset_type, asset_symbol, rule_type, direction, intent, level_usd, pct, is_active,
-			peak_price_usd, triggered_at, triggered_price_usd, last_alerted_at, created_at
+			peak_price_usd, triggered_at, triggered_price_usd, last_alerted_at, created_at, level_currency, level_idr
 		FROM asset_rules
 		WHERE user_id = ?
 		ORDER BY asset_symbol, created_at`, userID,
@@ -219,14 +243,17 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 			r                           AssetRule
 			direction, intent           sql.NullString
 			level, pct, peak, trigPrice sql.NullFloat64
+			levelIDR                    sql.NullFloat64
 			triggeredAt, lastAlertedAt  sql.NullTime
 		)
 		if err := rows.Scan(&r.ID, &r.AssetType, &r.AssetSymbol, &r.RuleType, &direction, &intent, &level, &pct,
-			&r.IsActive, &peak, &triggeredAt, &trigPrice, &lastAlertedAt, &r.CreatedAt); err != nil {
+			&r.IsActive, &peak, &triggeredAt, &trigPrice, &lastAlertedAt, &r.CreatedAt,
+			&r.LevelCurrency, &levelIDR); err != nil {
 			return nil, fmt.Errorf("user: scan asset_rules: %w", err)
 		}
 		r.Direction, r.Intent = nullStringPtr(direction), nullStringPtr(intent)
 		r.LevelUSD, r.Pct, r.PeakPriceUSD, r.TriggeredPriceUSD = nullFloatPtr(level), nullFloatPtr(pct), nullFloatPtr(peak), nullFloatPtr(trigPrice)
+		r.LevelIDR = nullFloatPtr(levelIDR)
 		r.TriggeredAt, r.LastAlertedAt = nullTimePtr(triggeredAt), nullTimePtr(lastAlertedAt)
 		t, ok := asset.SymbolAssetType(r.AssetSymbol)
 		r.Supported = ok && t == r.AssetType
@@ -256,9 +283,9 @@ func (s *UserService) CreateAssetRule(userID uint64, in AssetRuleInput) (uint64,
 	}
 
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO asset_rules (user_id, asset_type, asset_symbol, rule_type, direction, intent, level_usd, pct)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		userID, r.AssetType, r.AssetSymbol, r.RuleType, r.Direction, r.Intent, r.LevelUSD, r.Pct,
+		INSERT INTO asset_rules (user_id, asset_type, asset_symbol, rule_type, direction, intent, level_usd, pct, level_currency, level_idr)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		userID, r.AssetType, r.AssetSymbol, r.RuleType, r.Direction, r.Intent, r.LevelUSD, r.Pct, r.LevelCurrency, r.LevelIDR,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("user: insert asset_rules: %w", err)
@@ -352,8 +379,10 @@ func (s *UserService) updateRule(userID, ruleID uint64, def *AssetRuleInput, isA
 	clauses := []string{"is_active = ?", "params_version = params_version + 1"}
 	args := []interface{}{active}
 	if def != nil {
-		clauses = append(clauses, "asset_type = ?", "asset_symbol = ?", "rule_type = ?", "direction = ?", "intent = ?", "level_usd = ?", "pct = ?")
-		args = append(args, def.AssetType, def.AssetSymbol, def.RuleType, def.Direction, def.Intent, def.LevelUSD, def.Pct)
+		clauses = append(clauses, "asset_type = ?", "asset_symbol = ?", "rule_type = ?", "direction = ?", "intent = ?", "level_usd = ?", "pct = ?",
+			"level_currency = ?", "level_idr = ?")
+		args = append(args, def.AssetType, def.AssetSymbol, def.RuleType, def.Direction, def.Intent, def.LevelUSD, def.Pct,
+			def.LevelCurrency, def.LevelIDR)
 	}
 	// Turning a fired trailing stop back on (re-arm or is_active=true) must
 	// not reuse its old peak, or it fires again on the next run (spec §7.1).
@@ -384,11 +413,14 @@ func (s *UserService) updateRule(userID, ruleID uint64, def *AssetRuleInput, isA
 }
 
 // sameDefinition compares two rule definitions at the precision MySQL
-// stores them (level_usd DECIMAL(20,8), pct DECIMAL(5,2)).
+// stores them (level_usd DECIMAL(20,8), level_idr DECIMAL(24,8), pct
+// DECIMAL(5,2)). A currency change is a new definition even when the number
+// is the same.
 func sameDefinition(a, b AssetRuleInput) bool {
 	return a.AssetType == b.AssetType && a.AssetSymbol == b.AssetSymbol && a.RuleType == b.RuleType &&
 		sameString(a.Direction, b.Direction) && sameString(a.Intent, b.Intent) &&
-		sameRounded(a.LevelUSD, b.LevelUSD, 1e8) && sameRounded(a.Pct, b.Pct, 1e2)
+		sameRounded(a.LevelUSD, b.LevelUSD, 1e8) && sameRounded(a.Pct, b.Pct, 1e2) &&
+		a.LevelCurrency == b.LevelCurrency && sameRounded(a.LevelIDR, b.LevelIDR, 1e8)
 }
 
 func sameString(a, b *string) bool {
@@ -412,13 +444,16 @@ func loadRuleForUpdate(ctx context.Context, tx *sql.Tx, userID, ruleID uint64) (
 		cur               currentRule
 		direction, intent sql.NullString
 		level, pct        sql.NullFloat64
+		levelIDR          sql.NullFloat64
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT asset_type, asset_symbol, rule_type, direction, intent, level_usd, pct, is_active, triggered_at IS NOT NULL
+		SELECT asset_type, asset_symbol, rule_type, direction, intent, level_usd, pct, is_active, triggered_at IS NOT NULL,
+			level_currency, level_idr
 		FROM asset_rules
 		WHERE id = ? AND user_id = ?
 		FOR UPDATE`, ruleID, userID,
-	).Scan(&cur.def.AssetType, &cur.def.AssetSymbol, &cur.def.RuleType, &direction, &intent, &level, &pct, &cur.isActive, &cur.fired)
+	).Scan(&cur.def.AssetType, &cur.def.AssetSymbol, &cur.def.RuleType, &direction, &intent, &level, &pct, &cur.isActive, &cur.fired,
+		&cur.def.LevelCurrency, &levelIDR)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return currentRule{}, ErrRuleNotFound
@@ -427,6 +462,7 @@ func loadRuleForUpdate(ctx context.Context, tx *sql.Tx, userID, ruleID uint64) (
 	}
 	cur.def.Direction, cur.def.Intent = nullStringPtr(direction), nullStringPtr(intent)
 	cur.def.LevelUSD, cur.def.Pct = nullFloatPtr(level), nullFloatPtr(pct)
+	cur.def.LevelIDR = nullFloatPtr(levelIDR)
 	return cur, nil
 }
 
@@ -460,9 +496,10 @@ func checkDuplicateRule(ctx context.Context, q queryer, userID, excludeID uint64
 			SELECT 1 FROM asset_rules
 			WHERE user_id = ? AND asset_symbol = ? AND rule_type = ?
 				AND direction <=> ? AND intent <=> ? AND level_usd <=> ? AND pct <=> ?
+				AND level_currency = ? AND level_idr <=> ?
 				AND is_active = TRUE AND id <> ?
 		)`,
-		userID, r.AssetSymbol, r.RuleType, r.Direction, r.Intent, r.LevelUSD, r.Pct, excludeID,
+		userID, r.AssetSymbol, r.RuleType, r.Direction, r.Intent, r.LevelUSD, r.Pct, r.LevelCurrency, r.LevelIDR, excludeID,
 	).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("user: check duplicate rule: %w", err)

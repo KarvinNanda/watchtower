@@ -45,6 +45,14 @@ func TestNormalizeAssetRule(t *testing.T) {
 		{"symbol not whitelisted", AssetRuleInput{AssetType: "stock", AssetSymbol: "BRK-B", RuleType: "pct_change_24h", Pct: fp(5)}, ErrInvalidAssetSymbol},
 		{"unknown rule type", base("volume_spike"), ErrInvalidRuleType},
 		{"unknown asset type", AssetRuleInput{AssetType: "bond", AssetSymbol: "BTC", RuleType: "pct_change_24h", Pct: fp(5)}, ErrInvalidAssetType},
+		{"IDR level ok", with(base("price_level"), func(i *AssetRuleInput) { i.Intent, i.LevelIDR = sp("buy_target"), fp(1350000) }), nil},
+		{"large IDR level ok (BTC in rupiah)", with(base("price_level"), func(i *AssetRuleInput) { i.Direction, i.LevelIDR = sp("above"), fp(1.46e9) }), nil},
+		{"USD cap unchanged", with(base("price_level"), func(i *AssetRuleInput) { i.Direction, i.LevelUSD = sp("above"), fp(1.46e9) }), ErrMissingLevel},
+		{"both levels", with(base("price_level"), func(i *AssetRuleInput) { i.Direction, i.LevelUSD, i.LevelIDR = sp("above"), fp(1), fp(1) }), ErrMissingLevel},
+		{"IDR below the stored scale", with(base("price_level"), func(i *AssetRuleInput) { i.Direction, i.LevelIDR = sp("above"), fp(0.00009) }), ErrMissingLevel},
+		{"IDR above the max", with(base("price_level"), func(i *AssetRuleInput) { i.Direction, i.LevelIDR = sp("above"), fp(1e12) }), ErrMissingLevel},
+		{"IDR level on a pct rule", with(base("pct_change_24h"), func(i *AssetRuleInput) { i.Pct, i.LevelIDR = fp(5), fp(1) }), ErrFieldNotAllowed},
+		{"IDR level on week52", with(base("week52_break"), func(i *AssetRuleInput) { i.Direction, i.LevelIDR = sp("above"), fp(1) }), ErrFieldNotAllowed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,6 +63,27 @@ func TestNormalizeAssetRule(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNormalizeAssetRule_DerivesLevelCurrency(t *testing.T) {
+	usd, err := normalizeAssetRule(AssetRuleInput{AssetType: "crypto", AssetSymbol: "BTC", RuleType: "price_level", Direction: sp("above"), LevelUSD: fp(1)})
+	require.NoError(t, err)
+	assert.Equal(t, "USD", usd.LevelCurrency)
+	assert.Nil(t, usd.LevelIDR)
+
+	idr, err := normalizeAssetRule(AssetRuleInput{AssetType: "gold", AssetSymbol: "ANTAM", RuleType: "price_level", Intent: sp("buy_target"), LevelIDR: fp(1350000)})
+	require.NoError(t, err)
+	assert.Equal(t, "IDR", idr.LevelCurrency)
+	assert.Nil(t, idr.LevelUSD)
+
+	// A client cannot choose the currency; only the level field it sends counts.
+	forced, err := normalizeAssetRule(AssetRuleInput{AssetType: "crypto", AssetSymbol: "BTC", RuleType: "price_level", Direction: sp("above"), LevelUSD: fp(1), LevelCurrency: "IDR"})
+	require.NoError(t, err)
+	assert.Equal(t, "USD", forced.LevelCurrency)
+
+	pct, err := normalizeAssetRule(AssetRuleInput{AssetType: "crypto", AssetSymbol: "BTC", RuleType: "pct_change_24h", Pct: fp(5)})
+	require.NoError(t, err)
+	assert.Equal(t, "USD", pct.LevelCurrency, "the column is NOT NULL; non-level rules keep the default")
 }
 
 func TestNormalizeAssetRule_DerivesDirectionAndCleansSymbol(t *testing.T) {
