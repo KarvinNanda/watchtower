@@ -43,19 +43,24 @@ func sentAtLine(at time.Time, lang string) string {
 
 // pack joins blocks under h. If everything fits in one message there is no
 // part label. Otherwise blocks are packed greedily into parts, each with
-// the same header plus "(Bagian X/Y)" / "(Part X/Y)". A block is never
-// split; a single block over the limit is sent as is.
+// the same header plus "(Bagian X/Y)" / "(Part X/Y)". A block that does not
+// fit in one part is split by line first (#63); a single line over the
+// limit is sent as is.
 func pack(lang string, h header, blocks []string) []string {
 	if len(blocks) == 0 {
 		return nil
 	}
 	full := h.render("") + blockSeparator + strings.Join(blocks, blockSeparator)
-	if len(full) <= telegramMaxMessageLen || len(blocks) == 1 {
+	if len(full) <= telegramMaxMessageLen {
 		return []string{full}
 	}
 
 	// Reserve room for the longest label this message could need.
 	headerLen := len(h.render(partLabel(lang, 999, 999))) + len(blockSeparator)
+	blocks = splitOversized(blocks, telegramMaxMessageLen-headerLen)
+	if len(blocks) == 1 {
+		return []string{full}
+	}
 	var groups [][]string
 	var current []string
 	currentLen := headerLen
@@ -78,4 +83,29 @@ func pack(lang string, h header, blocks []string) []string {
 		msgs[i] = h.render(partLabel(lang, i+1, len(groups))) + blockSeparator + strings.Join(g, blockSeparator)
 	}
 	return msgs
+}
+
+// splitOversized splits every block longer than max by line (#63). Each
+// piece repeats the block's first line (the symbol and its price) so it
+// reads on its own. A block whose lines cannot be split stays as is.
+func splitOversized(blocks []string, max int) []string {
+	out := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if len(b) <= max {
+			out = append(out, b)
+			continue
+		}
+		lines := strings.Split(b, "\n")
+		first := lines[0]
+		piece := first
+		for _, l := range lines[1:] {
+			if piece != first && len(piece)+1+len(l) > max {
+				out = append(out, piece)
+				piece = first
+			}
+			piece += "\n" + l
+		}
+		out = append(out, piece)
+	}
+	return out
 }

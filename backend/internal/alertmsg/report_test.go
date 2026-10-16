@@ -53,6 +53,14 @@ func TestAssetReportMessages_Golden(t *testing.T) {
 		}})
 	}
 
+	// #63: one symbol with more active rules than fit in one message.
+	oversized := []ReportSymbol{{Symbol: "BTC", PriceUSD: 82212, ChangePct: f64(0.7)}}
+	for i := 0; i < 60; i++ {
+		oversized[0].Rules = append(oversized[0].Rules, ReportRule{RuleID: uint64(i + 1),
+			Trigger:  rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: float64(90000 + i*100)},
+			Distance: rules.Distance{Kind: rules.DistanceLevel, Level: float64(90000 + i*100), Pct: 9.5}})
+	}
+
 	cases := []struct {
 		name    string
 		lang    string
@@ -65,6 +73,7 @@ func TestAssetReportMessages_Golden(t *testing.T) {
 		{"report_en_rate_unavailable", "en", Rate{}, reportSymbols()},
 		{"report_id_stale", "id", testRate, stale},
 		{"report_en_split", "en", testRate, split},
+		{"report_id_oversized_symbol", "id", testRate, oversized},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

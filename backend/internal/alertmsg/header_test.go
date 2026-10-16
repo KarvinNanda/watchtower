@@ -1,6 +1,7 @@
 package alertmsg
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -60,4 +61,39 @@ func TestPack_OversizedSingleBlockIsSentAsIs(t *testing.T) {
 	msgs := pack("en", testHeader(), []string{huge})
 	require.Len(t, msgs, 1)
 	assert.Contains(t, msgs[0], huge)
+}
+
+// #63: a block over the limit is split by line; each piece repeats the
+// block's first line so it reads on its own, and no line is lost or doubled.
+func TestPack_OversizedBlockIsSplitByLine(t *testing.T) {
+	first := "📊 *BTC* · $1"
+	lines := []string{first}
+	for i := 0; i < 60; i++ {
+		lines = append(lines, fmt.Sprintf("📉 rule %02d %s", i, strings.Repeat("y", 80)))
+	}
+	lines = append(lines, "24h 1\\.00%")
+	block := strings.Join(lines, "\n")
+	require.Greater(t, len(block), telegramMaxMessageLen)
+
+	msgs := pack("id", testHeader(), []string{"📊 *AAA* · $2", block})
+
+	require.Greater(t, len(msgs), 1)
+	seen := map[string]int{}
+	for i, m := range msgs {
+		assert.LessOrEqual(t, len(m), telegramMaxMessageLen, "part %d", i+1)
+		assert.Contains(t, m, partLabel("id", i+1, len(msgs)))
+		for _, l := range strings.Split(m, "\n") {
+			if strings.HasPrefix(l, "📉 rule ") {
+				seen[l]++
+			}
+		}
+		if strings.Contains(m, "📉 rule ") {
+			assert.Contains(t, m, first+"\n📉 rule ", "part %d: a piece starts with the symbol line", i+1)
+		}
+	}
+	assert.Len(t, seen, 60)
+	for l, n := range seen {
+		assert.Equal(t, 1, n, l)
+	}
+	assert.True(t, strings.HasSuffix(msgs[len(msgs)-1], "24h 1\\.00%"), "the 24h line stays at the end")
 }
