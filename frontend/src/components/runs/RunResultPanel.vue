@@ -5,6 +5,7 @@ import { NButton, NIcon } from 'naive-ui'
 import { CircleAlert, CircleCheck, X } from '@lucide/vue'
 
 import { runOk, runResultText, runTitleKey } from '@/utils/runResult'
+import { formatClock } from '@/utils/time'
 
 // Shows the last Check now or status report result until closed (replaces
 // the toast, Spec 4a).
@@ -13,12 +14,12 @@ const props = defineProps({
 })
 const emit = defineEmits(['close'])
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const ok = computed(() => runOk(props.result))
 const text = computed(() => runResultText(props.result, t))
 const finishedAt = computed(() => {
   const at = props.result?.run?.finished_at
-  return at ? t('run.finished_at', { time: new Date(at).toLocaleTimeString() }) : ''
+  return at ? t('run.finished_at', { time: formatClock(at, locale.value) }) : ''
 })
 </script>
 
