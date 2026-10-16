@@ -84,21 +84,51 @@ func groupAlerts(alerts []AssetAlert) []assetGroup {
 	return groups
 }
 
+// symbolList is the header list of symbols: at most maxHeaderSymbols, then "+N".
+func symbolList(names []string) string {
+	if len(names) <= maxHeaderSymbols {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:maxHeaderSymbols], ", ") + fmt.Sprintf(", +%d", len(names)-maxHeaderSymbols)
+}
+
 // assetSummary is the header text after the title: "BTC, ETH (3 trigger)".
 func assetSummary(lang string, groups []assetGroup, fired int) string {
-	symbols := make([]string, 0, maxHeaderSymbols+1)
+	names := make([]string, len(groups))
 	for i, g := range groups {
-		if i == maxHeaderSymbols {
-			symbols = append(symbols, fmt.Sprintf("+%d", len(groups)-maxHeaderSymbols))
-			break
-		}
-		symbols = append(symbols, g.symbol)
+		names[i] = g.symbol
 	}
 	noun := "trigger"
 	if isEN(lang) && fired != 1 {
 		noun = "triggers"
 	}
-	return fmt.Sprintf("%s (%d %s)", strings.Join(symbols, ", "), fired, noun)
+	return fmt.Sprintf("%s (%d %s)", symbolList(names), fired, noun)
+}
+
+// priceLine is a symbol block's first line: "📊 *BTC* · $81,714.00 · Rp …".
+func priceLine(rate Rate, g assetGroup) string {
+	first := "📊 *" + esc(g.symbol) + "* · " + esc(formatUSD(g.priceUSD))
+	if idr := groupIDR(rate, g); idr > 0 {
+		first += " · " + esc(formatIDR(idr))
+	}
+	return first
+}
+
+// changeLine is a symbol block's last line: "24h 1.20%" or "24h n/a".
+func changeLine(changePct *float64) string {
+	change := "n/a"
+	if changePct != nil {
+		change = fmt.Sprintf("%.2f%%", *changePct)
+	}
+	return esc("24h " + change)
+}
+
+func assetBlock(lang string, rate Rate, g assetGroup) string {
+	lines := []string{priceLine(rate, g)}
+	for _, a := range g.alerts {
+		lines = append(lines, triggerEmoji(a.Trigger)+" "+esc(triggerSentence(lang, rate, a.Trigger)))
+	}
+	return strings.Join(append(lines, changeLine(g.changePct)), "\n")
 }
 
 func rateLine(lang string, loc *time.Location, rate Rate) string {
@@ -110,22 +140,6 @@ func rateLine(lang string, loc *time.Location, rate Rate) string {
 		s += " (" + pick(lang, "rate as of ", "kurs ") + formatTime(rate.UpdatedAt.In(loc), rateTimeLayout, lang) + ")"
 	}
 	return "💱 " + esc(s)
-}
-
-func assetBlock(lang string, rate Rate, g assetGroup) string {
-	first := "📊 *" + esc(g.symbol) + "* · " + esc(formatUSD(g.priceUSD))
-	if idr := groupIDR(rate, g); idr > 0 {
-		first += " · " + esc(formatIDR(idr))
-	}
-	lines := []string{first}
-	for _, a := range g.alerts {
-		lines = append(lines, triggerEmoji(a.Trigger)+" "+esc(triggerSentence(lang, rate, a.Trigger)))
-	}
-	change := "n/a"
-	if g.changePct != nil {
-		change = fmt.Sprintf("%.2f%%", *g.changePct)
-	}
-	return strings.Join(append(lines, esc("24h "+change)), "\n")
 }
 
 // groupIDR is the IDR price to show: the source's own IDR price when there

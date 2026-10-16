@@ -94,3 +94,29 @@ func FuzzPack(f *testing.F) {
 		}
 	})
 }
+
+func FuzzAssetReportMessages(f *testing.F) {
+	f.Add("BTC", 81714.0, 80000.0, -2.5, "en")
+	f.Add(`a\.b_(c)*[d]~>#+-=|{}!`, 0.5, 1e-9, 1e9, "id")
+	f.Fuzz(func(t *testing.T, symbol string, price, level, pct float64, lang string) {
+		if !utf8.ValidString(symbol) {
+			t.Skip("Telegram only accepts valid UTF-8")
+		}
+		for _, rate := range []Rate{{}, {Value: 17908, UpdatedAt: fuzzAt}} {
+			msgs := AssetReportMessages(lang, fuzzAt, rate, []ReportSymbol{
+				{Symbol: symbol, PriceUSD: price, ChangePct: &pct, Rules: []ReportRule{
+					{RuleID: 1, Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: level},
+						Distance: rules.Distance{Kind: rules.DistanceLevel, Level: level, Pct: pct}},
+					{RuleID: 2, Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: pct},
+						Distance: rules.Distance{Kind: rules.DistanceLevel, Level: level, PeakUSD: price, Pct: pct, Passed: true}},
+				}},
+				{Symbol: symbol + "x", Unavailable: true},
+			})
+			for i, m := range msgs {
+				if err := checkMarkdownV2(m); err != nil {
+					t.Fatalf("part %d: %v\n%s", i+1, err, m)
+				}
+			}
+		}
+	})
+}
