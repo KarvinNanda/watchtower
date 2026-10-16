@@ -5,7 +5,7 @@ import { NButton, NIcon, NSwitch, NTag } from 'naive-ui'
 import { ArrowDownRight, ArrowUpRight } from '@lucide/vue'
 
 import { formatUSD, formatIDR, formatPct, formatLevel, ruleSummary, ruleState } from '@/utils/assetRules'
-import { ruleDistance, trailingStopLevel, NEAR_PCT } from '@/utils/ruleDistance'
+import { ruleDistance, trailingStopLevel, isRupiahTrailing, NEAR_PCT } from '@/utils/ruleDistance'
 import { ruleIcon } from '@/utils/ruleIcons'
 import { formatAge, formatDateTime, isOlderThanHours } from '@/utils/time'
 
@@ -36,7 +36,10 @@ function levelText(rule) {
     case 'trailing_stop': {
       const stop = trailingStopLevel(rule)
       if (stop == null) return t('asset.rules.peak_pending')
-      return t('asset.rules.stop_at', { stop: formatUSD(stop), peak: formatUSD(rule.peak_price_usd) })
+      // Gold is tracked in rupiah (#58).
+      const rupiah = isRupiahTrailing(rule)
+      const fmt = rupiah ? formatIDR : formatUSD
+      return t('asset.rules.stop_at', { stop: fmt(stop), peak: fmt(rupiah ? rule.peak_price_idr : rule.peak_price_usd) })
     }
     case 'pct_change_24h':
       return `±${rule.pct}%`
@@ -74,7 +77,9 @@ const rows = computed(() =>
 
 function firedText(rule) {
   return t('asset.rules.fired', {
-    price: formatUSD(rule.triggered_price_usd),
+    price: isRupiahTrailing(rule) && rule.triggered_price_idr != null
+      ? formatIDR(rule.triggered_price_idr)
+      : formatUSD(rule.triggered_price_usd),
     date: formatDateTime(rule.triggered_at, locale.value),
   })
 }

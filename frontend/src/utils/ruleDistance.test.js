@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ruleDistance, trailingStopLevel, INTENT_SIDE, NEAR_PCT } from './ruleDistance'
+import { ruleDistance, trailingStopLevel, isRupiahTrailing, INTENT_SIDE, NEAR_PCT } from './ruleDistance'
 
 const market = (price, change = null) => ({ symbol: 'BTC', price_usd: price, change_pct_24h: change })
 const level = (extra) => ({ id: 1, rule_type: 'price_level', supported: true, ...extra })
@@ -117,4 +117,26 @@ describe('ruleDistance: week52_break', () => {
   it('not evaluated yet (no reference) → null', () => {
     expect(ruleDistance(w52({ direction: 'above', week52_ref_usd: null }), market(100))).toBeNull()
   })
+})
+
+// #58: mirrors TestDistanceTo_TrailingStopIDR in backend/internal/rules/distance_test.go.
+describe('ruleDistance: gold trailing stop in rupiah', () => {
+const antam = (peak) => ({ id: 7, rule_type: 'trailing_stop', asset_type: 'gold', pct: 10, peak_price_idr: peak, peak_price_usd: 140, supported: true })
+
+it('uses the rupiah peak and price', () => {
+  expect(isRupiahTrailing(antam(2500000))).toBe(true)
+  expect(trailingStopLevel(antam(2500000))).toBe(2250000)
+  const d = ruleDistance(antam(2500000), { price_usd: 130, price_idr: 2400000 })
+  expect(d.level).toBe(2250000)
+  expect(d.pct).toBeCloseTo(-6.25)
+})
+
+it('no rupiah peak yet → waiting, unknown price_idr → null', () => {
+  expect(trailingStopLevel(antam(null))).toBeNull()
+  expect(ruleDistance(antam(2500000), { price_usd: 130, price_idr: null })).toBeNull()
+})
+
+it('crypto trailing stops stay in USD', () => {
+  expect(isRupiahTrailing({ rule_type: 'trailing_stop', asset_type: 'crypto' })).toBe(false)
+})
 })
