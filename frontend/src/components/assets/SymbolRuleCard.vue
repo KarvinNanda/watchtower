@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { NButton, NIcon, NSwitch, NTag } from 'naive-ui'
 import { ArrowDownRight, ArrowUpRight } from '@lucide/vue'
 
-import { formatUSD, formatIDR, formatPct, ruleSummary, ruleState } from '@/utils/assetRules'
+import { formatUSD, formatIDR, formatPct, formatLevel, ruleSummary, ruleState } from '@/utils/assetRules'
 import { ruleDistance, trailingStopLevel, NEAR_PCT } from '@/utils/ruleDistance'
 import { ruleIcon } from '@/utils/ruleIcons'
 import { formatAge, isOlderThanHours } from '@/utils/time'
@@ -32,7 +32,7 @@ const stale = computed(
 function levelText(rule) {
   switch (rule.rule_type) {
     case 'price_level':
-      return formatUSD(rule.level_usd)
+      return formatLevel(rule)
     case 'trailing_stop': {
       const stop = trailingStopLevel(rule)
       if (stop == null) return t('asset.rules.peak_pending')
