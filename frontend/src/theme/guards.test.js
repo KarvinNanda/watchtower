@@ -21,3 +21,17 @@ describe('.vue files', () => {
     expect(src).not.toMatch(EMOJI)
   })
 })
+
+// #55: emoji also crept into UI text. Telegram messages are built in Go;
+// the web UI uses @lucide/vue icons, so locale strings carry no emoji.
+const locales = import.meta.glob('../locales/*.json', { query: '?raw', import: 'default', eager: true })
+
+describe('locale files', () => {
+  it('found both languages', () => {
+    expect(Object.keys(locales).length).toBe(2)
+  })
+
+  it.each(Object.entries(locales))('%s has no emoji', (_, src) => {
+    expect(src).not.toMatch(EMOJI)
+  })
+})

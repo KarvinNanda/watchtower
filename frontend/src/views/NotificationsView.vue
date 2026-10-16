@@ -6,8 +6,9 @@ import { NTabs, NTabPane, NEmpty, NSpin, NPagination, NDrawer, NDrawerContent, N
 import { useNotificationsStore } from '@/stores/notifications'
 import { message } from '@/plugins/naive'
 import NotifCard from '@/components/notifications/NotifCard.vue'
+import { formatDateTime } from '@/utils/time'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const store = useNotificationsStore()
 
 const PAGE_SIZE = 20
@@ -90,7 +91,7 @@ onMounted(load)
             {{ selectedNotification.keyword }}
           </n-descriptions-item>
           <n-descriptions-item label="Timestamp">
-            {{ new Date(selectedNotification.sent_at).toLocaleString() }}
+            {{ formatDateTime(selectedNotification.sent_at, locale) }}
           </n-descriptions-item>
         </n-descriptions>
         <p class="notifications-view__content">{{ selectedNotification?.content_summary }}</p>

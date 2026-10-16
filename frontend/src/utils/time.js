@@ -25,3 +25,15 @@ export function isOlderThanHours(iso, hours, now = Date.now()) {
   if (Number.isNaN(t) || hours == null) return false
   return now - t > hours * 3600 * 1000
 }
+
+// formatDateTime and formatClock show a time in the app language (#55), not
+// the browser's. Unknown input is a dash.
+export function formatDateTime(iso, locale) {
+  const t = Date.parse(iso ?? '')
+  return Number.isNaN(t) ? '—' : new Date(t).toLocaleString(locale)
+}
+
+export function formatClock(iso, locale) {
+  const t = Date.parse(iso ?? '')
+  return Number.isNaN(t) ? '—' : new Date(t).toLocaleTimeString(locale)
+}

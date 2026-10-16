@@ -7,7 +7,7 @@ import { ArrowDownRight, ArrowUpRight } from '@lucide/vue'
 import { formatUSD, formatIDR, formatPct, formatLevel, ruleSummary, ruleState } from '@/utils/assetRules'
 import { ruleDistance, trailingStopLevel, NEAR_PCT } from '@/utils/ruleDistance'
 import { ruleIcon } from '@/utils/ruleIcons'
-import { formatAge, isOlderThanHours } from '@/utils/time'
+import { formatAge, formatDateTime, isOlderThanHours } from '@/utils/time'
 
 // One symbol: price header and its rules (Spec 4a, section 3.3).
 const props = defineProps({
@@ -75,7 +75,7 @@ const rows = computed(() =>
 function firedText(rule) {
   return t('asset.rules.fired', {
     price: formatUSD(rule.triggered_price_usd),
-    date: new Date(rule.triggered_at).toLocaleString(),
+    date: formatDateTime(rule.triggered_at, locale.value),
   })
 }
 </script>
@@ -133,13 +133,17 @@ function firedText(rule) {
           <span>{{ row.summary }}</span>
           <n-tag v-if="row.highlighted" size="small" type="warning" round>{{ t('asset.rules.just_now') }}</n-tag>
         </span>
-        <span role="cell" class="rule-row__level wt-num">{{ row.level }}</span>
+        <span role="cell" class="rule-row__level wt-num">
+          <span class="rule-row__label">{{ t('asset.rules.level') }}</span>
+          {{ row.level }}
+        </span>
         <span
           role="cell"
           class="rule-row__distance wt-num"
           :class="{ 'is-near': row.near }"
           :title="row.near ? t('asset.rules.near_hint', { pct: NEAR_PCT }) : undefined"
         >
+          <span class="rule-row__label">{{ t('asset.rules.distance') }}</span>
           {{ row.distance }}
         </span>
         <span role="cell" class="rule-row__status">
@@ -282,9 +286,22 @@ function firedText(rule) {
   font-size: 12px;
 }
 
+/* The column header names Level and Distance on wide screens; below 768 px
+   it is hidden, so each cell shows its own small label (#55). */
+.rule-row__label {
+  display: none;
+}
+
 @media (max-width: 767px) {
   .rule-row--head {
     display: none;
+  }
+
+  .rule-row__label {
+    display: block;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--wt-text-subtle);
   }
 
   .rule-row {
