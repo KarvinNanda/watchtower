@@ -6,7 +6,8 @@ You clone it, run one setup script, and the whole thing (database, API, web app,
 
 ## What it does
 
-- **Asset alerts.** Price above/below a level and 24h % change, per asset, with a cooldown so the same alert is not repeated every check.
+- **Asset alerts.** Rules per symbol (20 crypto, 20 US stocks, ANTAM gold): a price level above/below, in USD or in rupiah, optionally labelled buy target, take profit or stop loss; a 24h % change; a trailing stop; and a 52-week high/low break. Each card in the web app shows every rule's level and how far the price is from it. A cooldown keeps the same alert from repeating every check.
+- **Status report.** A button sends one Telegram message with every symbol you track, its price and the distance to each rule, even when nothing triggered.
 - **Sentinel.** Polls NVD, CISA KEV, GitHub Security Advisories, BleepingComputer, The Hacker News, Exploit-DB and GitHub. Items matching your keywords arrive with CVSS severity, an "actively exploited" flag for CISA KEV entries, and CISA's required action.
 - **Check now.** A button on the web app runs your checks immediately instead of waiting for the schedule.
 - **Laptop friendly.** The schedule is stored in the database. After your machine wakes from sleep, a missed check runs within a minute, once.
@@ -141,7 +142,7 @@ Tests: `cd backend && go test ./...` and `cd frontend && npm test`.
 | Frontend | Vue 3, Naive UI, Pinia | Bilingual (EN/ID) dashboard, dark mode by default |
 | API | Go, Gin | REST API, JWT in an httpOnly cookie, run queue endpoints |
 | Scheduler | Go | Asset and sentinel pipelines, manual run consumer |
-| Database | MySQL 8 | Users, subscriptions, alert state, schedule state, history |
+| Database | MySQL 8 | Users, asset rules and their state, keywords, schedule state, history |
 | Cache / queue | Redis 7 | Market price cache, manual run queue, scheduler heartbeat |
 | Delivery | Telegram Bot API | Two bots (asset, sentinel), long polling |
 | Packaging | Docker Compose, nginx | One command to run everything on one machine |
@@ -161,10 +162,11 @@ Tests: `cd backend && go test ./...` and `cd frontend && npm test`.
 - Twelve Data's free tier allows 800 calls/day, so the stock symbol list stays small.
 - "Check now" for sentinel runs the global sentinel check (deduplication is global), so other users with matching keywords may receive new items at the same time.
 - Asset alerts are information only, not financial advice. Buy, take-profit and stop-loss wording only repeats the labels you gave your own rules.
-- IDR amounts in Telegram messages use the free open.er-api.com USD/IDR rate, which updates once a day. Each message shows the rate and when it was updated; rules are always evaluated in USD. If no real rate is available, IDR amounts are hidden and ANTAM is skipped for that run.
+- IDR amounts in Telegram messages use the free open.er-api.com USD/IDR rate, which updates once a day. Each message shows the rate and when it was updated. Price levels entered in rupiah and ANTAM trailing stops are evaluated on the rupiah price; everything else is evaluated in USD. For crypto and stocks the rupiah price is the USD price at that daily rate, so it can differ from a local exchange. If no real rate is available, IDR amounts are hidden, rupiah rules wait for the next check and ANTAM is skipped for that run.
 - All timestamps in Telegram messages use one timezone per installation (`APP_TIMEZONE`, default `Asia/Jakarta`).
 - "Check now" refreshes prices older than 15 minutes. Stock refreshes spend a daily share of the Twelve Data free tier (`TWELVE_DATA_MANUAL_DAILY_CREDITS`, default 400 of 800); when it is used up, Check now uses cached prices and says so. Periodic runs need about `stock symbols × 24 / ASSET_SCHEDULER_INTERVAL_HOURS` credits a day on top of that, so keep the sum under 800. If the provider's daily quota still runs out, stock prices are not retried until 00:00 UTC. The count only covers this installation, so sharing the API key elsewhere uses the same quota.
-- Trailing stops also count the source's recent high (about 24 h for crypto, the trading session for stocks), but only highs whose window starts after the rule was created or re-armed: about 25 h later for crypto, the next session for stocks.
+- Trailing stops also count the source's recent high (about 24 h for crypto, the trading session for stocks), but only highs whose window starts after the rule was created or re-armed: about 25 h later for crypto, the next session for stocks. ANTAM has no recent-high source, so its trailing stop only sees the price at each check (in rupiah).
+- `MAX_UNIQUE_SYMBOLS` (default 100) counts symbols across all users of an installation, because they share one price-data quota.
 
 ## Project structure
 
