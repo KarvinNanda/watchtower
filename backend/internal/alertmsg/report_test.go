@@ -49,7 +49,7 @@ func TestAssetReportMessages_Golden(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		split = append(split, ReportSymbol{Symbol: fmt.Sprintf("SYM%02d", i), PriceUSD: 1234.5, ChangePct: f64(-2.5), Rules: []ReportRule{
 			{RuleID: uint64(i + 1), Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: 5},
-				Distance: rules.Distance{Kind: rules.DistanceLevel, Level: 1235, PeakUSD: 1300, Pct: 0.04, Near: true}},
+				Distance: rules.Distance{Kind: rules.DistanceLevel, Level: 1235, PeakUSD: 1300, Pct: 0.04, Passed: true}},
 		}})
 	}
 

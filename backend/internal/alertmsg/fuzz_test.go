@@ -102,6 +102,11 @@ func FuzzAssetReportMessages(f *testing.F) {
 		if !utf8.ValidString(symbol) {
 			t.Skip("Telegram only accepts valid UTF-8")
 		}
+		// asset_rules.asset_symbol is VARCHAR(20) and [A-Z0-9-] only; a longer
+		// symbol cannot reach a report.
+		if len(symbol) > 20 {
+			t.Skip("symbols are at most 20 characters")
+		}
 		for _, rate := range []Rate{{}, {Value: 17908, UpdatedAt: fuzzAt}} {
 			msgs := AssetReportMessages(lang, fuzzAt, rate, []ReportSymbol{
 				{Symbol: symbol, PriceUSD: price, ChangePct: &pct, Rules: []ReportRule{
@@ -115,6 +120,9 @@ func FuzzAssetReportMessages(f *testing.F) {
 			for i, m := range msgs {
 				if err := checkMarkdownV2(m); err != nil {
 					t.Fatalf("part %d: %v\n%s", i+1, err, m)
+				}
+				if len(m) > telegramMaxMessageLen {
+					t.Fatalf("part %d is %d bytes, over Telegram's limit", i+1, len(m))
 				}
 			}
 		}
