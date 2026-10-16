@@ -18,6 +18,8 @@ import (
 const (
 	TypeAsset    = "asset"
 	TypeSentinel = "sentinel"
+	// TypeAssetReport sends a status report of the user's active rules (#7).
+	TypeAssetReport = "asset_report"
 
 	StatusQueued  = "queued"
 	StatusRunning = "running"
@@ -39,7 +41,7 @@ const (
 
 var (
 	ErrNotFound    = errors.New("runs: run not found")
-	ErrInvalidType = errors.New(`runs: type must be "asset" or "sentinel"`)
+	ErrInvalidType = errors.New(`runs: type must be "asset", "asset_report" or "sentinel"`)
 )
 
 // RateLimitedError means the user already started a run of this type
@@ -66,7 +68,7 @@ type Run struct {
 }
 
 func ValidType(t string) bool {
-	return t == TypeAsset || t == TypeSentinel
+	return t == TypeAsset || t == TypeSentinel || t == TypeAssetReport
 }
 
 type Store struct {

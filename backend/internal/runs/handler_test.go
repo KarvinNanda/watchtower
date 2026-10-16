@@ -155,3 +155,28 @@ func TestSQLTelegramLinkChecker(t *testing.T) {
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestCreateRun_AssetReportIsQueued(t *testing.T) {
+	api := newTestAPI(t, true)
+	require.NoError(t, api.store.Heartbeat(context.Background()))
+	w := api.do(http.MethodPost, "/api/runs", `{"type":"asset_report"}`)
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	assert.Equal(t, "asset_report", decode(t, w)["data"].(map[string]interface{})["type"])
+}
+
+func TestSQLTelegramLinkChecker_ReportUsesTheAssetChat(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	c := SQLTelegramLinkChecker{DB: db}
+
+	mock.ExpectQuery(`SELECT telegram_asset_chat_id IS NOT NULL FROM users WHERE id = \?`).
+		WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{"linked"}).AddRow(1))
+	linked, err := c.TelegramLinked(context.Background(), 7, TypeAssetReport)
+	require.NoError(t, err)
+	assert.True(t, linked)
+
+	_, err = c.TelegramLinked(context.Background(), 7, "portfolio")
+	assert.Error(t, err, "an unknown type never falls back to a chat column")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

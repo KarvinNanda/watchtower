@@ -228,3 +228,17 @@ func TestMark_LiveRunKeepsItsTTL(t *testing.T) {
 	assert.Equal(t, StatusDone, got.Status)
 	assert.Equal(t, 24*time.Hour, mr.TTL(runKeyPrefix+run.ID))
 }
+
+// Review focus 4: Check now and Send report have separate locks.
+func TestEnqueue_ReportHasItsOwnLock(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	ctx := context.Background()
+	_, err := s.Enqueue(ctx, 7, TypeAsset)
+	require.NoError(t, err)
+	_, err = s.Enqueue(ctx, 7, TypeAssetReport)
+	require.NoError(t, err, "a report right after Check now is allowed")
+
+	_, err = s.Enqueue(ctx, 7, TypeAssetReport)
+	var rl *RateLimitedError
+	assert.ErrorAs(t, err, &rl, "a second report within the lock window is refused")
+}

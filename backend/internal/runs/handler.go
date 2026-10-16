@@ -30,9 +30,14 @@ type SQLTelegramLinkChecker struct {
 
 func (c SQLTelegramLinkChecker) TelegramLinked(ctx context.Context, userID uint64, runType string) (bool, error) {
 	// The column comes from a fixed switch, never from user input.
-	query := `SELECT telegram_asset_chat_id IS NOT NULL FROM users WHERE id = ?`
-	if runType == TypeSentinel {
+	var query string
+	switch runType {
+	case TypeAsset, TypeAssetReport:
+		query = `SELECT telegram_asset_chat_id IS NOT NULL FROM users WHERE id = ?`
+	case TypeSentinel:
 		query = `SELECT telegram_sentinel_chat_id IS NOT NULL FROM users WHERE id = ?`
+	default:
+		return false, fmt.Errorf("runs: no telegram chat for run type %q", runType)
 	}
 	var linked bool
 	err := c.DB.QueryRowContext(ctx, query, userID).Scan(&linked)
@@ -66,7 +71,7 @@ func createRunHandler(store *Store, links TelegramLinkChecker) gin.HandlerFunc {
 
 		var req createRunRequest
 		if err := c.ShouldBindJSON(&req); err != nil || !ValidType(req.Type) {
-			fail(c, http.StatusBadRequest, "validation_error", `type must be "asset" or "sentinel"`)
+			fail(c, http.StatusBadRequest, "validation_error", `type must be "asset", "asset_report" or "sentinel"`)
 			return
 		}
 
