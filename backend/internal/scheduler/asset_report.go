@@ -143,7 +143,7 @@ func (w *AssetWorker) sendReport(userID uint64, chatID int64, lang string, items
 	if err := w.notifLogs.Record(ctx, notifier.LogEntry{
 		UserID:         userID,
 		NotifType:      notifier.TypeAsset,
-		ContentSummary: fmt.Sprintf("status report: %d symbols", len(items)),
+		ContentSummary: fmt.Sprintf("%s %d symbols", notifier.StatusReportSummaryPrefix, len(items)),
 		Status:         status,
 	}); err != nil {
 		log.Printf("[ERROR] sendReport: log notification for user %d failed: %v", userID, err)

@@ -261,7 +261,7 @@ func TestGetLastAlertTimestamps_Success(t *testing.T) {
 
 	now := time.Now()
 	mock.ExpectQuery(`SELECT MAX\(sent_at\) FROM notification_logs WHERE user_id = \? AND notif_type = 'asset'`).
-		WithArgs(uint64(1)).
+		WithArgs(uint64(1), "status report:%").
 		WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(now))
 	mock.ExpectQuery(`SELECT MAX\(sent_at\) FROM notification_logs WHERE user_id = \? AND notif_type = 'sentinel'`).
 		WithArgs(uint64(1)).
@@ -272,5 +272,24 @@ func TestGetLastAlertTimestamps_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, lastAsset)
 	assert.Nil(t, lastSentinel, "no sentinel alert has ever been sent, so this must be nil")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// #7: a status report is a sent asset message but not an alert, so it must
+// not move the dashboard's "Last Asset Alert".
+func TestGetLastAlertTimestamps_IgnoresStatusReports(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockUserService(t, 100)
+	mock.ExpectQuery(`notif_type = 'asset' AND status = 'sent' AND content_summary NOT LIKE \?`).
+		WithArgs(uint64(1), "status report:%").
+		WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(nil))
+	mock.ExpectQuery(`notif_type = 'sentinel'`).
+		WithArgs(uint64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(nil))
+
+	lastAsset, _, err := svc.GetLastAlertTimestamps(1)
+
+	require.NoError(t, err)
+	assert.Nil(t, lastAsset)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
