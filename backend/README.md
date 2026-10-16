@@ -32,8 +32,8 @@ backend/
 ├── internal/
 │   ├── auth/           # Registration, login, JWT issuance via httpOnly cookie, bcrypt hashing, auth middleware
 │   ├── user/           # User profile, asset/keyword subscriptions, notification history, dashboard queries
-│   ├── asset/           # Market data fetcher (CoinGecko, Twelve Data, harga-emas.org scraping), RSI/volatility/trend calculation
-│   ├── sentinel/        # Six-source threat-intel fetcher (NVD, CISA KEV, security RSS, GitHub repo search, Exploit-DB, GitHub Security Advisories), keyword matching, structured (JSON) AI output with a labeled-text fallback parser
+│   ├── asset/           # Market data fetcher (CoinGecko, Twelve Data, harga-emas.org scraping): price, 24h change, recent high, 52-week range
+│   ├── sentinel/        # Six-source threat-intel fetcher (NVD, CISA KEV, security RSS, GitHub repo search, Exploit-DB, GitHub Security Advisories), keyword matching
 │   ├── scheduler/       # asset_worker (4h interval, cooldown + price-move logic, one batched Telegram message per user) and sentinel_worker (6h interval, global item dedup)
 │   ├── currency/        # USD → IDR exchange rate lookup, cached
 │   ├── notifier/        # Telegram message dispatch for both bots, MarkdownV2 escaping, delivery logging
@@ -106,6 +106,7 @@ All routes live directly under `/api` — there is no version prefix. "Cookie" i
 | `MAX_UNIQUE_SYMBOLS` | No | `100` | System-wide cap on distinct tracked asset symbols |
 | `ALERT_COOLDOWN_HOURS` | No | `4` | Default minimum gap between repeat alerts for the same subscription |
 | `ALERT_PRICE_MOVE_PCT` | No | `3` | Price move (%) since the last alert required to bypass an active cooldown |
+| `TWELVE_DATA_MANUAL_DAILY_CREDITS` | No | `400` | Twelve Data credits per UTC day that Check now may spend refreshing stale stock prices; `0` turns manual stock refresh off |
 
 ## Database
 
@@ -162,7 +163,7 @@ govulncheck ./...
 make test             # go test ./... -v -count=1
 make test-coverage     # generates coverage.html
 make test-race         # race detector
-make test-new          # just the RSI/batch-dedup/sentinel-parser tests added post-Phase-10
+make test-new          # just the sentinel source parser tests (fast)
 ```
 
 Tests never touch a real MySQL/Redis instance or the network — database-backed tests use `go-sqlmock`, HTTP-backed tests (Twelve Data, currency conversion) use `net/http/httptest` or an injected mock client. Coverage is concentrated in the security-critical and pure-logic packages:
