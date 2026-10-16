@@ -97,6 +97,17 @@ func TestUpdateProfile_Validation(t *testing.T) {
 			req:     user.UpdateProfileRequest{TelegramSentinelChatID: int64Ptr(0)},
 			wantErr: user.ErrInvalidTelegramChatID,
 		},
+		// #78: the cooldown is 0 to 168 hours (one week).
+		{
+			name:    "negative_alert_cooldown",
+			req:     user.UpdateProfileRequest{AlertCooldownHours: intPtr(-1)},
+			wantErr: user.ErrInvalidAlertCooldown,
+		},
+		{
+			name:    "alert_cooldown_over_a_week",
+			req:     user.UpdateProfileRequest{AlertCooldownHours: intPtr(169)},
+			wantErr: user.ErrInvalidAlertCooldown,
+		},
 	}
 
 	for _, tc := range cases {

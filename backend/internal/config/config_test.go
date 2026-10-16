@@ -187,3 +187,13 @@ func TestLoad_NegativeAlertCooldownFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ALERT_COOLDOWN_HOURS")
 }
+
+// #78: the default cooldown follows the same 0 to 168 hours range.
+func TestLoad_AlertCooldownOverAWeekFails(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ALERT_COOLDOWN_HOURS", "169")
+	_, err := Load("does-not-exist.env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ALERT_COOLDOWN_HOURS")
+}
