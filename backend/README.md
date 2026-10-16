@@ -98,7 +98,7 @@ All routes live directly under `/api` — there is no version prefix. "Cookie" i
 | `TELEGRAM_SENTINEL_BOT_TOKEN` | Yes, for sentinel alerts | *(empty)* | Bot token for security alerts |
 | `TELEGRAM_MODE` | No | `polling` | `polling` (local dev) or `webhook` (production; registers the `/webhook/telegram/*` routes) |
 | `TWELVE_DATA_API_KEY` | Yes, for stock prices | *(empty)* | Stock/forex price data provider |
-| `COINGECKO_BASE_URL` | No | `https://api.coingecko.com/api/v3` | Crypto pricing API base URL |
+| `COINGECKO_BASE_URL` | No | `https://api.coingecko.com/api/v3` | Crypto pricing API base URL. The keyless public API allows roughly 10–30 calls per minute depending on load; WatchTower spaces CoinGecko calls 2.5 s apart, so many crypto symbols on a busy day can still get a 429 |
 | `OPEN_ER_BASE_URL` | No | `https://open.er-api.com/v6/latest/USD` | USD→IDR exchange rate API base URL |
 | `GITHUB_TOKEN` | No | *(empty)* | Raises the sentinel's GitHub API rate limit from 10 to 30 req/min |
 | `ASSET_SCHEDULER_INTERVAL_HOURS` | No | `4` | How often the asset worker polls prices |
