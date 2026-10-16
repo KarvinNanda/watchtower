@@ -173,12 +173,13 @@ onMounted(async () => {
       <n-card :title="t('profile.telegram_section')" size="small" class="profile-view__card">
         <n-form label-placement="top">
           <n-form-item :label="t('profile.asset_chat_id')">
-            <n-input-number v-model:value="form.telegramAssetChatId" style="width: 100%" :min="1" clearable />
+            <n-input-number v-model:value="form.telegramAssetChatId" style="width: 100%" clearable />
           </n-form-item>
           <n-form-item :label="t('profile.sentinel_chat_id')">
-            <n-input-number v-model:value="form.telegramSentinelChatId" style="width: 100%" :min="1" clearable />
+            <n-input-number v-model:value="form.telegramSentinelChatId" style="width: 100%" clearable />
           </n-form-item>
         </n-form>
+        <p class="profile-view__hint">{{ t('profile.chat_id_hint') }}</p>
         <router-link to="/telegram-setup" class="profile-view__link">
           {{ t('profile.telegram_setup_link') }}
         </router-link>
@@ -287,6 +288,12 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.profile-view__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--wt-text-subtle);
 }
 
 .profile-view__link {

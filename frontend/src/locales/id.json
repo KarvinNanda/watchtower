@@ -166,7 +166,8 @@
     "password_wrong": "Password saat ini salah.",
     "password_same": "Password baru harus berbeda dari password saat ini.",
     "password_too_many": "Terlalu banyak percobaan. Tunggu satu menit lalu coba lagi.",
-    "password_failed": "Password tidak bisa diganti. Coba lagi."
+    "password_failed": "Password tidak bisa diganti. Coba lagi.",
+    "chat_id_hint": "Chat pribadi: angka positif. Grup: angka negatif, misalnya -1001234567890."
   },
   "telegram": {
     "title": "Setup Telegram",
@@ -189,7 +190,10 @@
     "verified_asset": "Chat ID Bot Aset sudah terhubung",
     "verified_sentinel": "Chat ID Bot Sentinel sudah terhubung",
     "not_verified_asset": "Chat ID Bot Aset belum diisi",
-    "not_verified_sentinel": "Chat ID Bot Sentinel belum diisi"
+    "not_verified_sentinel": "Chat ID Bot Sentinel belum diisi",
+    "chat_types_title": "Chat pribadi atau grup",
+    "private_note": "Chat pribadi: Chat ID kamu sama di kedua bot (itu adalah user ID Telegram kamu). Kamu tetap harus menekan Start di kedua bot, kalau tidak bot tidak bisa mengirim pesan ke kamu.",
+    "group_note": "Grup: tambahkan bot ke grup, lalu di grup pilih /start untuk bot itu dari menu perintah. Bot membalas dengan Chat ID grup, berupa angka negatif. Tempel angka itu di Profil. Setiap bot perlu /start sendiri di grup."
   },
   "notifications": {
     "title": "Notifikasi",

@@ -163,7 +163,7 @@ var (
 	ErrInvalidPreferredLang    = errors.New("preferred_language must be one of: id, en")
 	ErrInvalidAssetSymbol      = errors.New("asset_symbol must be 1-20 uppercase letters, digits, or hyphens")
 	ErrInvalidPriceValue       = errors.New("price and threshold values must be positive and at most 999999999")
-	ErrInvalidTelegramChatID   = errors.New("telegram chat id must be a positive number")
+	ErrInvalidTelegramChatID   = errors.New("telegram chat id must not be 0")
 	ErrInvalidAlertCooldown    = errors.New("alert_cooldown_hours must be between 0 and 168")
 )
 
@@ -292,10 +292,12 @@ func (s *UserService) UpdateProfile(userID uint64, req UpdateProfileRequest) err
 	if req.PreferredLanguage != nil && !validPreferredLangs[*req.PreferredLanguage] {
 		return ErrInvalidPreferredLang
 	}
-	if req.TelegramAssetChatID != nil && *req.TelegramAssetChatID <= 0 {
+	// #81: a private chat ID is positive, a group or channel chat ID is
+	// negative; only 0 is never a real chat.
+	if req.TelegramAssetChatID != nil && *req.TelegramAssetChatID == 0 {
 		return ErrInvalidTelegramChatID
 	}
-	if req.TelegramSentinelChatID != nil && *req.TelegramSentinelChatID <= 0 {
+	if req.TelegramSentinelChatID != nil && *req.TelegramSentinelChatID == 0 {
 		return ErrInvalidTelegramChatID
 	}
 	// #78: 0 (no cooldown) to one week; config.maxAlertCooldownHours matches.

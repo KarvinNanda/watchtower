@@ -88,12 +88,12 @@ func TestUpdateProfile_Validation(t *testing.T) {
 			wantErr: user.ErrInvalidPreferredLang,
 		},
 		{
-			name:    "non_positive_telegram_asset_chat_id",
-			req:     user.UpdateProfileRequest{TelegramAssetChatID: int64Ptr(-5)},
+			name:    "zero_telegram_asset_chat_id",
+			req:     user.UpdateProfileRequest{TelegramAssetChatID: int64Ptr(0)},
 			wantErr: user.ErrInvalidTelegramChatID,
 		},
 		{
-			name:    "non_positive_telegram_sentinel_chat_id",
+			name:    "zero_telegram_sentinel_chat_id",
 			req:     user.UpdateProfileRequest{TelegramSentinelChatID: int64Ptr(0)},
 			wantErr: user.ErrInvalidTelegramChatID,
 		},
@@ -143,6 +143,26 @@ func TestUpdateProfile_Validation(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+// #81: a Telegram group or channel chat ID is negative, so it must be
+// accepted.
+func TestUpdateProfile_AcceptsGroupChatIDs(t *testing.T) {
+	t.Parallel()
+	svc, mock := newMockUserService(t, 100)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE users SET`).
+		WithArgs(int64(-5), int64(-1001234567890), uint64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := svc.UpdateProfile(1, user.UpdateProfileRequest{
+		TelegramAssetChatID:    int64Ptr(-5),
+		TelegramSentinelChatID: int64Ptr(-1001234567890),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestGetProfile_Success(t *testing.T) {

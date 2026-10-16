@@ -105,8 +105,9 @@ type TelegramUpdate struct {
 
 // processUpdate handles a single Telegram update for botType ("asset" or
 // "sentinel"). It never panics — any recovered panic is logged and
-// returned as an error. Only "/start" is handled; anything else (including
-// updates with no message) is a no-op.
+// returned as an error. Only "/start" (or "/start@BotName", see
+// isStartCommand) is handled; anything else (including updates with no
+// message) is a no-op.
 func (h *BotHandler) processUpdate(botType string, update TelegramUpdate) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -115,7 +116,7 @@ func (h *BotHandler) processUpdate(botType string, update TelegramUpdate) (err e
 		}
 	}()
 
-	if update.Message == nil || update.Message.Text != "/start" || update.Message.Chat == nil {
+	if update.Message == nil || !isStartCommand(update.Message.Text) || update.Message.Chat == nil {
 		return nil
 	}
 
@@ -125,7 +126,7 @@ func (h *BotHandler) processUpdate(botType string, update TelegramUpdate) (err e
 		firstName = update.Message.From.FirstName
 	}
 
-	message := buildWelcomeMessage(botType, firstName, chatID)
+	message := buildWelcomeMessage(botType, firstName, chatID, update.Message.Chat.Type)
 
 	token, err := h.tokenFor(botType)
 	if err != nil {
@@ -142,38 +143,56 @@ func (h *BotHandler) processUpdate(botType string, update TelegramUpdate) (err e
 	return nil
 }
 
-// buildWelcomeMessage builds the /start reply for botType. firstName is
+// isStartCommand reports whether text is "/start" or "/start@BotName". In a
+// group Telegram sends the second form when the command is picked from the
+// menu, and a privacy-mode bot only receives that form (#81). A "/start"
+// with a payload or extra words is not handled, as before.
+func isStartCommand(text string) bool {
+	if text == "/start" {
+		return true
+	}
+	name, ok := strings.CutPrefix(text, "/start@")
+	return ok && name != "" && !strings.ContainsAny(name, " \t\n")
+}
+
+// buildWelcomeMessage builds the /start reply for botType. In a group or
+// channel (chatType other than "private") the ID is the group's, so the
+// reply says so (#81). firstName is
 // the only truly dynamic (user-supplied) field, so it's the only one run
 // through EscapeTelegramMarkdown — the rest of the template's punctuation
 // is pre-escaped as literal MarkdownV2 source (e.g. "\\." for a literal
 // period), and the bold/code markers (*, `) are intentional formatting.
-func buildWelcomeMessage(botType, firstName string, chatID int64) string {
+func buildWelcomeMessage(botType, firstName string, chatID int64, chatType string) string {
 	name := EscapeTelegramMarkdown(firstName)
+	idLabel := "Chat ID kamu"
+	if chatType != "private" {
+		idLabel = "Chat ID grup ini"
+	}
 
 	if botType == "sentinel" {
 		return fmt.Sprintf(
 			"👋 Halo %s\\!\n\n"+
-				"Chat ID kamu: `%d`\n\n"+
+				"%s: `%d`\n\n"+
 				"📋 *Langkah selanjutnya:*\n"+
 				"1\\. Copy angka di atas\n"+
 				"2\\. Buka dashboard WatchTower\n"+
 				"3\\. Paste di bagian *Sentinel Setup*\n\n"+
 				"✅ Setelah itu kamu akan menerima\n"+
 				"alert keamanan otomatis\\!",
-			name, chatID,
+			name, idLabel, chatID,
 		)
 	}
 
 	return fmt.Sprintf(
 		"👋 Halo %s\\!\n\n"+
-			"Chat ID kamu: `%d`\n\n"+
+			"%s: `%d`\n\n"+
 			"📋 *Langkah selanjutnya:*\n"+
 			"1\\. Copy angka di atas\n"+
 			"2\\. Buka dashboard WatchTower\n"+
 			"3\\. Paste di bagian *Asset Alert Setup*\n\n"+
 			"✅ Setelah itu kamu akan menerima\n"+
 			"alert harga aset otomatis\\!",
-		name, chatID,
+		name, idLabel, chatID,
 	)
 }
 

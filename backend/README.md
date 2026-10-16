@@ -2,7 +2,7 @@
 
 Two Go processes share one MySQL database and one Redis:
 
-- **API** (`cmd/api`, Gin): auth, the user's asset rules and keywords, notification history, the dashboard, the manual-run queue, and the Telegram `/start` replies that give users their chat ID.
+- **API** (`cmd/api`, Gin): auth, the user's asset rules and keywords, notification history, the dashboard, the manual-run queue, and the Telegram `/start` replies that give users their chat ID (a private chat's or, for `/start@BotName` in a group, the group's).
 - **Scheduler** (`cmd/scheduler`): on a persisted schedule it fetches market prices and security feeds, evaluates every active asset rule with a pure rule engine, matches sentinel items against keywords, and sends one batched Telegram message per user. It also runs the "Check now" and "Send report" jobs that the API queues.
 
 There is no AI anywhere: alerts are built only from the data the sources provide and the user's own rules.
@@ -37,7 +37,7 @@ backend/
 │   └── test_sentinel/  # Manual debugging tool for internal/sentinel fetching
 ├── internal/
 │   ├── alertmsg/       # Builds the Telegram MarkdownV2 messages: asset alerts, status reports, sentinel items; splits at 4096 bytes
-│   ├── asset/          # Market data fetchers (CoinGecko, Twelve Data, harga-emas.org), the 41-symbol whitelist, API pacing
+│   ├── asset/          # Market data fetchers (CoinGecko, Twelve Data, harga-emas.org), the 42-symbol whitelist, API pacing
 │   ├── auth/           # Registration, login, JWT in an httpOnly cookie, bcrypt hashing, auth middleware
 │   ├── cache/          # Redis-first / MySQL-fallback market data cache, freshness rules for manual runs, gold price snapshots
 │   ├── config/         # Environment/YAML configuration with strict number and boolean parsing
@@ -62,7 +62,7 @@ backend/
 
 ## Asset rules
 
-Each rule belongs to one user and one whitelisted symbol (20 crypto, 20 US stocks, ANTAM gold):
+Each rule belongs to one user and one whitelisted symbol (20 crypto, 20 US stocks plus the SPY S&P 500 ETF, ANTAM gold):
 
 | Rule type | Fires when | Notes |
 |---|---|---|
@@ -173,7 +173,7 @@ make sca             # govulncheck
 - bcrypt cost 12, plus a dummy hash on unknown emails so login timing does not reveal which accounts exist
 - Per-IP rate limits: register 5/min, login 10/min, every authenticated route 100/min, Telegram webhooks 100/min shared
 - SQL-injection pattern guard on query and path parameters as defense in depth; every query is parameterized
-- Symbol whitelist (41 symbols) checked before any market-data API is called
+- Symbol whitelist (42 symbols) checked before any market-data API is called
 - Users only ever see market data for symbols they have rules for
 - Secrets (bot tokens, API keys) are read from the environment only and sent in request headers, never in a URL, so a logged network error cannot contain them
 - CI runs `govulncheck` and `gosec` on every pull request
