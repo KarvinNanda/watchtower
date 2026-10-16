@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useNow } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
-  NAlert, NButton, NEmpty, NForm, NFormItem, NInputNumber, NModal, NSelect, NSpace, NSpin, NText, useDialog,
+  NAlert, NButton, NEmpty, NForm, NFormItem, NInputNumber, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NText, useDialog,
 } from 'naive-ui'
 
 import { useSubscriptionsStore } from '@/stores/subscriptions'
@@ -15,6 +15,7 @@ import { message } from '@/plugins/naive'
 import { ASSET_OPTIONS } from '@/constants/assets'
 import {
   RULE_TYPES, INTENTS, emptyRuleForm, ruleToForm, validateRuleForm, buildRulePayload, ruleSummary,
+  setCurrency, changeAssetType,
 } from '@/utils/assetRules'
 import { groupRulesBySymbol } from '@/utils/groupRules'
 import { runChangedRuleIds } from '@/utils/runHighlight'
@@ -45,6 +46,7 @@ const now = useNow({ interval: 60_000 })
 
 const ERROR_FIELD = {
   'asset.rules.error_level': 'level',
+  'asset.rules.error_level_idr': 'level',
   'asset.rules.error_pct': 'pct',
   'asset.rules.error_pct_trailing': 'pct',
   'asset.rules.error_direction': 'direction',
@@ -76,6 +78,12 @@ const directionOptions = computed(() =>
 )
 
 const isLevel = computed(() => form.value.ruleType === 'price_level')
+// The rate note only matters for a converted price (not gold's own rupiah).
+const showRateNote = computed(() => isLevel.value && form.value.currency === 'IDR' && form.value.assetType !== 'gold')
+
+function handleCurrencyChange(currency) {
+  form.value = setCurrency(form.value, currency)
+}
 const showDirection = computed(
   () => (isLevel.value && form.value.intent === 'none') || form.value.ruleType === 'week52_break',
 )
@@ -89,9 +97,10 @@ const formRules = {
 
 const modalTitle = computed(() => (editingId.value ? t('asset.edit_title') : t('asset.add_title')))
 
-function handleAssetTypeChange() {
-  form.value.assetSymbol = null
-  if (form.value.assetType === 'gold' && form.value.ruleType === 'week52_break') form.value.ruleType = null
+// Not v-model: the handler needs the old type to tell a real change from
+// re-picking the same one.
+function handleAssetTypeChange(assetType) {
+  form.value = changeAssetType(form.value, assetType)
 }
 
 function handleRuleTypeChange() {
@@ -263,7 +272,7 @@ onUnmounted(() => marketStore.stopAutoRefresh())
       <n-alert v-if="formError" type="error" role="alert" style="margin-bottom: 16px">{{ formError }}</n-alert>
       <n-form ref="formRef" :model="form" :rules="formRules" label-placement="top">
         <n-form-item :label="t('asset.type')" path="assetType">
-          <n-select v-model:value="form.assetType" :options="assetTypeOptions" @update:value="handleAssetTypeChange" />
+          <n-select :value="form.assetType" :options="assetTypeOptions" @update:value="handleAssetTypeChange" />
         </n-form-item>
         <n-form-item :label="t('asset.symbol')" path="assetSymbol">
           <n-select
@@ -300,8 +309,29 @@ onUnmounted(() => marketStore.stopAutoRefresh())
           :feedback="feedbackFor('level')"
           :validation-status="statusFor('level')"
         >
-          <n-input-number v-model:value="form.levelUsd" style="width: 100%" :min="0" :step="0.01" clearable />
+          <div class="asset-view__level">
+            <n-radio-group
+              :value="form.currency"
+              size="small"
+              :aria-label="t('asset.rules.currency')"
+              @update:value="handleCurrencyChange"
+            >
+              <n-radio-button value="IDR">IDR</n-radio-button>
+              <n-radio-button value="USD">USD</n-radio-button>
+            </n-radio-group>
+            <n-input-number
+              v-model:value="form.level"
+              class="asset-view__level-input wt-num"
+              :min="0"
+              :step="form.currency === 'IDR' ? 1000 : 0.01"
+              :input-props="showRateNote ? { 'aria-describedby': 'asset-rate-note' } : undefined"
+              clearable
+            />
+          </div>
         </n-form-item>
+        <n-text v-if="showRateNote" id="asset-rate-note" depth="3" tag="p" class="asset-view__rate-note">
+          {{ t('asset.rules.idr_rate_note') }}
+        </n-text>
 
         <n-form-item
           v-if="showPct"
@@ -343,5 +373,18 @@ onUnmounted(() => marketStore.stopAutoRefresh())
 }
 .asset-view__error {
   margin-bottom: var(--wt-space-lg);
+}
+.asset-view__level {
+  display: flex;
+  gap: var(--wt-space-sm);
+  width: 100%;
+  align-items: center;
+}
+.asset-view__level-input {
+  flex: 1;
+}
+.asset-view__rate-note {
+  margin: calc(-1 * var(--wt-space-sm)) 0 var(--wt-space-lg);
+  font-size: 12px;
 }
 </style>

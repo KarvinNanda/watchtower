@@ -59,6 +59,15 @@ type State struct {
 	CooldownUntil       *time.Time
 }
 
+// Currency is the currency a price_level rule's level is entered in
+// (asset_rules.level_currency). The zero value means USD.
+type Currency string
+
+const (
+	CurrencyUSD Currency = "USD"
+	CurrencyIDR Currency = "IDR"
+)
+
 // Rule is one asset_rules row as the evaluator needs it.
 type Rule struct {
 	ID        uint64
@@ -66,6 +75,8 @@ type Rule struct {
 	Direction Direction
 	Intent    Intent
 	LevelUSD  float64
+	Currency  Currency
+	LevelIDR  float64 // price_level with Currency IDR
 	Pct       float64
 	State     State
 }
@@ -73,7 +84,11 @@ type Rule struct {
 // Market is the data a rule is evaluated against. A nil pointer means the
 // value is unknown or not supported for this asset.
 type Market struct {
-	PriceUSD     float64
+	PriceUSD float64
+	// PriceIDR is market_cache.price_idr from the same fetch (gold: the
+	// source price; others: converted with a real daily rate). Nil when
+	// unknown; never derived from the fallback rate (#41).
+	PriceIDR     *float64
 	ChangePct24h *float64
 	Week52High   *float64
 	Week52Low    *float64
@@ -141,6 +156,8 @@ type Trigger struct {
 	Direction    Direction
 	Intent       Intent
 	LevelUSD     float64
+	Currency     Currency
+	LevelIDR     float64
 	Pct          float64
 	PeakPriceUSD float64 // trailing_stop: the peak the drop is measured from
 	PrevRefUSD   float64 // week52_break: the 52-week extreme that was broken

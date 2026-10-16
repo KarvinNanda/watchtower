@@ -28,7 +28,8 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 		SELECT r.id, r.user_id, r.rule_type, r.direction, r.intent, r.level_usd, r.pct, r.params_version,
 			r.baseline_pending, r.last_beyond, r.peak_price_usd, r.peak_since, r.week52_ref_usd,
 			r.last_alerted_price_usd, r.cooldown_until,
-			u.telegram_asset_chat_id, u.alert_cooldown_hours, u.preferred_language
+			u.telegram_asset_chat_id, u.alert_cooldown_hours, u.preferred_language,
+			r.level_currency, r.level_idr
 		FROM asset_rules r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.asset_symbol = ?
@@ -58,12 +59,15 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 			lastBeyond                  sql.NullBool
 			peak, ref, lastAlertedPrice sql.NullFloat64
 			cooldownUntil, peakSince    sql.NullTime
+			levelCurrency               string
+			levelIDR                    sql.NullFloat64
 		)
 		if err := rows.Scan(
 			&row.Rule.ID, &row.UserID, &ruleType, &direction, &intent, &level, &pct, &row.ParamsVersion,
 			&row.Rule.State.BaselinePending, &lastBeyond, &peak, &peakSince, &ref,
 			&lastAlertedPrice, &cooldownUntil,
 			&row.TelegramAssetChatID, &row.AlertCooldownHours, &row.PreferredLanguage,
+			&levelCurrency, &levelIDR,
 		); err != nil {
 			return nil, fmt.Errorf("scan rule row for %s: %w", symbol, err)
 		}
@@ -72,6 +76,8 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 		row.Rule.Direction = rules.Direction(direction.String)
 		row.Rule.Intent = rules.Intent(intent.String)
 		row.Rule.LevelUSD = level.Float64
+		row.Rule.Currency = rules.Currency(levelCurrency)
+		row.Rule.LevelIDR = levelIDR.Float64
 		row.Rule.Pct = pct.Float64
 		if lastBeyond.Valid {
 			row.Rule.State.LastBeyond = &lastBeyond.Bool

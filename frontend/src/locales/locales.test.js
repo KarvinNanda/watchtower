@@ -70,3 +70,15 @@ describe('asset card texts', () => {
     expect(messages.asset.rules.near_hint).toContain('{pct}')
   })
 })
+
+describe('IDR level texts (#40)', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s has the currency label, rate note and IDR range error', (_, messages) => {
+    expect(messages.asset.rules.currency).toBeTruthy()
+    expect(messages.asset.rules.idr_rate_note).toBeTruthy()
+    expect(messages.asset.rules.error_level_idr).toContain('999')
+    expect(messages.asset.rules.level).not.toContain('USD')
+  })
+})

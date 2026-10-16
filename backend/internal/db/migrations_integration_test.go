@@ -102,6 +102,9 @@ func TestMigrations_LegacyDataUpgradeAndRollback(t *testing.T) {
 	assert.Equal(t, 1, count(t, db, `SELECT COUNT(*) FROM market_cache WHERE symbol = 'BTC' AND change_pct_24h = 1.5`))
 	// 000016: the unused DeepSeek columns are gone.
 	assert.Equal(t, 0, count(t, db, aiColumns))
+	// #40: existing rules become USD rules; no IDR level is invented.
+	assert.Equal(t, 9, count(t, db, `SELECT COUNT(*) FROM asset_rules WHERE level_currency = 'USD' AND level_idr IS NULL`))
+	assert.Equal(t, 1, count(t, db, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'asset_rules' AND column_name = 'level_idr' AND numeric_precision = 24 AND numeric_scale = 8`))
 
 	// Roll back to version 9 with a NULL change present, then upgrade again
 	// from the untouched legacy tables.

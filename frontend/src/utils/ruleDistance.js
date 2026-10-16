@@ -1,5 +1,5 @@
-// How far the current price is from a rule's level (Spec 4a). Pure; all
-// math in USD because levels are stored in USD.
+// How far the current price is from a rule's level (Spec 4a). Pure; math in
+// the level's currency: IDR price levels use price_idr, the rest USD.
 
 // Mirrors intentDirections in backend/internal/user/asset_rules.go. Keep the
 // two in sync; ruleDistance.test.js pins this table.
@@ -21,14 +21,17 @@ function levelDistance(level, side, price) {
 
 export function ruleDistance(rule, market) {
   if (rule.supported === false) return null
-  const price = market?.price_usd
+  // An IDR price level compares rupiah with rupiah (#40); everything else is USD.
+  const idr = rule.rule_type === 'price_level' && rule.level_currency === 'IDR'
+  const price = idr ? market?.price_idr : market?.price_usd
   if (!(price > 0)) return null
 
   switch (rule.rule_type) {
     case 'price_level': {
       const side = rule.direction ?? INTENT_SIDE[rule.intent]
-      if (!side || !(rule.level_usd > 0)) return null
-      return levelDistance(rule.level_usd, side, price)
+      const level = idr ? rule.level_idr : rule.level_usd
+      if (!side || !(level > 0)) return null
+      return levelDistance(level, side, price)
     }
     case 'trailing_stop': {
       const stop = trailingStopLevel(rule)

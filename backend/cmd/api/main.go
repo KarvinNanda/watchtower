@@ -587,6 +587,8 @@ type assetRuleResponse struct {
 	Direction         *string    `json:"direction"`
 	Intent            *string    `json:"intent"`
 	LevelUSD          *float64   `json:"level_usd"`
+	LevelCurrency     string     `json:"level_currency"`
+	LevelIDR          *float64   `json:"level_idr"`
 	Pct               *float64   `json:"pct"`
 	IsActive          bool       `json:"is_active"`
 	PeakPriceUSD      *float64   `json:"peak_price_usd"`
@@ -601,6 +603,7 @@ func toAssetRuleResponse(r user.AssetRule) assetRuleResponse {
 	return assetRuleResponse{
 		ID: r.ID, AssetType: r.AssetType, AssetSymbol: r.AssetSymbol, RuleType: r.RuleType,
 		Direction: r.Direction, Intent: r.Intent, LevelUSD: r.LevelUSD, Pct: r.Pct, IsActive: r.IsActive,
+		LevelCurrency: r.LevelCurrency, LevelIDR: r.LevelIDR,
 		PeakPriceUSD: r.PeakPriceUSD, TriggeredAt: r.TriggeredAt, TriggeredPriceUSD: r.TriggeredPriceUSD,
 		LastAlertedAt: r.LastAlertedAt, CreatedAt: r.CreatedAt, Supported: r.Supported,
 	}
@@ -616,13 +619,14 @@ type assetRuleBody struct {
 	Direction   *string  `json:"direction"`
 	Intent      *string  `json:"intent"`
 	LevelUSD    *float64 `json:"level_usd"`
+	LevelIDR    *float64 `json:"level_idr"`
 	Pct         *float64 `json:"pct"`
 }
 
 func (b assetRuleBody) toInput() user.AssetRuleInput {
 	return user.AssetRuleInput{
 		AssetType: b.AssetType, AssetSymbol: b.AssetSymbol, RuleType: b.RuleType,
-		Direction: b.Direction, Intent: b.Intent, LevelUSD: b.LevelUSD, Pct: b.Pct,
+		Direction: b.Direction, Intent: b.Intent, LevelUSD: b.LevelUSD, LevelIDR: b.LevelIDR, Pct: b.Pct,
 	}
 }
 
@@ -635,6 +639,7 @@ type updateAssetRuleBody struct {
 	Direction   *string  `json:"direction"`
 	Intent      *string  `json:"intent"`
 	LevelUSD    *float64 `json:"level_usd"`
+	LevelIDR    *float64 `json:"level_idr"`
 	Pct         *float64 `json:"pct"`
 	IsActive    *bool    `json:"is_active"`
 }
@@ -716,7 +721,7 @@ func updateAssetRuleHandler(svc *user.UserService) gin.HandlerFunc {
 
 		req := user.UpdateAssetRuleRequest{IsActive: body.IsActive}
 		hasDefinitionField := body.AssetType != nil || body.AssetSymbol != nil || body.RuleType != nil ||
-			body.Direction != nil || body.Intent != nil || body.LevelUSD != nil || body.Pct != nil
+			body.Direction != nil || body.Intent != nil || body.LevelUSD != nil || body.LevelIDR != nil || body.Pct != nil
 		if hasDefinitionField {
 			if body.RuleType == nil || body.AssetType == nil || body.AssetSymbol == nil {
 				respondFail(c, http.StatusBadRequest, "validation_error",
@@ -725,7 +730,7 @@ func updateAssetRuleHandler(svc *user.UserService) gin.HandlerFunc {
 			}
 			req.Rule = &user.AssetRuleInput{
 				AssetType: *body.AssetType, AssetSymbol: *body.AssetSymbol, RuleType: *body.RuleType,
-				Direction: body.Direction, Intent: body.Intent, LevelUSD: body.LevelUSD, Pct: body.Pct,
+				Direction: body.Direction, Intent: body.Intent, LevelUSD: body.LevelUSD, LevelIDR: body.LevelIDR, Pct: body.Pct,
 			}
 		}
 

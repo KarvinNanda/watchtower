@@ -81,7 +81,7 @@
       "dir_below": "Price goes below",
       "week52_above": "New 52-week high",
       "week52_below": "New 52-week low",
-      "level": "Level (USD)",
+      "level": "Level",
       "pct": "Percent (%)",
       "summary_intent": "{intent} at {level}",
       "summary_level_above": "Above {level}",
@@ -110,7 +110,10 @@
       "just_now": "just now",
       "near_hint": "Within {pct}% of the level",
       "change_vs_threshold": "{current} now / ±{threshold}%",
-      "stop_at": "{stop} (peak {peak})"
+      "stop_at": "{stop} (peak {peak})",
+      "currency": "Currency",
+      "idr_rate_note": "Uses the daily USD/IDR rate; can differ from a local exchange's price.",
+      "error_level_idr": "Enter a level from Rp 0.0001 to Rp 999,999,999,999."
     },
     "load_error": "Could not load your rules.",
     "card": {

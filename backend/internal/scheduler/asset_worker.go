@@ -306,6 +306,12 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 		HighUSD:      marketData.HighUSD,
 		HighSince:    marketData.HighSince,
 	}
+	// IDR price levels (#40) compare against price_idr from the same fetch.
+	// 0 means no real rate was known then (#41): leave it unknown.
+	if marketData.PriceIDR > 0 {
+		idr := marketData.PriceIDR
+		market.PriceIDR = &idr
+	}
 	if symbol.NeedsWeek52 && symbol.AssetType == "crypto" {
 		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
 		if wErr != nil {

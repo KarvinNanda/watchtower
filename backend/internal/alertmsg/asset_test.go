@@ -69,6 +69,13 @@ func TestAssetMessages_Golden(t *testing.T) {
 			ChangePct: f64(-2.5), Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: 5, PeakPriceUSD: 1300}})
 	}
 
+	idrLevels := []AssetAlert{
+		{RuleID: 1, Symbol: "ANTAM", PriceUSD: 130.9, NativeIDR: 2344000, ChangePct: f64(-0.3), Trigger: rules.Trigger{
+			Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentBuyTarget, Currency: rules.CurrencyIDR, LevelIDR: 2350000}},
+		{RuleID: 2, Symbol: "BTC", PriceUSD: 81714, ChangePct: f64(1.2), Trigger: rules.Trigger{
+			Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, Currency: rules.CurrencyIDR, LevelIDR: 1400000000}},
+	}
+
 	cases := []struct {
 		name   string
 		lang   string
@@ -87,12 +94,24 @@ func TestAssetMessages_Golden(t *testing.T) {
 		{"asset_id_many_symbols", "id", testRate, many},
 		{"asset_id_split", "id", testRate, split},
 		{"asset_en_split", "en", testRate, split},
+		{"asset_id_idr_levels", "id", testRate, idrLevels},
+		{"asset_en_idr_levels", "en", testRate, idrLevels},
+		{"asset_id_idr_rate_unavailable", "id", Rate{}, idrLevels},
+		{"asset_en_idr_rate_unavailable", "en", Rate{}, idrLevels},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assertGolden(t, tc.name, AssetMessages(tc.lang, at, tc.rate, tc.alerts))
 		})
 	}
+}
+
+func TestLevelAmount(t *testing.T) {
+	usd := rules.Trigger{Type: rules.TypePriceLevel, LevelUSD: 100}
+	idr := rules.Trigger{Type: rules.TypePriceLevel, Currency: rules.CurrencyIDR, LevelIDR: 1350000}
+	assert.Equal(t, amount(testRate, 100), levelAmount(testRate, usd), "USD rules are unchanged")
+	assert.Equal(t, "Rp 1.350.000 ≈ $75.39", levelAmount(testRate, idr))
+	assert.Equal(t, "Rp 1.350.000", levelAmount(Rate{}, idr), "no USD equivalent without a real rate")
 }
 
 func TestAssetMessages_EmptyIsNil(t *testing.T) {

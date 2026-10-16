@@ -86,3 +86,19 @@ describe('ruleDistance: no distance', () => {
     expect(ruleDistance(rule, m)).toBeNull()
   })
 })
+
+describe('ruleDistance: IDR price_level', () => {
+  const antam = (extra) => ({ id: 9, rule_type: 'price_level', supported: true, level_currency: 'IDR', ...extra })
+
+  it('compares level_idr with price_idr', () => {
+    const d = ruleDistance(antam({ intent: 'buy_target', level_idr: 2350000 }), { price_usd: 130, price_idr: 2392157 })
+    expect(d.level).toBe(2350000)
+    expect(d.pct).toBeCloseTo(-1.762, 2)
+    expect(d.passed).toBe(false)
+    expect(d.near).toBe(true)
+  })
+
+  it('unknown price_idr → null', () => {
+    expect(ruleDistance(antam({ intent: 'buy_target', level_idr: 2350000 }), { price_usd: 130, price_idr: null })).toBeNull()
+  })
+})

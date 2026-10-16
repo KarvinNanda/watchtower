@@ -16,7 +16,7 @@ var ruleColumns = []string{
 	"id", "user_id", "rule_type", "direction", "intent", "level_usd", "pct", "params_version",
 	"baseline_pending", "last_beyond", "peak_price_usd", "peak_since", "week52_ref_usd",
 	"last_alerted_price_usd", "cooldown_until",
-	"telegram_asset_chat_id", "alert_cooldown_hours", "preferred_language",
+	"telegram_asset_chat_id", "alert_cooldown_hours", "preferred_language", "level_currency", "level_idr",
 }
 
 func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
@@ -26,7 +26,7 @@ func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
 		WithArgs("BTC", 7).
 		WillReturnRows(sqlmock.NewRows(ruleColumns).
 			AddRow(int64(11), int64(7), "price_level", "above", "take_profit", 120000.0, nil, int64(3),
-				false, true, 118000.0, time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC), nil, 119000.0, cooldown, int64(7000), int64(4), "en"))
+				false, true, 118000.0, time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC), nil, 119000.0, cooldown, int64(7000), int64(4), "en", "IDR", 2150000000.0))
 
 	rows, err := w.loadRules(context.Background(), "BTC", 7)
 	require.NoError(t, err)
@@ -37,6 +37,8 @@ func TestLoadRules_ScopedToUserAndMapped(t *testing.T) {
 	assert.Equal(t, rules.DirectionAbove, r.Rule.Direction)
 	assert.Equal(t, rules.IntentTakeProfit, r.Rule.Intent)
 	assert.Equal(t, 120000.0, r.Rule.LevelUSD)
+	assert.Equal(t, rules.CurrencyIDR, r.Rule.Currency)
+	assert.Equal(t, 2150000000.0, r.Rule.LevelIDR)
 	assert.Equal(t, uint32(3), r.ParamsVersion)
 	require.NotNil(t, r.Rule.State.LastBeyond)
 	assert.True(t, *r.Rule.State.LastBeyond)

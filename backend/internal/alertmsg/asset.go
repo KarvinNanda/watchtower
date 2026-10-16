@@ -150,6 +150,20 @@ func amount(rate Rate, usd float64) string {
 	return s
 }
 
+// levelAmount shows a price_level rule's level in the currency the user
+// entered it in (#40), with the other currency after "≈" only when a real
+// rate is known. USD rules keep amount's "$X ≈ Rp Y".
+func levelAmount(rate Rate, t rules.Trigger) string {
+	if t.Currency != rules.CurrencyIDR {
+		return amount(rate, t.LevelUSD)
+	}
+	s := formatIDR(t.LevelIDR)
+	if rate.available() {
+		s += " ≈ " + formatUSD(t.LevelIDR/rate.Value)
+	}
+	return s
+}
+
 // triggerEmoji marks the rule type. It is a type marker for the user's own
 // rule, never a buy/sell signal.
 func triggerEmoji(t rules.Trigger) string {
@@ -180,7 +194,7 @@ func triggerEmoji(t rules.Trigger) string {
 // triggerSentence says why a rule fired. Intent wording repeats the user's
 // own plan; it is never advice.
 func triggerSentence(lang string, rate Rate, t rules.Trigger) string {
-	level := amount(rate, t.LevelUSD)
+	level := levelAmount(rate, t)
 	pct := formatPct(t.Pct)
 	switch t.Type {
 	case rules.TypePriceLevel:

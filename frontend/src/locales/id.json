@@ -81,7 +81,7 @@
       "dir_below": "Harga turun di bawah",
       "week52_above": "52-week high baru",
       "week52_below": "52-week low baru",
-      "level": "Level (USD)",
+      "level": "Level",
       "pct": "Persen (%)",
       "summary_intent": "{intent} di {level}",
       "summary_level_above": "Di atas {level}",
@@ -110,7 +110,10 @@
       "just_now": "baru saja",
       "near_hint": "Dalam {pct}% dari level",
       "change_vs_threshold": "{current} sekarang / ±{threshold}%",
-      "stop_at": "{stop} (puncak {peak})"
+      "stop_at": "{stop} (puncak {peak})",
+      "currency": "Mata uang",
+      "idr_rate_note": "Dihitung dengan kurs harian; bisa berbeda dari harga di exchange lokal.",
+      "error_level_idr": "Isi level dari Rp 0,0001 sampai Rp 999.999.999.999."
     },
     "load_error": "Gagal memuat rule Anda.",
     "card": {
