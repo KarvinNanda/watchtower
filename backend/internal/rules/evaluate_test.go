@@ -283,3 +283,63 @@ func TestPriceLevel_USDRuleIgnoresIDRPrice(t *testing.T) {
 	require.True(t, got.Fire)
 	assert.Equal(t, Trigger{Type: TypePriceLevel, Direction: DirectionAbove, LevelUSD: 100}, got.Trigger)
 }
+
+// #58: a gold trailing stop (Currency IDR, set by the worker) tracks its
+// peak and drop on the rupiah price.
+func TestTrailingStopIDR(t *testing.T) {
+	trail := func(st State) Rule {
+		return Rule{ID: 7, Type: TypeTrailingStop, Pct: 10, Currency: CurrencyIDR, State: st}
+	}
+	mkt := func(usd, idr float64) Market { return Market{PriceUSD: usd, PriceIDR: f(idr)} }
+	tracked := func(peakIDR float64) State { return State{PeakPriceIDR: f(peakIDR), PeakSince: at(-48 * time.Hour)} }
+	fired := func(peak, usd, idr float64, observed Patch) Outcome {
+		return Outcome{
+			Fire:     true,
+			Trigger:  Trigger{Type: TypeTrailingStop, Pct: 10, Currency: CurrencyIDR, PeakPriceIDR: peak},
+			Observed: observed,
+			OnSent: Patch{
+				Fired: &FiredMark{At: now, PriceUSD: usd, PriceIDR: idr},
+				Alert: &AlertMark{At: now, PriceUSD: usd},
+			},
+		}
+	}
+
+	cases := []struct {
+		name string
+		rule Rule
+		mkt  Market
+		want Outcome
+	}{
+		{"no real IDR price: skipped, nothing written", trail(tracked(2500000)), Market{PriceUSD: 130},
+			Outcome{Skip: SkipDataUnavailable}},
+		{"first run records the rupiah peak", trail(State{}), mkt(130, 2340000),
+			Outcome{Observed: Patch{PeakPriceIDR: f(2340000), PeakSince: at(0)}}},
+		{"a higher rupiah price raises the peak", trail(tracked(2500000)), mkt(140, 2600000),
+			Outcome{Observed: Patch{PeakPriceIDR: f(2600000)}}},
+		{"rate moves, rupiah flat: nothing happens", trail(tracked(2500000)), mkt(120, 2500000), Outcome{}},
+		{"exactly the drop in rupiah fires", trail(tracked(2500000)), mkt(125, 2250000),
+			fired(2500000, 125, 2250000, Patch{})},
+		{"the USD price and high are ignored", trail(tracked(2500000)),
+			Market{PriceUSD: 999, PriceIDR: f(2400000), HighUSD: f(5000), HighSince: at(-time.Hour)}, Outcome{}},
+		{"a legacy USD peak is converted once at this fetch's rate", trail(State{PeakPriceUSD: f(140), PeakSince: at(-48 * time.Hour)}),
+			mkt(130, 2340000), Outcome{Observed: Patch{PeakPriceIDR: f(2520000)}}},
+		{"a converted peak can fire on the same run", trail(State{PeakPriceUSD: f(150), PeakSince: at(-48 * time.Hour)}),
+			mkt(130, 2340000), fired(2700000, 130, 2340000, Patch{PeakPriceIDR: f(2700000)})},
+		{"a legacy peak without peak_since starts tracking now", trail(State{PeakPriceUSD: f(140)}),
+			mkt(130, 2340000), Outcome{Observed: Patch{PeakPriceIDR: f(2520000), PeakSince: at(0)}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Evaluate(tc.rule, tc.mkt, now, opts))
+		})
+	}
+}
+
+func TestTrailingStop_USDRuleIgnoresRupiah(t *testing.T) {
+	r := Rule{ID: 2, Type: TypeTrailingStop, Pct: 10, State: State{PeakPriceUSD: f(100), PeakSince: at(-48 * time.Hour)}}
+	assert.Equal(t, Outcome{}, Evaluate(r, Market{PriceUSD: 95, PriceIDR: f(1)}, now, opts))
+}
+
+func TestPatchIsEmpty_PeakPriceIDR(t *testing.T) {
+	assert.False(t, Patch{PeakPriceIDR: f(1)}.IsEmpty())
+}

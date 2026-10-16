@@ -50,10 +50,12 @@ func IntentDirection(i Intent) (Direction, bool) {
 
 // State is the scheduler-owned part of an asset_rules row.
 type State struct {
-	BaselinePending     bool
-	LastBeyond          *bool
-	PeakPriceUSD        *float64
-	PeakSince           *time.Time // when peak tracking started (creation, re-arm or migration)
+	BaselinePending bool
+	LastBeyond      *bool
+	PeakPriceUSD    *float64
+	PeakSince       *time.Time // when peak tracking started (creation, re-arm or migration)
+	// PeakPriceIDR is a gold trailing stop's peak on the rupiah price (#58).
+	PeakPriceIDR        *float64
 	Week52RefUSD        *float64
 	LastAlertedPriceUSD *float64
 	CooldownUntil       *time.Time
@@ -130,6 +132,7 @@ type AlertMark struct {
 type FiredMark struct {
 	At       time.Time
 	PriceUSD float64
+	PriceIDR float64 // rupiah price for a gold trailing stop; 0 otherwise
 }
 
 // Patch is a set of state changes for one rule. Nil or false fields are
@@ -139,6 +142,7 @@ type Patch struct {
 	LastBeyond    *bool
 	PeakPriceUSD  *float64
 	PeakSince     *time.Time
+	PeakPriceIDR  *float64
 	Week52RefUSD  *float64
 	Alert         *AlertMark
 	Fired         *FiredMark
@@ -146,7 +150,7 @@ type Patch struct {
 
 // IsEmpty reports whether the patch changes nothing.
 func (p Patch) IsEmpty() bool {
-	return !p.ClearBaseline && p.LastBeyond == nil && p.PeakPriceUSD == nil && p.PeakSince == nil &&
+	return !p.ClearBaseline && p.LastBeyond == nil && p.PeakPriceUSD == nil && p.PeakSince == nil && p.PeakPriceIDR == nil &&
 		p.Week52RefUSD == nil && p.Alert == nil && p.Fired == nil
 }
 
@@ -160,6 +164,7 @@ type Trigger struct {
 	LevelIDR     float64
 	Pct          float64
 	PeakPriceUSD float64 // trailing_stop: the peak the drop is measured from
+	PeakPriceIDR float64 // trailing_stop on gold: the rupiah peak (#58)
 	PrevRefUSD   float64 // week52_break: the 52-week extreme that was broken
 }
 
