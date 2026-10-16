@@ -243,6 +243,11 @@ func registerRoutes(router *gin.Engine, database *db.DB, authService *auth.Servi
 		middleware.RateLimiter(authRateLimitMaxRequests, authRateLimitWindowSecs),
 		auth.AuthMiddleware(authService), meHandler(authService))
 	authGroup.POST("/logout", logoutHandler(authService))
+	// Same rate limit as login: the current password must not be guessable
+	// from a stolen session.
+	authGroup.PUT("/password",
+		middleware.RateLimiter(loginRateLimitMaxRequests, loginRateLimitWindowSecs),
+		auth.AuthMiddleware(authService), changePasswordHandler(authService, cookieSecure))
 
 	protected := api.Group("/")
 	protected.Use(middleware.RateLimiter(apiRateLimitMaxRequests, apiRateLimitWindowSecs))
@@ -386,6 +391,41 @@ func registerHandler(authService *auth.Service) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusCreated, gin.H{"message": "registered successfully"})
+	}
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required"`
+}
+
+// changePasswordHandler changes the signed-in user's password. Every other
+// session ends (token version bump); this one gets a fresh cookie.
+func changePasswordHandler(authService *auth.Service, cookieSecure bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, err := auth.GetCurrentUserID(c)
+		if err != nil {
+			respondError(c, http.StatusUnauthorized, "unauthorized", "authentication required")
+			return
+		}
+		var req changePasswordRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			respondError(c, http.StatusBadRequest, "validation_error", "current_password and new_password are required")
+			return
+		}
+
+		err = authService.ChangePassword(c, userID, req.CurrentPassword, req.NewPassword, cookieSecure)
+		switch {
+		case err == nil:
+			c.JSON(http.StatusOK, gin.H{"message": "password changed"})
+		case errors.Is(err, auth.ErrWrongPassword):
+			respondError(c, http.StatusBadRequest, "wrong_password", err.Error())
+		case errors.Is(err, auth.ErrPasswordTooShort), errors.Is(err, auth.ErrPasswordTooWeak), errors.Is(err, auth.ErrSamePassword):
+			respondError(c, http.StatusBadRequest, "validation_error", err.Error())
+		default:
+			log.Printf("[ERROR] changePasswordHandler: %v", err)
+			respondError(c, http.StatusInternalServerError, "internal_error", "failed to change password")
+		}
 	}
 }
 
