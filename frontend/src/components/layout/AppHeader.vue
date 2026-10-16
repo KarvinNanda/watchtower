@@ -42,7 +42,7 @@ const title = computed(() => {
         v-if="showMenuButton"
         quaternary
         circle
-        aria-label="Toggle navigation"
+        :aria-label="t('common.toggle_navigation')"
         @click="$emit('toggle-menu')"
       >
         <template #icon>
@@ -52,7 +52,7 @@ const title = computed(() => {
       <h1 class="app-header__title">{{ title }}</h1>
     </div>
     <div class="app-header__right">
-      <n-ellipsis v-if="authStore.user" style="max-width: 220px" class="app-header__email">
+      <n-ellipsis v-if="authStore.user" style="max-width: min(220px, 40vw)" class="app-header__email">
         {{ authStore.user.email }}
       </n-ellipsis>
     </div>
@@ -64,6 +64,7 @@ const title = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 0 20px;
   height: 100%;
 }
@@ -72,12 +73,17 @@ const title = computed(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
+/* One line with an ellipsis, so it never runs into the email at 375 px (#55). */
 .app-header__title {
   font-size: 18px;
   font-weight: 600;
   margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-header__email {
