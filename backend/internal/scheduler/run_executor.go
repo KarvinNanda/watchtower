@@ -9,6 +9,7 @@ import (
 
 type assetRunner interface {
 	RunForUser(userID uint64) (AssetRunResult, error)
+	ReportForUser(userID uint64) (AssetReportResult, error)
 }
 
 type sentinelRunner interface {
@@ -30,9 +31,9 @@ func NewRunExecutor(asset assetRunner, sentinel sentinelRunner, sentinelPipeline
 	return &RunExecutor{asset: asset, sentinel: sentinel, sentinelPipeline: sentinelPipeline}
 }
 
-// Execute runs an asset job for run.UserID only, or a global sentinel job
-// (recorded in scheduler_state, since it is a full run) and reports how
-// many items reached the caller.
+// Execute runs an asset job or a status report for run.UserID only, or a
+// global sentinel job (recorded in scheduler_state, since it is a full run)
+// and reports how many items reached the caller.
 func (e *RunExecutor) Execute(ctx context.Context, run *runs.Run) (map[string]int, error) {
 	switch run.Type {
 	case runs.TypeAsset:
@@ -46,6 +47,19 @@ func (e *RunExecutor) Execute(ctx context.Context, run *runs.Run) (map[string]in
 			"sent":          res.Sent,
 			"errors":        res.Errors,
 			"stale":         res.Stale,
+		}, nil
+
+	case runs.TypeAssetReport:
+		res, err := e.asset.ReportForUser(run.UserID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]int{
+			"symbols": res.Symbols,
+			"rules":   res.Rules,
+			"sent":    res.Sent,
+			"errors":  res.Errors,
+			"stale":   res.Stale,
 		}, nil
 
 	case runs.TypeSentinel:
