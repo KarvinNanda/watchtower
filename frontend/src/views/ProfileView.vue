@@ -5,6 +5,7 @@ import {
   NCard,
   NForm,
   NFormItem,
+  NInput,
   NInputNumber,
   NSelect,
   NRadioGroup,
@@ -17,12 +18,46 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import * as authApi from '@/api/auth'
 import { message } from '@/plugins/naive'
+import { validatePasswordChange, passwordChangeErrorKey } from '@/utils/passwordChange'
 
 const { t } = useI18n()
 const authStore = useAuthStore()
 
 const loading = ref(true)
 const submitting = ref(false)
+
+// Change password: a separate form with its own button, so a wrong current
+// password never blocks saving the rest of the profile.
+const emptyPasswordForm = () => ({ current: '', next: '', confirm: '' })
+const passwordForm = ref(emptyPasswordForm())
+const passwordError = ref(null)
+const changingPassword = ref(false)
+
+function passwordFeedback(field) {
+  if (passwordError.value?.field === field) return t(passwordError.value.key)
+  return field === 'next' ? t('auth.password_hint') : undefined
+}
+
+function passwordStatus(field) {
+  return passwordError.value?.field === field ? 'error' : undefined
+}
+
+async function handleChangePassword() {
+  passwordError.value = validatePasswordChange(passwordForm.value)
+  if (passwordError.value) return
+  changingPassword.value = true
+  try {
+    await authApi.changePassword(passwordForm.value.current, passwordForm.value.next)
+    passwordForm.value = emptyPasswordForm()
+    message.success(t('profile.password_changed'))
+  } catch (err) {
+    const e = passwordChangeErrorKey(err)
+    if (e.field) passwordError.value = e
+    else message.error(t(e.key))
+  } finally {
+    changingPassword.value = false
+  }
+}
 
 const DEVICE_OPTIONS = [
   { label: 'Android Phone', value: 'android_phone' },
@@ -197,6 +232,50 @@ onMounted(async () => {
       <div class="profile-view__actions">
         <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
       </div>
+
+      <n-card :title="t('profile.password_section')" size="small" class="profile-view__card">
+        <n-form label-placement="top" @submit.prevent="handleChangePassword">
+          <n-form-item
+            :label="t('profile.password_current')"
+            :feedback="passwordFeedback('current')"
+            :validation-status="passwordStatus('current')"
+          >
+            <n-input
+              v-model:value="passwordForm.current"
+              type="password"
+              show-password-on="click"
+              :input-props="{ autocomplete: 'current-password', 'aria-invalid': passwordStatus('current') === 'error' }"
+            />
+          </n-form-item>
+          <n-form-item
+            :label="t('profile.password_new')"
+            :feedback="passwordFeedback('next')"
+            :validation-status="passwordStatus('next')"
+          >
+            <n-input
+              v-model:value="passwordForm.next"
+              type="password"
+              show-password-on="click"
+              :input-props="{ autocomplete: 'new-password', 'aria-invalid': passwordStatus('next') === 'error' }"
+            />
+          </n-form-item>
+          <n-form-item
+            :label="t('profile.password_confirm')"
+            :feedback="passwordFeedback('confirm')"
+            :validation-status="passwordStatus('confirm')"
+          >
+            <n-input
+              v-model:value="passwordForm.confirm"
+              type="password"
+              show-password-on="click"
+              :input-props="{ autocomplete: 'new-password', 'aria-invalid': passwordStatus('confirm') === 'error' }"
+            />
+          </n-form-item>
+          <div class="profile-view__actions">
+            <n-button attr-type="submit" :loading="changingPassword">{{ t('profile.password_change') }}</n-button>
+          </div>
+        </n-form>
+      </n-card>
     </div>
   </n-spin>
 </template>
