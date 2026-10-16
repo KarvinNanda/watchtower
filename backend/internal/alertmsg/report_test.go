@@ -22,7 +22,7 @@ func reportSymbols() []ReportSymbol {
 			{RuleID: 4, Trigger: rules.Trigger{Type: rules.TypePctChange24h, Pct: 5},
 				Distance: rules.Distance{Kind: rules.DistanceChange24h, Current: f64(0.7), Threshold: 5}},
 			{RuleID: 5, Trigger: rules.Trigger{Type: rules.TypeWeek52Break, Direction: rules.DirectionAbove},
-				Distance: rules.Distance{Kind: rules.DistanceNone}},
+				Distance: rules.Distance{Kind: rules.DistanceLevel, Level: 90000, Pct: 9.47}},
 		}},
 		{Symbol: "ANTAM", PriceUSD: 133.76, NativeIDR: 2400902, ChangePct: f64(0.3), Rules: []ReportRule{
 			{RuleID: 1, Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentBuyTarget, Currency: rules.CurrencyIDR, LevelIDR: 2350000},
@@ -95,6 +95,7 @@ func TestAssetReportMessages_Content(t *testing.T) {
 	assert.Contains(t, m, `jarak \-2\.1% \(dekat\)`)
 	assert.Contains(t, m, "sudah lewat")
 	assert.Contains(t, m, "harga tidak tersedia")
+	assert.Contains(t, m, `52\-week high $90,000\.00`, "#52: the reference level the engine compares with")
 	assert.Less(t, strings.Index(m, "*AAPL*"), strings.Index(m, "*ANTAM*"))
 	assert.Less(t, strings.Index(m, "1\\.600\\.000\\.000"), strings.Index(m, "Trailing stop"), "rules by ID: 2 before 3")
 }

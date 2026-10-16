@@ -75,18 +75,21 @@ const stateResetSQL = stateResetKeepFiredSQL + ", triggered_at = NULL, triggered
 // AssetRule mirrors an asset_rules row, including the read-only state the
 // UI shows.
 type AssetRule struct {
-	ID                uint64
-	AssetType         string
-	AssetSymbol       string
-	RuleType          string
-	Direction         *string
-	Intent            *string
-	LevelUSD          *float64
-	LevelCurrency     string // "USD" or "IDR"; price_level rules only differ
-	LevelIDR          *float64
-	Pct               *float64
-	IsActive          bool
-	PeakPriceUSD      *float64
+	ID            uint64
+	AssetType     string
+	AssetSymbol   string
+	RuleType      string
+	Direction     *string
+	Intent        *string
+	LevelUSD      *float64
+	LevelCurrency string // "USD" or "IDR"; price_level rules only differ
+	LevelIDR      *float64
+	Pct           *float64
+	IsActive      bool
+	PeakPriceUSD  *float64
+	// Week52RefUSD is the 52-week extreme stored at the rule's previous
+	// evaluation: the level a week52_break rule compares the price with (#52).
+	Week52RefUSD      *float64
 	TriggeredAt       *time.Time
 	TriggeredPriceUSD *float64
 	LastAlertedAt     *time.Time
@@ -227,7 +230,7 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, asset_type, asset_symbol, rule_type, direction, intent, level_usd, pct, is_active,
-			peak_price_usd, triggered_at, triggered_price_usd, last_alerted_at, created_at, level_currency, level_idr
+			peak_price_usd, triggered_at, triggered_price_usd, last_alerted_at, created_at, level_currency, level_idr, week52_ref_usd
 		FROM asset_rules
 		WHERE user_id = ?
 		ORDER BY asset_symbol, created_at`, userID,
@@ -243,17 +246,17 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 			r                           AssetRule
 			direction, intent           sql.NullString
 			level, pct, peak, trigPrice sql.NullFloat64
-			levelIDR                    sql.NullFloat64
+			levelIDR, week52Ref         sql.NullFloat64
 			triggeredAt, lastAlertedAt  sql.NullTime
 		)
 		if err := rows.Scan(&r.ID, &r.AssetType, &r.AssetSymbol, &r.RuleType, &direction, &intent, &level, &pct,
 			&r.IsActive, &peak, &triggeredAt, &trigPrice, &lastAlertedAt, &r.CreatedAt,
-			&r.LevelCurrency, &levelIDR); err != nil {
+			&r.LevelCurrency, &levelIDR, &week52Ref); err != nil {
 			return nil, fmt.Errorf("user: scan asset_rules: %w", err)
 		}
 		r.Direction, r.Intent = nullStringPtr(direction), nullStringPtr(intent)
 		r.LevelUSD, r.Pct, r.PeakPriceUSD, r.TriggeredPriceUSD = nullFloatPtr(level), nullFloatPtr(pct), nullFloatPtr(peak), nullFloatPtr(trigPrice)
-		r.LevelIDR = nullFloatPtr(levelIDR)
+		r.LevelIDR, r.Week52RefUSD = nullFloatPtr(levelIDR), nullFloatPtr(week52Ref)
 		r.TriggeredAt, r.LastAlertedAt = nullTimePtr(triggeredAt), nullTimePtr(lastAlertedAt)
 		t, ok := asset.SymbolAssetType(r.AssetSymbol)
 		r.Supported = ok && t == r.AssetType

@@ -69,7 +69,25 @@ func TestDistanceTo_Change24h(t *testing.T) {
 	assert.Nil(t, DistanceTo(r, Market{PriceUSD: 100}).Current)
 }
 
+// #52: a 52-week rule is measured against the reference the engine
+// compares with (week52_ref_usd), not the market's current high or low.
+func TestDistanceTo_Week52(t *testing.T) {
+	ref := 120.0
+	above := Rule{ID: 4, Type: TypeWeek52Break, Direction: DirectionAbove, State: State{Week52RefUSD: &ref}}
+	d := DistanceTo(above, Market{PriceUSD: 100})
+	assert.Equal(t, DistanceLevel, d.Kind)
+	assert.Equal(t, 120.0, d.Level)
+	assert.InDelta(t, 20, d.Pct, 1e-9)
+	assert.False(t, d.Passed)
+
+	low := 80.0
+	below := Rule{ID: 5, Type: TypeWeek52Break, Direction: DirectionBelow, State: State{Week52RefUSD: &low}}
+	assert.True(t, DistanceTo(below, Market{PriceUSD: 79}).Passed)
+	assert.True(t, DistanceTo(below, Market{PriceUSD: 82}).Near)
+}
+
 func TestDistanceTo_NoDistance(t *testing.T) {
+	// A 52-week rule not evaluated yet has no reference.
 	assert.Equal(t, Distance{Kind: DistanceNone}, DistanceTo(Rule{Type: TypeWeek52Break, Direction: DirectionAbove}, Market{PriceUSD: 100}))
 	assert.Equal(t, Distance{Kind: DistanceUnavailable}, DistanceTo(priceRule(DirectionAbove, 110), Market{PriceUSD: 0}))
 }

@@ -100,10 +100,16 @@ func reportRuleText(lang string, rate Rate, r ReportRule) string {
 		}
 		return pick(lang, "24h change ±"+formatPct(t.Pct)+" · now "+now, "Perubahan 24 jam ±"+formatPct(t.Pct)+" · sekarang "+now)
 	case rules.TypeWeek52Break:
+		label := "52-week high"
 		if t.Direction == rules.DirectionBelow {
-			return "52-week low"
+			label = "52-week low"
 		}
-		return "52-week high"
+		// The level is the extreme stored at the previous evaluation, the
+		// one the engine compares with (#52); none before the first run.
+		if d.Kind != rules.DistanceLevel {
+			return label
+		}
+		return label + " " + amount(rate, d.Level) + distanceTail(lang, d)
 	}
 	return string(t.Type)
 }
