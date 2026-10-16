@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runResultText } from './runResult'
+import { runResultText, runOk, runTitleKey, runButtonKeys } from './runResult'
 
 const t = (key, params) => (params ? `${key}|${JSON.stringify(params)}` : key)
 
@@ -46,5 +46,44 @@ describe('runResultText', () => {
 
   it('null result is empty text', () => {
     expect(runResultText(null, t)).toBe('')
+  })
+})
+
+describe('asset_report results', () => {
+  const done = (summary) => ({ status: 'done', type: 'asset_report', summary })
+
+  it('summary of a sent report', () => {
+    expect(runResultText(done({ symbols: 2, rules: 4, sent: 1, errors: 0, stale: 0 }), t)).toBe(
+      'run.asset_report_summary|{"symbols":2,"rules":4,"sent":1,"errors":0,"stale":0}',
+    )
+  })
+
+  it('adds unavailable and stale sentences', () => {
+    expect(runResultText(done({ symbols: 2, rules: 4, sent: 1, errors: 1, stale: 1 }), t)).toBe(
+      'run.asset_report_summary|{"symbols":2,"rules":4,"sent":1,"errors":1,"stale":1} ' +
+        'run.asset_report_unavailable|{"errors":1} run.stale_prices|{"stale":1}',
+    )
+  })
+
+  it('no active rules', () => {
+    expect(runResultText(done({ symbols: 0, rules: 0, sent: 0, errors: 0, stale: 0 }), t)).toBe('run.asset_report_empty')
+    expect(runOk(done({ symbols: 0, sent: 0 }))).toBe(true)
+  })
+
+  it('a report that could not be sent is not ok', () => {
+    expect(runResultText(done({ symbols: 1, rules: 1, sent: 0, errors: 0, stale: 0 }), t)).toBe('run.asset_report_failed')
+    expect(runOk(done({ symbols: 1, sent: 0 }))).toBe(false)
+  })
+
+  it('titles and button labels by type', () => {
+    expect(runTitleKey('asset_report')).toBe('run.send_report')
+    expect(runTitleKey('asset')).toBe('run.check_now')
+    expect(runButtonKeys('asset_report')).toEqual({ idle: 'run.send_report', running: 'run.sending_report' })
+    expect(runButtonKeys('sentinel')).toEqual({ idle: 'run.check_now', running: 'run.running' })
+  })
+
+  it('Check now results stay ok as before', () => {
+    expect(runOk({ status: 'done', type: 'asset', summary: { sent: 0 } })).toBe(true)
+    expect(runOk({ status: 'failed', type: 'asset', reason: 'x' })).toBe(false)
   })
 })
