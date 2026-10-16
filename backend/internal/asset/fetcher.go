@@ -459,6 +459,8 @@ var symbolAssetTypes = map[string]string{
 	"TSM": "stock", "AVGO": "stock", "JPM": "stock", "LLY": "stock",
 	"V": "stock", "UNH": "stock", "XOM": "stock", "MA": "stock",
 	"JNJ": "stock", "PG": "stock", "HD": "stock", "COST": "stock",
+	// SPY is the SPDR S&P 500 ETF; Twelve Data serves it like a stock.
+	"SPY":   "stock",
 	"ANTAM": "gold",
 }
 

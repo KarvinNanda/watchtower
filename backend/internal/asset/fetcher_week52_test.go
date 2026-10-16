@@ -76,7 +76,7 @@ func TestFetchCryptoWeek52_RejectsUnknownSymbol(t *testing.T) {
 }
 
 func TestSymbolAssetType(t *testing.T) {
-	for sym, want := range map[string]string{"BTC": "crypto", "aapl": "stock", "ANTAM": "gold"} {
+	for sym, want := range map[string]string{"BTC": "crypto", "aapl": "stock", "SPY": "stock", "ANTAM": "gold"} {
 		got, ok := SymbolAssetType(sym)
 		assert.True(t, ok, sym)
 		assert.Equal(t, want, got, sym)

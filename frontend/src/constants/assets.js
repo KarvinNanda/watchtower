@@ -1,8 +1,7 @@
-// Hardcoded symbol catalogue shown in the Asset Alert form's dropdown,
-// keyed by asset_type. WatchTower's backend accepts any 1-20 char
-// uppercase/hyphen symbol (see internal/user.assetSymbolPattern), so this
-// list is a curated UX convenience, not a validation whitelist enforced
-// server-side.
+// Symbol catalogue shown in the Asset Alert form's dropdown, keyed by
+// asset_type. It mirrors the backend whitelist (symbolAssetTypes in
+// backend/internal/asset/fetcher.go), which the API enforces: a symbol
+// added here must be added there too.
 export const ASSET_OPTIONS = {
   crypto: [
     { label: 'BTC - Bitcoin', value: 'BTC' },
@@ -47,6 +46,7 @@ export const ASSET_OPTIONS = {
     { label: 'PG - Procter & Gamble', value: 'PG' },
     { label: 'HD - Home Depot', value: 'HD' },
     { label: 'COST - Costco', value: 'COST' },
+    { label: 'SPY - SPDR S&P 500 ETF', value: 'SPY' },
   ],
   gold: [
     { label: 'ANTAM - Antam (IDR)', value: 'ANTAM' },
