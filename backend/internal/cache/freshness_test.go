@@ -218,3 +218,54 @@ func TestGetMarketData_ReadsTheHighFromMySQL(t *testing.T) {
 	assert.Equal(t, 105.0, *d.HighUSD)
 	assert.Equal(t, since, *d.HighSince)
 }
+
+// #50: with Redis fully down, the MySQL row is the cache: a fresh row is
+// served without a fetch, and a manual refresh that fails falls back to it.
+func TestGetMarketData_RedisDownUsesTheMySQLRow(t *testing.T) {
+	newDownCache := func(t *testing.T, f *fakeFetcher) (*Cache, sqlmock.Sqlmock) {
+		t.Helper()
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		mr := miniredis.RunT(t)
+		addr := mr.Addr()
+		mr.Close() // Redis is down: every call errors, not redis.Nil
+		c := &Cache{
+			redis: redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1}), db: db, ttlHours: 4,
+			fetcher: f, budget: &fakeBudget{},
+			now:    func() time.Time { return now },
+			rateFn: func() currency.Rate { return currency.Rate{Value: 17908} },
+		}
+		return c, mock
+	}
+	row := func(mock sqlmock.Sqlmock, age time.Duration) {
+		mock.ExpectQuery(`FROM market_cache`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(marketColumns).
+			AddRow("BTC", 100.0, 1790800.0, nil, nil, nil, nil, nil, now.Add(-age), "test"))
+	}
+
+	t.Run("fresh row is served without a fetch", func(t *testing.T) {
+		f := &fakeFetcher{err: errors.New("must not fetch")}
+		c, mock := newDownCache(t, f)
+		row(mock, 20*time.Minute)
+
+		d, err := c.GetMarketData(context.Background(), "BTC", "crypto", FetchOptions{})
+
+		require.NoError(t, err)
+		assert.Equal(t, 100.0, d.PriceUSD)
+		assert.Zero(t, f.calls)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("failed manual refresh falls back to the row, marked stale", func(t *testing.T) {
+		f := &fakeFetcher{err: errors.New("coingecko 429")}
+		c, mock := newDownCache(t, f)
+		row(mock, 20*time.Minute)
+
+		d, err := c.GetMarketData(context.Background(), "BTC", "crypto", manual)
+
+		require.NoError(t, err)
+		assert.True(t, d.Stale)
+		assert.Equal(t, 100.0, d.PriceUSD)
+		assert.Equal(t, 1, f.calls)
+	})
+}
