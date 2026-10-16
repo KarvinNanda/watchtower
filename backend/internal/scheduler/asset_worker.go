@@ -263,6 +263,38 @@ func (w *AssetWorker) processSymbolSafe(symbol SymbolInfo, scope runScope, batch
 	return w.processSymbol(symbol, scope, batches)
 }
 
+// manualFetch is what a user's Check now or status report asks the cache
+// for: prices at most cache.ManualMaxAge old (#20).
+var manualFetch = cache.FetchOptions{MaxAge: cache.ManualMaxAge, Manual: true}
+
+// marketFromData is the engine's view of one fetch. IDR price levels (#40)
+// compare against price_idr from the same fetch; 0 means no real rate was
+// known then (#41), so it stays unknown.
+func marketFromData(d *cache.MarketData) rules.Market {
+	m := rules.Market{
+		PriceUSD:     d.PriceUSD,
+		ChangePct24h: d.ChangePct24h,
+		Week52High:   d.Week52HighUSD,
+		Week52Low:    d.Week52LowUSD,
+		HighUSD:      d.HighUSD,
+		HighSince:    d.HighSince,
+	}
+	if d.PriceIDR > 0 {
+		idr := d.PriceIDR
+		m.PriceIDR = &idr
+	}
+	return m
+}
+
+// nativeIDRFor is the source's own IDR price: only gold is quoted in IDR.
+// Every other IDR amount is converted at send time with one rate.
+func nativeIDRFor(assetType string, d *cache.MarketData) float64 {
+	if assetType == "gold" {
+		return d.PriceIDR
+	}
+	return 0
+}
+
 // processSymbol fetches market data for symbol via the cache layer, loads
 // its active rules, and evaluates each one — appending fired alerts to the
 // owner's UserAlertBatch instead of sending anything directly.
@@ -274,7 +306,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	// at most cache.ManualMaxAge old (#20).
 	opts := cache.FetchOptions{}
 	if scope.userID != 0 {
-		opts = cache.FetchOptions{MaxAge: cache.ManualMaxAge, Manual: true}
+		opts = manualFetch
 	}
 	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType, opts)
 	if err != nil {
@@ -298,20 +330,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	if marketData.Stale {
 		res.stale = 1
 	}
-	market := rules.Market{
-		PriceUSD:     marketData.PriceUSD,
-		ChangePct24h: marketData.ChangePct24h,
-		Week52High:   marketData.Week52HighUSD,
-		Week52Low:    marketData.Week52LowUSD,
-		HighUSD:      marketData.HighUSD,
-		HighSince:    marketData.HighSince,
-	}
-	// IDR price levels (#40) compare against price_idr from the same fetch.
-	// 0 means no real rate was known then (#41): leave it unknown.
-	if marketData.PriceIDR > 0 {
-		idr := marketData.PriceIDR
-		market.PriceIDR = &idr
-	}
+	market := marketFromData(marketData)
 	if symbol.NeedsWeek52 && symbol.AssetType == "crypto" {
 		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
 		if wErr != nil {
@@ -322,12 +341,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 		}
 	}
 
-	// Only gold is quoted in IDR by its source. Every other IDR amount is
-	// converted at send time with one rate for the whole message.
-	nativeIDR := 0.0
-	if symbol.AssetType == "gold" {
-		nativeIDR = marketData.PriceIDR
-	}
+	nativeIDR := nativeIDRFor(symbol.AssetType, marketData)
 
 	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, nativeIDR, scope, batches)
 	return res, nil
