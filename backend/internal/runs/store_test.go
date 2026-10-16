@@ -126,6 +126,36 @@ func TestGet_StaleRunReportedAsTimedOut(t *testing.T) {
 	assert.Equal(t, "timed out", got.Error)
 }
 
+// #50: a Check now waiting behind a long periodic run is running, not
+// stuck. A running run is timed from started_at, with a longer budget.
+func TestGet_RunningRunIsTimedFromItsStart(t *testing.T) {
+	s, _, clock := newTestStore(t)
+	ctx := context.Background()
+	created, err := s.Enqueue(ctx, 7, TypeAsset)
+	require.NoError(t, err)
+
+	*clock = storeNow.Add(14 * time.Minute)
+	require.NoError(t, s.MarkRunning(ctx, created.ID))
+
+	*clock = storeNow.Add(20 * time.Minute)
+	got, err := s.Get(ctx, created.ID, 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusRunning, got.Status, "20 min after creation, 6 min after start")
+
+	*clock = storeNow.Add(14*time.Minute + runningTimeout + time.Second)
+	got, err = s.Get(ctx, created.ID, 7)
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, got.Status)
+	assert.Equal(t, "timed out", got.Error)
+}
+
+func TestRunningTimeoutCoversTheLongestPeriodicRun(t *testing.T) {
+	// ~100 stale stocks at the 8 s Twelve Data gap is about 13.5 min of
+	// holding the worker lock, plus the run itself.
+	assert.GreaterOrEqual(t, runningTimeout, 30*time.Minute)
+	assert.Equal(t, 15*time.Minute, staleAfter, "a queued run still times out like before")
+}
+
 func TestGet_FinishedRunIsNeverStale(t *testing.T) {
 	s, _, clock := newTestStore(t)
 	ctx := context.Background()

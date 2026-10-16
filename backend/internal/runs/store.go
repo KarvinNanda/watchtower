@@ -34,9 +34,14 @@ const (
 	runKeyPrefix  = "wt:run:"
 	lockKeyPrefix = "wt:run:lock:"
 
-	runTTL     = 24 * time.Hour
-	lockTTL    = 5 * time.Minute
-	staleAfter = 15 * time.Minute
+	runTTL  = 24 * time.Hour
+	lockTTL = 5 * time.Minute
+	// staleAfter: a run still queued this long after creation is reported
+	// as timed out (the consumer is likely down). runningTimeout: a running
+	// run is timed from started_at, long enough to wait for the longest
+	// periodic run holding the worker lock (#50).
+	staleAfter     = 15 * time.Minute
+	runningTimeout = 30 * time.Minute
 )
 
 var (
@@ -154,11 +159,26 @@ func (s *Store) Get(ctx context.Context, id string, userID uint64) (*Run, error)
 	if run.UserID != userID {
 		return nil, ErrNotFound
 	}
-	if (run.Status == StatusQueued || run.Status == StatusRunning) && s.now().Sub(run.CreatedAt) > staleAfter {
+	if timedOut(run, s.now()) {
 		run.Status = StatusFailed
 		run.Error = "timed out"
 	}
 	return run, nil
+}
+
+// timedOut: a queued run counts from creation, a running run from its start.
+func timedOut(run *Run, now time.Time) bool {
+	switch run.Status {
+	case StatusQueued:
+		return now.Sub(run.CreatedAt) > staleAfter
+	case StatusRunning:
+		start := run.CreatedAt
+		if run.StartedAt != nil {
+			start = *run.StartedAt
+		}
+		return now.Sub(start) > runningTimeout
+	}
+	return false
 }
 
 // Pop waits up to timeout for the next queued run. It returns (nil, nil)

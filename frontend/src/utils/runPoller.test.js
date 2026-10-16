@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { pollRun, runErrorKey, failureReasonKey } from './runPoller'
+import { pollRun, runErrorKey, failureReasonKey, DEFAULT_POLL_TIMEOUT_MS } from './runPoller'
 
 const noSleep = async () => {}
 
@@ -123,5 +123,14 @@ describe('runErrorKey', () => {
   })
   it('maps other HTTP errors to the generic message', () => {
     expect(runErrorKey(httpError(500)).key).toBe('common.error_generic')
+  })
+})
+
+// #50: the backend times a run out after 15 min queued plus 30 min running,
+// so the client's safety net must outlast that, or it reports a run as
+// failed while the backend still treats it as alive.
+describe('poll timeout', () => {
+  it('outlasts the backend run timeouts', () => {
+    expect(DEFAULT_POLL_TIMEOUT_MS).toBeGreaterThan((15 + 30) * 60 * 1000)
   })
 })
