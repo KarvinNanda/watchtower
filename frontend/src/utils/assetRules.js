@@ -122,13 +122,23 @@ export function formatLevelInput(value) {
   return value == null ? '' : levelInputFormat.format(value)
 }
 
-// parseLevelInput reads id-ID input back: "." groups thousands, "," is the
-// decimal mark. Empty or non-numeric input is no value.
+// parseLevelInput reads id-ID input back: "." groups thousands in groups of
+// exactly three, "," is the decimal mark, and "Rp" (the app's own format) is
+// ignored. Empty input is no value. Anything else is NaN, so Naive keeps the
+// previous value: a dot decimal like "2350000.50" would otherwise lose its
+// dot and save the level 100 times too big. The value is rounded to the 4
+// decimals the input shows.
+const GROUPED_IDR = /^\d{1,3}(\.\d{3})+(,\d+)?$/
+const PLAIN_IDR = /^\d+(,\d+)?$/
+
 export function parseLevelInput(text) {
-  const cleaned = String(text ?? '').trim().replace(/\./g, '').replace(',', '.')
+  const cleaned = String(text ?? '').replace(/rp/gi, '').replace(/[\s\u00a0]/g, '')
   if (cleaned === '') return null
-  const n = Number(cleaned)
-  return Number.isFinite(n) ? n : null
+  let normalized
+  if (GROUPED_IDR.test(cleaned)) normalized = cleaned.replace(/\./g, '').replace(',', '.')
+  else if (PLAIN_IDR.test(cleaned)) normalized = cleaned.replace(',', '.')
+  else return NaN
+  return Math.round(Number(normalized) * 1e4) / 1e4
 }
 
 export function formatLevel(rule) {
