@@ -14,6 +14,8 @@ import {
   setCurrency,
   formatLevel,
   changeAssetType,
+  formatLevelInput,
+  parseLevelInput,
 } from './assetRules'
 
 const t = (key, params) => (params ? `${key}|${JSON.stringify(params)}` : key)
@@ -174,5 +176,31 @@ describe('changeAssetType', () => {
   it('drops week52_break when switching to gold', () => {
     const form = { ...emptyRuleForm(), assetType: 'crypto', ruleType: 'week52_break', direction: 'above' }
     expect(changeAssetType(form, 'gold').ruleType).toBeNull()
+  })
+})
+
+// #60: IDR levels are typed with id-ID grouping so a missing zero shows.
+describe('IDR level input', () => {
+  it('formats with id-ID grouping', () => {
+    expect(formatLevelInput(1460000000)).toBe('1.460.000.000')
+    expect(formatLevelInput(1350000)).toBe('1.350.000')
+    expect(formatLevelInput(0.0001)).toBe('0,0001')
+    expect(formatLevelInput(null)).toBe('')
+  })
+
+  it('parses grouped and plain input back to a number', () => {
+    expect(parseLevelInput('1.460.000.000')).toBe(1460000000)
+    expect(parseLevelInput('1460000000')).toBe(1460000000)
+    expect(parseLevelInput(' 2.350.000 ')).toBe(2350000)
+    expect(parseLevelInput('0,0001')).toBe(0.0001)
+  })
+
+  it('empty or invalid input is no value', () => {
+    expect(parseLevelInput('')).toBeNull()
+    expect(parseLevelInput('abc')).toBeNull()
+  })
+
+  it('round-trips', () => {
+    for (const v of [1, 999999999999, 2350000, 0.5]) expect(parseLevelInput(formatLevelInput(v))).toBe(v)
   })
 })

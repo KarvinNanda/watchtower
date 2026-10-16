@@ -114,6 +114,23 @@ export function formatIDR(value) {
   }).format(value)
 }
 
+const levelInputFormat = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 4 })
+
+// formatLevelInput shows an IDR level while it is typed: "1.460.000.000",
+// so a missing zero is visible before saving (#60).
+export function formatLevelInput(value) {
+  return value == null ? '' : levelInputFormat.format(value)
+}
+
+// parseLevelInput reads id-ID input back: "." groups thousands, "," is the
+// decimal mark. Empty or non-numeric input is no value.
+export function parseLevelInput(text) {
+  const cleaned = String(text ?? '').trim().replace(/\./g, '').replace(',', '.')
+  if (cleaned === '') return null
+  const n = Number(cleaned)
+  return Number.isFinite(n) ? n : null
+}
+
 export function formatLevel(rule) {
   return rule.level_currency === 'IDR' ? formatIDR(rule.level_idr) : formatUSD(rule.level_usd)
 }

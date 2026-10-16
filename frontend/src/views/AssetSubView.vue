@@ -15,7 +15,7 @@ import { message } from '@/plugins/naive'
 import { ASSET_OPTIONS } from '@/constants/assets'
 import {
   RULE_TYPES, INTENTS, emptyRuleForm, ruleToForm, validateRuleForm, buildRulePayload, ruleSummary,
-  setCurrency, changeAssetType,
+  setCurrency, changeAssetType, formatLevelInput, parseLevelInput,
 } from '@/utils/assetRules'
 import { groupRulesBySymbol } from '@/utils/groupRules'
 import { runChangedRuleIds } from '@/utils/runHighlight'
@@ -326,6 +326,8 @@ onUnmounted(() => marketStore.stopAutoRefresh())
               class="asset-view__level-input wt-num"
               :min="0"
               :step="form.currency === 'IDR' ? 1000 : 0.01"
+              :format="form.currency === 'IDR' ? formatLevelInput : undefined"
+              :parse="form.currency === 'IDR' ? parseLevelInput : undefined"
               :input-props="showRateNote ? { 'aria-describedby': 'asset-rate-note' } : undefined"
               clearable
             />
