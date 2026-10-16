@@ -224,6 +224,9 @@ func Load(envPath string) (*Config, error) {
 	if cfg.JWT.Secret == "" && cfg.Server.Env != "development" {
 		return nil, fmt.Errorf("config: JWT_SECRET is required outside development")
 	}
+	if cfg.Limits.AlertCooldownHours < 0 {
+		return nil, fmt.Errorf("config: ALERT_COOLDOWN_HOURS must be 0 or more, got %d", cfg.Limits.AlertCooldownHours)
+	}
 	if cfg.Limits.TwelveDataManualDailyCredits < 0 {
 		return nil, fmt.Errorf("config: TWELVE_DATA_MANUAL_DAILY_CREDITS must be 0 or more, got %d", cfg.Limits.TwelveDataManualDailyCredits)
 	}

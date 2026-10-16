@@ -177,3 +177,13 @@ func TestLoad_CoinGeckoAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "demo-key-123", cfg.ExternalAPI.CoinGeckoAPIKey)
 }
+
+// #75: the default cooldown for new users cannot be negative.
+func TestLoad_NegativeAlertCooldownFails(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ALERT_COOLDOWN_HOURS", "-1")
+	_, err := Load("does-not-exist.env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ALERT_COOLDOWN_HOURS")
+}

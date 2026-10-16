@@ -160,7 +160,14 @@ type Service struct {
 	db        *sql.DB
 	jwtSecret string
 	jwtExpiry time.Duration
+	// defaultCooldownHours is the alert cooldown a new user starts with
+	// (ALERT_COOLDOWN_HOURS, #75); users change it on their Profile.
+	defaultCooldownHours int
 }
+
+// defaultAlertCooldownHours matches the users.alert_cooldown_hours column
+// default.
+const defaultAlertCooldownHours = 4
 
 // NewService builds an auth Service backed by db, signing tokens with
 // jwtSecret and expiring them after jwtExpiryHours.
@@ -169,7 +176,15 @@ func NewService(db *sql.DB, jwtSecret string, jwtExpiryHours int) *Service {
 		db:        db,
 		jwtSecret: jwtSecret,
 		jwtExpiry: time.Duration(jwtExpiryHours) * time.Hour,
+
+		defaultCooldownHours: defaultAlertCooldownHours,
 	}
+}
+
+// SetDefaultAlertCooldownHours sets the alert cooldown new accounts start
+// with (ALERT_COOLDOWN_HOURS, validated by config as 0 or more).
+func (s *Service) SetDefaultAlertCooldownHours(hours int) {
+	s.defaultCooldownHours = hours
 }
 
 // Register validates email/password, creates a new user with a
@@ -203,8 +218,8 @@ func (s *Service) Register(ctx context.Context, email, password string) error {
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO users (email, password_hash) VALUES (?, ?)`,
-		email, string(hash),
+		`INSERT INTO users (email, password_hash, alert_cooldown_hours) VALUES (?, ?, ?)`,
+		email, string(hash), s.defaultCooldownHours,
 	)
 	if err != nil {
 		if isDuplicateEntry(err) {

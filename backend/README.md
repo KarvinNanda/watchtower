@@ -137,7 +137,7 @@ Numbers and booleans are parsed strictly: an invalid value stops the API and sch
 | `SENTINEL_SCHEDULER_INTERVAL_HOURS` | No | `6` | How often the sentinel pipeline runs |
 | `MAX_UNIQUE_SYMBOLS` | No | `100` | Cap on distinct asset symbols with an active rule, counted across **all users** because they share the instance's price-data quota. A new rule on an untracked symbol is refused at the cap; if the cap is lowered below what is already tracked, the scheduler checks the symbols whose rules are oldest and logs the skipped ones |
 | `ALERT_PRICE_MOVE_PCT` | No | `3` | Price move (%) since the last alert that lets a repeat alert through an active cooldown |
-| `ALERT_COOLDOWN_HOURS` | No | `4` | Read but currently unused (#75): each user's cooldown comes from their Profile (default 4 hours) |
+| `ALERT_COOLDOWN_HOURS` | No | `4` | Alert cooldown a new account starts with; each user changes their own on the Profile page. Must be 0 or more |
 
 ## Database
 
@@ -175,7 +175,7 @@ make sca             # govulncheck
 - SQL-injection pattern guard on query and path parameters as defense in depth; every query is parameterized
 - Symbol whitelist (41 symbols) checked before any market-data API is called
 - Users only ever see market data for symbols they have rules for
-- Secrets (bot tokens, API keys) are read from the environment only. The CoinGecko key travels in a header, never in a URL. The Twelve Data key is still sent as a URL query parameter, so a network error can print it in the scheduler log; moving it to a header is #74
+- Secrets (bot tokens, API keys) are read from the environment only and sent in request headers, never in a URL, so a logged network error cannot contain them
 - CI runs `govulncheck` and `gosec` on every pull request
 
 ## Testing
