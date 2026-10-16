@@ -21,8 +21,9 @@ const (
 // report (#7). It is a fact about the price, never advice.
 type Distance struct {
 	Kind      DistanceKind
-	Level     float64 // price_level: in the rule's currency; trailing_stop: the stop in USD
+	Level     float64 // price_level: in the rule's currency; trailing_stop: the stop (rupiah for gold)
 	PeakUSD   float64 // trailing_stop only
+	PeakIDR   float64 // trailing_stop on gold (#58)
 	Pct       float64 // (level - price) / price * 100
 	Passed    bool
 	Near      bool
@@ -44,6 +45,19 @@ func DistanceTo(r Rule, m Market) Distance {
 		}
 		return levelDistance(level, r.Direction, price)
 	case TypeTrailingStop:
+		if r.Currency == CurrencyIDR {
+			// Gold is tracked in rupiah (#58).
+			if r.State.PeakPriceIDR == nil {
+				return Distance{Kind: DistanceWaitingPeak}
+			}
+			if m.PriceIDR == nil || !(*m.PriceIDR > 0) {
+				return Distance{Kind: DistanceUnavailable}
+			}
+			peak := *r.State.PeakPriceIDR
+			d := levelDistance(peak*(1-r.Pct/100), DirectionBelow, *m.PriceIDR)
+			d.PeakIDR = peak
+			return d
+		}
 		if r.State.PeakPriceUSD == nil {
 			return Distance{Kind: DistanceWaitingPeak}
 		}
