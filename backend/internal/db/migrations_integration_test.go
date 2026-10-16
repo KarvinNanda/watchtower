@@ -105,6 +105,9 @@ func TestMigrations_LegacyDataUpgradeAndRollback(t *testing.T) {
 	// #40: existing rules become USD rules; no IDR level is invented.
 	assert.Equal(t, 9, count(t, db, `SELECT COUNT(*) FROM asset_rules WHERE level_currency = 'USD' AND level_idr IS NULL`))
 	assert.Equal(t, 1, count(t, db, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'asset_rules' AND column_name = 'level_idr' AND numeric_precision = 24 AND numeric_scale = 8`))
+	// #58: rupiah peak and fired price for gold trailing stops; none invented.
+	assert.Equal(t, 9, count(t, db, `SELECT COUNT(*) FROM asset_rules WHERE peak_price_idr IS NULL AND triggered_price_idr IS NULL`))
+	assert.Equal(t, 2, count(t, db, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'asset_rules' AND column_name IN ('peak_price_idr', 'triggered_price_idr') AND numeric_precision = 24 AND numeric_scale = 8`))
 
 	// Roll back to version 9 with a NULL change present, then upgrade again
 	// from the untouched legacy tables.
