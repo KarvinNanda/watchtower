@@ -10,7 +10,7 @@ const NearPct = 3
 type DistanceKind string
 
 const (
-	DistanceNone        DistanceKind = "none"         // week52_break: no distance
+	DistanceNone        DistanceKind = "none"         // no distance (e.g. a 52-week rule not evaluated yet)
 	DistanceLevel       DistanceKind = "level"        // Level, Pct, Passed, Near (+ PeakUSD for trailing)
 	DistanceChange24h   DistanceKind = "change24h"    // Current, Threshold
 	DistanceUnavailable DistanceKind = "unavailable"  // the price in the rule's currency is unknown
@@ -56,6 +56,15 @@ func DistanceTo(r Rule, m Market) Distance {
 		return d
 	case TypePctChange24h:
 		return Distance{Kind: DistanceChange24h, Current: m.ChangePct24h, Threshold: r.Pct}
+	case TypeWeek52Break:
+		// The engine compares the price with the extreme stored at the
+		// previous evaluation (#52); before that there is nothing to measure.
+		ref := r.State.Week52RefUSD
+		if ref == nil || !(*ref > 0) || !(m.PriceUSD > 0) ||
+			(r.Direction != DirectionAbove && r.Direction != DirectionBelow) {
+			return Distance{Kind: DistanceNone}
+		}
+		return levelDistance(*ref, r.Direction, m.PriceUSD)
 	}
 	return Distance{Kind: DistanceNone}
 }
