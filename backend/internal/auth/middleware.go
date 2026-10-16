@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -35,6 +36,26 @@ func AuthMiddleware(svc *Service) gin.HandlerFunc {
 				"success": false,
 				"error":   "unauthorized",
 				"message": err.Error(),
+			})
+			return
+		}
+
+		// The token must still match the account: a password change (or a
+		// deactivated account) ends every older session.
+		if err := svc.checkSession(c.Request.Context(), claims); err != nil {
+			if errors.Is(err, ErrSessionRevoked) {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"error":   "unauthorized",
+					"message": err.Error(),
+				})
+				return
+			}
+			log.Printf("[ERROR] AuthMiddleware: %v", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   "internal_error",
+				"message": "an unexpected error occurred",
 			})
 			return
 		}

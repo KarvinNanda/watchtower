@@ -156,7 +156,17 @@
     "expertise_beginner": "Pemula",
     "expertise_intermediate": "Menengah",
     "expertise_advanced": "Mahir",
-    "save_success": "Profil berhasil disimpan"
+    "save_success": "Profil berhasil disimpan",
+    "password_section": "Ganti password",
+    "password_current": "Password saat ini",
+    "password_new": "Password baru",
+    "password_confirm": "Konfirmasi password baru",
+    "password_change": "Ganti password",
+    "password_changed": "Password sudah diganti. Kamu sudah dikeluarkan dari semua perangkat lain.",
+    "password_wrong": "Password saat ini salah.",
+    "password_same": "Password baru harus berbeda dari password saat ini.",
+    "password_too_many": "Terlalu banyak percobaan. Tunggu satu menit lalu coba lagi.",
+    "password_failed": "Password tidak bisa diganti. Coba lagi."
   },
   "telegram": {
     "title": "Setup Telegram",

@@ -134,3 +134,15 @@ describe('shared symbol limit text (#56)', () => {
     expect(messages.asset.rules.error_limit_reached).toContain('MAX_UNIQUE_SYMBOLS')
   })
 })
+
+describe('change password texts', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s has every key', (_, messages) => {
+    for (const key of ['password_section', 'password_current', 'password_new', 'password_confirm', 'password_change',
+      'password_changed', 'password_wrong', 'password_same', 'password_too_many', 'password_failed']) {
+      expect(messages.profile[key], key).toBeTruthy()
+    }
+  })
+})

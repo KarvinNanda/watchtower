@@ -76,6 +76,9 @@ var (
 	ErrUserNotFound       = errors.New("user not found")
 	ErrInvalidBotType     = errors.New(`bot type must be "asset" or "sentinel"`)
 	ErrInvalidToken       = errors.New("invalid or expired token")
+	ErrWrongPassword      = errors.New("current password is incorrect")
+	ErrSamePassword       = errors.New("new password must differ from the current one")
+	ErrSessionRevoked     = errors.New("session ended: the password was changed or the account is inactive")
 )
 
 // dummyBcryptHash is compared against on a login attempt for an email that
@@ -137,6 +140,7 @@ type User struct {
 	ID                     uint64
 	Email                  string
 	PasswordHash           string
+	TokenVersion           uint32 // bumped by a password change; older tokens stop working
 	TelegramAssetChatID    *int64
 	TelegramSentinelChatID *int64
 	AlertCooldownHours     int
@@ -151,6 +155,10 @@ type Claims struct {
 	UserID            uint64 `json:"user_id"`
 	Email             string `json:"email"`
 	PreferredLanguage string `json:"preferred_language"`
+	// TokenVersion must match users.token_version (checked by
+	// AuthMiddleware); a password change bumps it. Tokens issued before the
+	// field existed carry 0, the column default.
+	TokenVersion uint32 `json:"tv,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -196,12 +204,8 @@ func (s *Service) Register(ctx context.Context, email, password string) error {
 	if !emailPattern.MatchString(email) {
 		return ErrInvalidEmail
 	}
-	if len(password) < minPasswordLength {
-		return ErrPasswordTooShort
-	}
-	if !passwordHasUpper.MatchString(password) || !passwordHasLower.MatchString(password) ||
-		!passwordHasDigit.MatchString(password) || !passwordHasSpecial.MatchString(password) {
-		return ErrPasswordTooWeak
+	if err := checkPasswordStrength(password); err != nil {
+		return err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
@@ -336,6 +340,7 @@ func (s *Service) generateToken(u *User) (string, error) {
 		UserID:            u.ID,
 		Email:             u.Email,
 		PreferredLanguage: u.PreferredLanguage,
+		TokenVersion:      u.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.jwtExpiry)),
@@ -425,7 +430,7 @@ func (s *Service) UpdateTelegramChatID(ctx context.Context, userID uint64, botTy
 }
 
 const selectUserColumns = `
-	SELECT id, email, password_hash, telegram_asset_chat_id, telegram_sentinel_chat_id,
+	SELECT id, email, password_hash, token_version, telegram_asset_chat_id, telegram_sentinel_chat_id,
 	       alert_cooldown_hours, preferred_language, is_active, created_at, updated_at
 	FROM users`
 
@@ -437,7 +442,7 @@ func scanUser(row *sql.Row) (*User, error) {
 	)
 
 	err := row.Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &telegramAssetChatID, &telegramSentinelChatID,
+		&u.ID, &u.Email, &u.PasswordHash, &u.TokenVersion, &telegramAssetChatID, &telegramSentinelChatID,
 		&u.AlertCooldownHours, &u.PreferredLanguage, &u.IsActive, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
@@ -483,4 +488,84 @@ func HashPassword(password string) (string, error) {
 // ComparePassword reports whether password matches the given bcrypt hash.
 func ComparePassword(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+}
+
+// checkPasswordStrength applies the registration rules to a new password.
+func checkPasswordStrength(password string) error {
+	if len(password) < minPasswordLength {
+		return ErrPasswordTooShort
+	}
+	if !passwordHasUpper.MatchString(password) || !passwordHasLower.MatchString(password) ||
+		!passwordHasDigit.MatchString(password) || !passwordHasSpecial.MatchString(password) {
+		return ErrPasswordTooWeak
+	}
+	return nil
+}
+
+// ChangePassword replaces userID's password after checking the current one,
+// bumps the token version so every other session stops working, and signs
+// this session in again with a token for the new version.
+func (s *Service) ChangePassword(c *gin.Context, userID uint64, current, next string, secure bool) error {
+	ctx := c.Request.Context()
+	u, err := s.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("load user: %w", err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(current)) != nil {
+		return ErrWrongPassword
+	}
+	if err := checkPasswordStrength(next); err != nil {
+		return err
+	}
+	if next == current {
+		return ErrSamePassword
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(next), bcryptCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	// The version guard makes two concurrent changes fail instead of both
+	// issuing a token for the same version.
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ? AND token_version = ?`,
+		string(hash), userID, u.TokenVersion)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if n != 1 {
+		return errors.New("update password: changed concurrently, try again")
+	}
+
+	u.TokenVersion++
+	token, err := s.generateToken(u)
+	if err != nil {
+		return fmt.Errorf("generate token: %w", err)
+	}
+	s.setAuthCookie(c, token, secure)
+	log.Printf("[INFO] ChangePassword: user %d changed their password; other sessions ended", userID)
+	return nil
+}
+
+// checkSession reports whether claims still belong to an active user whose
+// token version matches, i.e. the password was not changed since the token
+// was issued.
+func (s *Service) checkSession(ctx context.Context, claims *Claims) error {
+	var version uint32
+	err := s.db.QueryRowContext(ctx,
+		`SELECT token_version FROM users WHERE id = ? AND is_active = TRUE`, claims.UserID).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSessionRevoked
+	}
+	if err != nil {
+		return fmt.Errorf("check session: %w", err)
+	}
+	if version != claims.TokenVersion {
+		return ErrSessionRevoked
+	}
+	return nil
 }

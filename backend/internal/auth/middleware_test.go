@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,9 +95,14 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	require.Contains(t, cookies, "watchtower_token")
 	token := cookies["watchtower_token"].Value
 
+	mock.ExpectQuery(`SELECT token_version FROM users WHERE id = \? AND is_active = TRUE`).
+		WithArgs(uint64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"token_version"}).AddRow(0))
+
 	r := newProtectedRouter(svc)
 	rec := doRequest(r, token)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "user:9", rec.Body.String())
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

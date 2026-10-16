@@ -23,3 +23,8 @@ export function getProfile() {
 export function updateProfile(payload) {
   return api.put('/user/profile', payload)
 }
+
+// changePassword ends every other session; this one gets a fresh cookie.
+export function changePassword(currentPassword, newPassword) {
+  return api.put('/auth/password', { current_password: currentPassword, new_password: newPassword })
+}
