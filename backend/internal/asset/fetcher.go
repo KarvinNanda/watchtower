@@ -25,8 +25,7 @@ const (
 	defaultCoinGeckoBaseURL = "https://api.coingecko.com/api/v3"
 	hargaEmasURL            = "https://harga-emas.org/"
 
-	cryptoRateLimitDelay = 1 * time.Second
-	stockRateLimitRetry  = 60 * time.Second
+	stockRateLimitRetry = 60 * time.Second
 
 	stockDailyCallWarningThreshold = 800
 )
@@ -69,6 +68,7 @@ type AssetFetcher struct {
 	twelveDataKey string
 	httpClient    *http.Client
 	stockPacer    *pacer
+	cryptoPacer   *pacer
 }
 
 // NewAssetFetcher builds an AssetFetcher using twelveDataKey for Twelve
@@ -79,6 +79,7 @@ func NewAssetFetcher(twelveDataKey string) *AssetFetcher {
 		twelveDataKey: twelveDataKey,
 		httpClient:    utils.NewHTTPClient(),
 		stockPacer:    newPacer(twelveDataMinGap),
+		cryptoPacer:   newPacer(coinGeckoMinGap),
 	}
 }
 
@@ -105,10 +106,10 @@ func coinGeckoID(symbol string) string {
 }
 
 // FetchCrypto retrieves the latest quote for a crypto ticker (e.g. "BTC")
-// via CoinGecko's /coins/markets endpoint. It sleeps briefly beforehand to
-// stay within CoinGecko's free-tier rate limit of roughly 1 request/second.
+// via CoinGecko's /coins/markets endpoint, paced with every other CoinGecko
+// call (coinGeckoMinGap).
 func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
-	time.Sleep(cryptoRateLimitDelay)
+	f.cryptoPacer.wait()
 
 	coinID := coinGeckoID(symbol)
 	endpoint := fmt.Sprintf("%s/coins/markets?vs_currency=usd&ids=%s", CoinGeckoBaseURL, url.QueryEscape(coinID))
@@ -471,7 +472,7 @@ func (f *AssetFetcher) FetchCryptoWeek52(symbol string) (high, low float64, err 
 	if t, ok := SymbolAssetType(symbol); !ok || t != "crypto" {
 		return 0, 0, fmt.Errorf("asset: unsupported crypto symbol: %s", symbol)
 	}
-	time.Sleep(cryptoRateLimitDelay)
+	f.cryptoPacer.wait()
 
 	endpoint := fmt.Sprintf("%s/coins/%s/market_chart?vs_currency=usd&days=365",
 		CoinGeckoBaseURL, url.PathEscape(coinGeckoID(symbol)))
