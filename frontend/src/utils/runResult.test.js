@@ -92,3 +92,17 @@ describe('asset_report results', () => {
     expect(runOk({ status: 'failed', type: 'asset', reason: 'x' })).toBe(false)
   })
 })
+
+describe('IDR rules waiting for a rate (#61)', () => {
+  it('adds the waiting sentence to a Check now summary', () => {
+    expect(runResultText({ status: 'done', type: 'asset', summary: { sent: 0, stale: 0, idr_waiting: 2 } }, t)).toBe(
+      'run.asset_summary|{"sent":0,"stale":0,"idr_waiting":2} run.idr_waiting|{"idr_waiting":2}',
+    )
+  })
+
+  it('says nothing when no IDR rule waits', () => {
+    expect(runResultText({ status: 'done', type: 'asset', summary: { sent: 0, idr_waiting: 0 } }, t)).toBe(
+      'run.asset_summary|{"sent":0,"idr_waiting":0}',
+    )
+  })
+})

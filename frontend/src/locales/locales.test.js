@@ -106,3 +106,12 @@ describe('rate-limit text fits both run buttons (#7)', () => {
     expect(messages.run.error_too_many).not.toMatch(word)
   })
 })
+
+describe('IDR waiting text (#61)', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s explains waiting IDR rules', (_, messages) => {
+    expect(messages.run.idr_waiting).toContain('{idr_waiting}')
+  })
+})

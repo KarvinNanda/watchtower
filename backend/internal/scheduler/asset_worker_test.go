@@ -422,6 +422,7 @@ func TestProcessSymbol_IDRRuleUsesCachedIDRPrice(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.triggered)
+	assert.Zero(t, res.idrWaiting)
 	require.Len(t, batches[1].Alerts, 1)
 	assert.Equal(t, rules.CurrencyIDR, batches[1].Alerts[0].Trigger.Currency)
 }
@@ -439,6 +440,7 @@ func TestProcessSymbol_IDRRuleSkippedWithoutIDRPrice(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Zero(t, res.triggered)
+	assert.Equal(t, 1, res.idrWaiting, "#61: the waiting IDR rule is counted")
 	assert.Empty(t, batches)
 	assert.NoError(t, mock.ExpectationsWereMet(), "a skip writes no state")
 }

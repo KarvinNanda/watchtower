@@ -47,6 +47,7 @@ func (e *RunExecutor) Execute(ctx context.Context, run *runs.Run) (map[string]in
 			"sent":          res.Sent,
 			"errors":        res.Errors,
 			"stale":         res.Stale,
+			"idr_waiting":   res.IDRWaiting,
 		}, nil
 
 	case runs.TypeAssetReport:

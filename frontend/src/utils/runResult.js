@@ -17,6 +17,8 @@ export function runResultText(result, t) {
     }
     // Some prices could not be refreshed and the run used cached ones (#20).
     if (summary.stale > 0) text += ' ' + t('run.stale_prices', { stale: summary.stale })
+    // IDR price levels skipped because no real USD/IDR rate was known (#61).
+    if (summary.idr_waiting > 0) text += ' ' + t('run.idr_waiting', { idr_waiting: summary.idr_waiting })
     return text
   }
   if (result.status === 'failed') {

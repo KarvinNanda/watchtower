@@ -232,6 +232,7 @@
     "asset_report_summary": "Laporan terkirim ke Telegram: {symbols} simbol, {rules} rule.",
     "asset_report_unavailable": "{errors} simbol tanpa harga (lihat log scheduler).",
     "asset_report_empty": "Tidak ada rule aktif, laporan tidak dikirim.",
-    "asset_report_failed": "Laporan gagal dikirim ke Telegram (lihat log scheduler)."
+    "asset_report_failed": "Laporan gagal dikirim ke Telegram (lihat log scheduler).",
+    "idr_waiting": "{idr_waiting} rule IDR menunggu kurs USD/IDR (lihat log scheduler)."
   }
 }
