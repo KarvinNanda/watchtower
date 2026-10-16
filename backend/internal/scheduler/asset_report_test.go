@@ -52,7 +52,7 @@ func expectReportSymbols(mock sqlmock.Sqlmock, symbols ...[2]string) {
 // of 150 is a crossing that Check now would fire.
 func expectReportRule(mock sqlmock.Sqlmock, symbol string, ruleID int64) {
 	mock.ExpectQuery(`FROM asset_rules r`).WithArgs(symbol, 7).WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(ruleID, int64(7), "price_level", "above", nil, 100.0, nil, int64(1), false, false, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil))
+		AddRow(ruleID, int64(7), "price_level", "above", nil, 100.0, nil, int64(1), false, false, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil))
 }
 
 // Review focus 1: the report never evaluates, so a crossed level stays

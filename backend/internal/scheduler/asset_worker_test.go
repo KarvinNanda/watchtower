@@ -202,8 +202,8 @@ func TestProcessSymbol_CryptoWeek52FailureDoesNotBlockPriceRules(t *testing.T) {
 		week52Err: errors.New("coingecko 429"),
 	}
 	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil).
-		AddRow(int64(2), int64(1), "week52_break", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil))
+		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil).
+		AddRow(int64(2), int64(1), "week52_break", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil))
 	batches := make(map[uint64]*UserAlertBatch)
 
 	res, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto", NeedsWeek52: true}, runScope{}, batches)
@@ -222,7 +222,7 @@ func TestRun_OneFailingSymbolDoesNotBlockOthers(t *testing.T) {
 			AddRow("BRK-B", "stock", int64(0)).
 			AddRow("ETH", "crypto", int64(0)))
 	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("ETH").WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(3), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil))
+		AddRow(int64(3), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil))
 	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?`).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	res, err := w.run(runScope{})
@@ -279,7 +279,7 @@ func TestProcessSymbol_ZeroPriceIsAnError(t *testing.T) {
 	// that would fire every armed trailing stop and "below" level.
 	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 0}}}
 	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(1), int64(1), "trailing_stop", nil, nil, nil, 10.0, int64(1), false, nil, 100.0, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil))
+		AddRow(int64(1), int64(1), "trailing_stop", nil, nil, nil, 10.0, int64(1), false, nil, 100.0, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil))
 	batches := map[uint64]*UserAlertBatch{}
 
 	_, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, runScope{}, batches)
@@ -294,7 +294,7 @@ func TestProcessSymbol_GoldKeepsNativeIDR(t *testing.T) {
 	w, mock, _ := newMockAssetWorker(t, 3)
 	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"ANTAM": {Symbol: "ANTAM", PriceUSD: 140, PriceIDR: 2392157}}}
 	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil))
+		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil))
 	batches := make(map[uint64]*UserAlertBatch)
 
 	_, err := w.processSymbol(SymbolInfo{Symbol: "ANTAM", AssetType: "gold"}, runScope{}, batches)
@@ -348,7 +348,7 @@ func TestDispatchBatches_UsesInstanceTimezone(t *testing.T) {
 
 func btcRuleRows(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(`FROM asset_rules r`).WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil))
+		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil))
 }
 
 func TestProcessSymbol_ManualRunAsksForFreshData(t *testing.T) {
@@ -398,7 +398,7 @@ func TestProcessSymbol_PassesTheHighToTheRules(t *testing.T) {
 	// high raises the peak to 125 and 110 is 12% below it, so it fires.
 	tracked := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(`FROM asset_rules r`).WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(1), int64(1), "trailing_stop", nil, nil, nil, 10.0, int64(1), false, nil, 118.0, tracked, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil))
+		AddRow(int64(1), int64(1), "trailing_stop", nil, nil, nil, 10.0, int64(1), false, nil, 118.0, tracked, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil))
 	mock.ExpectExec(`UPDATE asset_rules SET peak_price_usd = \?`).WillReturnResult(sqlmock.NewResult(0, 1))
 	batches := map[uint64]*UserAlertBatch{}
 
@@ -415,7 +415,7 @@ func TestProcessSymbol_IDRRuleUsesCachedIDRPrice(t *testing.T) {
 	w, mock, _ := newMockAssetWorker(t, 3)
 	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150, PriceIDR: 2400000}}}
 	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(1), int64(1), "price_level", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "IDR", 2000000.0))
+		AddRow(int64(1), int64(1), "price_level", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "IDR", 2000000.0, nil))
 	batches := make(map[uint64]*UserAlertBatch)
 
 	res, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, runScope{}, batches)
@@ -433,7 +433,7 @@ func TestProcessSymbol_IDRRuleSkippedWithoutIDRPrice(t *testing.T) {
 	w, mock, _ := newMockAssetWorker(t, 3)
 	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150, PriceIDR: 0}}}
 	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(ruleColumns).
-		AddRow(int64(1), int64(1), "price_level", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "IDR", 2000000.0))
+		AddRow(int64(1), int64(1), "price_level", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "IDR", 2000000.0, nil))
 	batches := make(map[uint64]*UserAlertBatch)
 
 	res, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, runScope{}, batches)
@@ -463,5 +463,26 @@ func TestGetUniqueActiveSymbols_KeepsOldestAndCutsTheRest(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, "BTC", got[0].Symbol)
 	assert.Equal(t, "AAPL", got[1].Symbol)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// #58: an ANTAM trailing stop fires on its rupiah drop.
+func TestProcessSymbol_GoldTrailingStopUsesRupiah(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"ANTAM": {Symbol: "ANTAM", PriceUSD: 130, PriceIDR: 2340000}}}
+	since := time.Now().Add(-48 * time.Hour)
+	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(ruleColumns).
+		AddRow(int64(1), int64(1), "trailing_stop", nil, nil, nil, 10.0, int64(1), false, nil, nil, since, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, 2600000.0))
+	batches := make(map[uint64]*UserAlertBatch)
+
+	res, err := w.processSymbol(SymbolInfo{Symbol: "ANTAM", AssetType: "gold"}, runScope{}, batches)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.triggered)
+	require.Len(t, batches[1].Alerts, 1)
+	tr := batches[1].Alerts[0].Trigger
+	assert.Equal(t, rules.CurrencyIDR, tr.Currency)
+	assert.Equal(t, 2600000.0, tr.PeakPriceIDR)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

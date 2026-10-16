@@ -29,7 +29,7 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 			r.baseline_pending, r.last_beyond, r.peak_price_usd, r.peak_since, r.week52_ref_usd,
 			r.last_alerted_price_usd, r.cooldown_until,
 			u.telegram_asset_chat_id, u.alert_cooldown_hours, u.preferred_language,
-			r.level_currency, r.level_idr
+			r.level_currency, r.level_idr, r.peak_price_idr
 		FROM asset_rules r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.asset_symbol = ?
@@ -60,14 +60,14 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 			peak, ref, lastAlertedPrice sql.NullFloat64
 			cooldownUntil, peakSince    sql.NullTime
 			levelCurrency               string
-			levelIDR                    sql.NullFloat64
+			levelIDR, peakIDR           sql.NullFloat64
 		)
 		if err := rows.Scan(
 			&row.Rule.ID, &row.UserID, &ruleType, &direction, &intent, &level, &pct, &row.ParamsVersion,
 			&row.Rule.State.BaselinePending, &lastBeyond, &peak, &peakSince, &ref,
 			&lastAlertedPrice, &cooldownUntil,
 			&row.TelegramAssetChatID, &row.AlertCooldownHours, &row.PreferredLanguage,
-			&levelCurrency, &levelIDR,
+			&levelCurrency, &levelIDR, &peakIDR,
 		); err != nil {
 			return nil, fmt.Errorf("scan rule row for %s: %w", symbol, err)
 		}
@@ -83,6 +83,7 @@ func (w *AssetWorker) loadRules(ctx context.Context, symbol string, userID uint6
 			row.Rule.State.LastBeyond = &lastBeyond.Bool
 		}
 		row.Rule.State.PeakPriceUSD = nullFloat(peak)
+		row.Rule.State.PeakPriceIDR = nullFloat(peakIDR)
 		if peakSince.Valid {
 			row.Rule.State.PeakSince = &peakSince.Time
 		}
@@ -122,6 +123,10 @@ func buildPatchUpdate(p rules.Patch) (clauses []string, args []interface{}) {
 		clauses = append(clauses, "peak_since = ?")
 		args = append(args, *p.PeakSince)
 	}
+	if p.PeakPriceIDR != nil {
+		clauses = append(clauses, "peak_price_idr = ?")
+		args = append(args, *p.PeakPriceIDR)
+	}
 	if p.Week52RefUSD != nil {
 		clauses = append(clauses, "week52_ref_usd = ?")
 		args = append(args, *p.Week52RefUSD)
@@ -137,6 +142,10 @@ func buildPatchUpdate(p rules.Patch) (clauses []string, args []interface{}) {
 	if p.Fired != nil {
 		clauses = append(clauses, "is_active = FALSE", "triggered_at = ?", "triggered_price_usd = ?")
 		args = append(args, p.Fired.At, p.Fired.PriceUSD)
+		if p.Fired.PriceIDR > 0 {
+			clauses = append(clauses, "triggered_price_idr = ?")
+			args = append(args, p.Fired.PriceIDR)
+		}
 	}
 	return clauses, args
 }
@@ -165,4 +174,18 @@ func (w *AssetWorker) applyPatch(ctx context.Context, ruleID uint64, paramsVersi
 		log.Printf("[DEBUG] applyPatch: rule %d not updated (edited since load, or unchanged)", ruleID)
 	}
 	return nil
+}
+
+// markGoldTrailing makes every trailing stop on a gold symbol an IDR rule:
+// gold is quoted in rupiah at its source, so its peak and drop are measured
+// there (#58). Other asset types are left alone.
+func markGoldTrailing(rows []ruleRow, assetType string) {
+	if assetType != "gold" {
+		return
+	}
+	for i := range rows {
+		if rows[i].Rule.Type == rules.TypeTrailingStop {
+			rows[i].Rule.Currency = rules.CurrencyIDR
+		}
+	}
 }
