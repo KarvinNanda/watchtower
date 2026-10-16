@@ -164,7 +164,12 @@ var (
 	ErrInvalidAssetSymbol      = errors.New("asset_symbol must be 1-20 uppercase letters, digits, or hyphens")
 	ErrInvalidPriceValue       = errors.New("price and threshold values must be positive and at most 999999999")
 	ErrInvalidTelegramChatID   = errors.New("telegram chat id must be a positive number")
+	ErrInvalidAlertCooldown    = errors.New("alert_cooldown_hours must be between 0 and 168")
 )
+
+// maxAlertCooldownHours is the longest alert cooldown a user can set: one
+// week (#78).
+const maxAlertCooldownHours = 168
 
 var validAssetTypes = map[string]bool{"stock": true, "crypto": true, "gold": true}
 var validExpertiseLevels = map[string]bool{"beginner": true, "intermediate": true, "advanced": true}
@@ -292,6 +297,10 @@ func (s *UserService) UpdateProfile(userID uint64, req UpdateProfileRequest) err
 	}
 	if req.TelegramSentinelChatID != nil && *req.TelegramSentinelChatID <= 0 {
 		return ErrInvalidTelegramChatID
+	}
+	// #78: 0 (no cooldown) to one week; config.maxAlertCooldownHours matches.
+	if req.AlertCooldownHours != nil && (*req.AlertCooldownHours < 0 || *req.AlertCooldownHours > maxAlertCooldownHours) {
+		return ErrInvalidAlertCooldown
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)

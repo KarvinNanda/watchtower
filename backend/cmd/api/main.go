@@ -520,7 +520,8 @@ func respondUserServiceError(c *gin.Context, err error) {
 		errors.Is(err, user.ErrInvalidPreferredLang),
 		errors.Is(err, user.ErrInvalidAssetSymbol),
 		errors.Is(err, user.ErrInvalidPriceValue),
-		errors.Is(err, user.ErrInvalidTelegramChatID):
+		errors.Is(err, user.ErrInvalidTelegramChatID),
+		errors.Is(err, user.ErrInvalidAlertCooldown):
 		respondFail(c, http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, user.ErrDuplicateKeyword),
 		errors.Is(err, user.ErrDuplicateRule),

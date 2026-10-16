@@ -187,7 +187,8 @@ onMounted(async () => {
       <n-card :title="t('profile.preferences_section')" size="small" class="profile-view__card">
         <n-form label-placement="top">
           <n-form-item :label="t('profile.cooldown_hours')">
-            <n-input-number v-model:value="form.cooldownHours" style="width: 100%" :min="1" />
+            <!-- Same range the API accepts: 0 (no cooldown) to one week (#78). -->
+            <n-input-number v-model:value="form.cooldownHours" style="width: 100%" :min="0" :max="168" />
           </n-form-item>
           <n-form-item :label="t('profile.language')">
             <n-select v-model:value="form.preferredLanguage" :options="languageOptions" />

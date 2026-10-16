@@ -13,6 +13,9 @@ import (
 	"github.com/spf13/viper"
 )
 
+// maxAlertCooldownHours is one week, the longest alert cooldown (#78).
+const maxAlertCooldownHours = 168
+
 // defaultTimezone is used when APP_TIMEZONE is unset or empty.
 const defaultTimezone = "Asia/Jakarta"
 
@@ -224,8 +227,9 @@ func Load(envPath string) (*Config, error) {
 	if cfg.JWT.Secret == "" && cfg.Server.Env != "development" {
 		return nil, fmt.Errorf("config: JWT_SECRET is required outside development")
 	}
-	if cfg.Limits.AlertCooldownHours < 0 {
-		return nil, fmt.Errorf("config: ALERT_COOLDOWN_HOURS must be 0 or more, got %d", cfg.Limits.AlertCooldownHours)
+	// Same range users can set on their Profile (user.maxAlertCooldownHours).
+	if cfg.Limits.AlertCooldownHours < 0 || cfg.Limits.AlertCooldownHours > maxAlertCooldownHours {
+		return nil, fmt.Errorf("config: ALERT_COOLDOWN_HOURS must be between 0 and %d, got %d", maxAlertCooldownHours, cfg.Limits.AlertCooldownHours)
 	}
 	if cfg.Limits.TwelveDataManualDailyCredits < 0 {
 		return nil, fmt.Errorf("config: TWELVE_DATA_MANUAL_DAILY_CREDITS must be 0 or more, got %d", cfg.Limits.TwelveDataManualDailyCredits)
