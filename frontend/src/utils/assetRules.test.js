@@ -14,6 +14,8 @@ import {
   setCurrency,
   formatLevel,
   changeAssetType,
+  formatLevelInput,
+  parseLevelInput,
 } from './assetRules'
 
 const t = (key, params) => (params ? `${key}|${JSON.stringify(params)}` : key)
@@ -174,5 +176,56 @@ describe('changeAssetType', () => {
   it('drops week52_break when switching to gold', () => {
     const form = { ...emptyRuleForm(), assetType: 'crypto', ruleType: 'week52_break', direction: 'above' }
     expect(changeAssetType(form, 'gold').ruleType).toBeNull()
+  })
+})
+
+// #60: IDR levels are typed with id-ID grouping so a missing zero shows.
+describe('IDR level input', () => {
+  it('formats with id-ID grouping', () => {
+    expect(formatLevelInput(1460000000)).toBe('1.460.000.000')
+    expect(formatLevelInput(1350000)).toBe('1.350.000')
+    expect(formatLevelInput(0.0001)).toBe('0,0001')
+    expect(formatLevelInput(null)).toBe('')
+  })
+
+  it('parses grouped and plain input back to a number', () => {
+    expect(parseLevelInput('1.460.000.000')).toBe(1460000000)
+    expect(parseLevelInput('1460000000')).toBe(1460000000)
+    expect(parseLevelInput(' 2.350.000 ')).toBe(2350000)
+    expect(parseLevelInput('0,0001')).toBe(0.0001)
+  })
+
+  it('empty input is no value', () => {
+    expect(parseLevelInput('')).toBeNull()
+    expect(parseLevelInput('   ')).toBeNull()
+  })
+
+  // A "." that does not group thousands is a dot decimal (USD habit, a
+  // spreadsheet paste). Dropping it would save the level 100 times too big,
+  // so it is rejected: NaN makes Naive keep the previous value.
+  it('rejects a dot decimal instead of saving it 100x too big', () => {
+    expect(parseLevelInput('2350000.50')).toBeNaN()
+    expect(parseLevelInput('1460000000.00')).toBeNaN()
+    expect(parseLevelInput('1.5')).toBeNaN()
+    expect(parseLevelInput('1,460,000,000')).toBeNaN()
+    expect(parseLevelInput('abc')).toBeNaN()
+    expect(parseLevelInput('-5')).toBeNaN()
+  })
+
+  it('reads the app\'s own Rp text and a comma decimal after grouping', () => {
+    expect(parseLevelInput('Rp 2.350.000')).toBe(2350000)
+    expect(parseLevelInput('Rp\u00a02.350.000')).toBe(2350000)
+    expect(parseLevelInput('1.460.000.000,00')).toBe(1460000000)
+    expect(parseLevelInput('2.350.000,5')).toBe(2350000.5)
+  })
+
+  it('rounds to the 4 decimals the input shows', () => {
+    expect(parseLevelInput('0,00005')).toBe(0.0001)
+    expect(parseLevelInput('2350000,12345')).toBe(2350000.1235)
+    expect(formatLevelInput(parseLevelInput('2350000,12345'))).toBe('2.350.000,1235')
+  })
+
+  it('round-trips', () => {
+    for (const v of [1, 999999999999, 2350000, 0.5]) expect(parseLevelInput(formatLevelInput(v))).toBe(v)
   })
 })

@@ -137,14 +137,18 @@ type AssetRunResult struct {
 	// Stale counts symbols evaluated on cached data because a manual
 	// refresh was refused or failed.
 	Stale int
+	// IDRWaiting counts IDR price levels skipped because the fetch had no
+	// real IDR price (#41, #61).
+	IDRWaiting int
 }
 
 // symbolResult is processSymbol's per-symbol tally. dataErrors counts
 // optional data that could not be fetched (crypto 52-week range) while the
 // symbol's other rules were still evaluated. stale counts a symbol
-// evaluated on cached data (manual runs only).
+// evaluated on cached data (manual runs only). idrWaiting counts IDR price
+// levels that wait for a real USD/IDR rate.
 type symbolResult struct {
-	checked, triggered, dataErrors, stale int
+	checked, triggered, dataErrors, stale, idrWaiting int
 }
 
 // Run is the periodic entry point: every active rule, cooldowns respected.
@@ -203,15 +207,16 @@ func (w *AssetWorker) run(scope runScope) (result AssetRunResult, err error) {
 		result.Triggered += res.triggered
 		result.Errors += res.dataErrors
 		result.Stale += res.stale
+		result.IDRWaiting += res.idrWaiting
 	}
 
 	alertsSent, usersNotified := w.dispatchBatches(batches)
 	result.Sent = alertsSent
 
 	log.Printf("[INFO] AssetWorker.run: completed in %s (user=%d) — symbols: %d, rules checked: %d, "+
-		"triggered: %d, users notified: %d, alerts sent: %d, errors: %d, stale: %d",
+		"triggered: %d, users notified: %d, alerts sent: %d, errors: %d, stale: %d, idr waiting: %d",
 		time.Since(start), scope.userID, len(symbols), result.RulesChecked, result.Triggered,
-		usersNotified, result.Sent, result.Errors, result.Stale)
+		usersNotified, result.Sent, result.Errors, result.Stale, result.IDRWaiting)
 
 	return result, nil
 }
@@ -295,6 +300,25 @@ func nativeIDRFor(assetType string, d *cache.MarketData) float64 {
 	return 0
 }
 
+// countIDRWaiting counts the IDR price levels the engine will skip because
+// the fetch had no real IDR price (#41), and says so in the log once per
+// symbol (#61), so a missing rate is not silent.
+func countIDRWaiting(symbol string, rows []ruleRow, market rules.Market) int {
+	if market.PriceIDR != nil {
+		return 0
+	}
+	var ids []uint64
+	for _, row := range rows {
+		if row.Rule.Type == rules.TypePriceLevel && row.Rule.Currency == rules.CurrencyIDR {
+			ids = append(ids, row.Rule.ID)
+		}
+	}
+	if len(ids) > 0 {
+		log.Printf("[WARN] processSymbol: %s has no real IDR price; IDR rules %v wait for a USD/IDR rate", symbol, ids)
+	}
+	return len(ids)
+}
+
 // processSymbol fetches market data for symbol via the cache layer, loads
 // its active rules, and evaluates each one — appending fired alerts to the
 // owner's UserAlertBatch instead of sending anything directly.
@@ -331,6 +355,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 		res.stale = 1
 	}
 	market := marketFromData(marketData)
+	res.idrWaiting = countIDRWaiting(symbol.Symbol, rows, market)
 	if symbol.NeedsWeek52 && symbol.AssetType == "crypto" {
 		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
 		if wErr != nil {

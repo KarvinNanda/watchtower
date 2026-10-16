@@ -232,6 +232,7 @@
     "asset_report_summary": "Report sent to Telegram: {symbols} symbol(s), {rules} rule(s).",
     "asset_report_unavailable": "{errors} symbol(s) without a price (see scheduler logs).",
     "asset_report_empty": "No active rules, so no report was sent.",
-    "asset_report_failed": "The report could not be sent to Telegram (see scheduler logs)."
+    "asset_report_failed": "The report could not be sent to Telegram (see scheduler logs).",
+    "idr_waiting": "{idr_waiting} IDR rule(s) are waiting for a USD/IDR rate (see scheduler logs)."
   }
 }

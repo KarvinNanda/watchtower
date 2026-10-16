@@ -69,6 +69,13 @@ func TestAssetMessages_Golden(t *testing.T) {
 			ChangePct: f64(-2.5), Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: 5, PeakPriceUSD: 1300}})
 	}
 
+	// #63: one symbol with more fired rules than fit in one message.
+	var oversized []AssetAlert
+	for i := 0; i < 60; i++ {
+		oversized = append(oversized, AssetAlert{RuleID: uint64(i + 1), Symbol: "BTC", PriceUSD: 81714, ChangePct: f64(1.2),
+			Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: float64(i%9 + 1), PeakPriceUSD: 90000}})
+	}
+
 	idrLevels := []AssetAlert{
 		{RuleID: 1, Symbol: "ANTAM", PriceUSD: 130.9, NativeIDR: 2344000, ChangePct: f64(-0.3), Trigger: rules.Trigger{
 			Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentBuyTarget, Currency: rules.CurrencyIDR, LevelIDR: 2350000}},
@@ -94,6 +101,7 @@ func TestAssetMessages_Golden(t *testing.T) {
 		{"asset_id_many_symbols", "id", testRate, many},
 		{"asset_id_split", "id", testRate, split},
 		{"asset_en_split", "en", testRate, split},
+		{"asset_id_oversized_symbol", "id", testRate, oversized},
 		{"asset_id_idr_levels", "id", testRate, idrLevels},
 		{"asset_en_idr_levels", "en", testRate, idrLevels},
 		{"asset_id_idr_rate_unavailable", "id", Rate{}, idrLevels},
