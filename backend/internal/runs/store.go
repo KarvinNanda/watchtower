@@ -162,6 +162,14 @@ func (s *Store) Get(ctx context.Context, id string, userID uint64) (*Run, error)
 	if timedOut(run, s.now()) {
 		run.Status = StatusFailed
 		run.Error = "timed out"
+	} else if run.Status == StatusRunning {
+		// A running run cannot finish without a live scheduler, so do not
+		// make the user wait out the 30 min running budget (#50). A Redis
+		// error leaves the status as is.
+		if alive, err := s.SchedulerAlive(ctx); err == nil && !alive {
+			run.Status = StatusFailed
+			run.Error = failedRunMessage
+		}
 	}
 	return run, nil
 }

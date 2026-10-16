@@ -245,15 +245,20 @@ type strictReader struct {
 	errs []string
 }
 
-func (r *strictReader) raw(key string) string { return strings.TrimSpace(r.v.GetString(key)) }
+// raw returns the trimmed value and whether it was set at all. A value of
+// only spaces is set (viper returns it), so it is parsed and fails.
+func (r *strictReader) raw(key string) (string, bool) {
+	v := r.v.GetString(key)
+	return strings.TrimSpace(v), v != ""
+}
 
 func (r *strictReader) fail(key, want, got string) {
 	r.errs = append(r.errs, fmt.Sprintf("%s must be %s, got %q", envBindings[key], want, got))
 }
 
 func (r *strictReader) intVal(key string) int {
-	s := r.raw(key)
-	if s == "" {
+	s, set := r.raw(key)
+	if !set {
 		return 0
 	}
 	n, err := strconv.Atoi(s)
@@ -264,8 +269,8 @@ func (r *strictReader) intVal(key string) int {
 }
 
 func (r *strictReader) floatVal(key string) float64 {
-	s := r.raw(key)
-	if s == "" {
+	s, set := r.raw(key)
+	if !set {
 		return 0
 	}
 	f, err := strconv.ParseFloat(s, 64)
@@ -276,8 +281,8 @@ func (r *strictReader) floatVal(key string) float64 {
 }
 
 func (r *strictReader) boolVal(key string) bool {
-	s := r.raw(key)
-	if s == "" {
+	s, set := r.raw(key)
+	if !set {
 		return false
 	}
 	b, err := strconv.ParseBool(s)

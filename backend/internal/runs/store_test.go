@@ -136,6 +136,7 @@ func TestGet_RunningRunIsTimedFromItsStart(t *testing.T) {
 
 	*clock = storeNow.Add(14 * time.Minute)
 	require.NoError(t, s.MarkRunning(ctx, created.ID))
+	require.NoError(t, s.Heartbeat(ctx))
 
 	*clock = storeNow.Add(20 * time.Minute)
 	got, err := s.Get(ctx, created.ID, 7)
@@ -147,6 +148,24 @@ func TestGet_RunningRunIsTimedFromItsStart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StatusFailed, got.Status)
 	assert.Equal(t, "timed out", got.Error)
+}
+
+// Review of #50: with the 30 min running budget, a scheduler that died
+// mid-run would leave the spinner for 30 min. No heartbeat means the run
+// cannot finish, so it is reported failed at once.
+func TestGet_RunningRunWithDeadSchedulerFails(t *testing.T) {
+	s, _, clock := newTestStore(t)
+	ctx := context.Background()
+	created, err := s.Enqueue(ctx, 7, TypeAsset)
+	require.NoError(t, err)
+	require.NoError(t, s.MarkRunning(ctx, created.ID))
+	*clock = storeNow.Add(2 * time.Minute)
+
+	got, err := s.Get(ctx, created.ID, 7)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, got.Status)
+	assert.Equal(t, failedRunMessage, got.Error)
 }
 
 func TestRunningTimeoutCoversTheLongestPeriodicRun(t *testing.T) {

@@ -150,3 +150,16 @@ func TestLoad_NumericSettingsWithSpacesAreRead(t *testing.T) {
 	assert.Equal(t, 2.5, cfg.Limits.AlertPriceMovePct)
 	assert.True(t, cfg.Server.CookieSecure)
 }
+
+// Review of #50: a value of only spaces is not "unset"; viper returns it, so
+// it must fail like any other non-number instead of silently becoming 0.
+func TestLoad_WhitespaceOnlySettingFails(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("MAX_UNIQUE_SYMBOLS", "   ")
+
+	_, err := Load("does-not-exist.env")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MAX_UNIQUE_SYMBOLS")
+}
