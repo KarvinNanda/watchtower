@@ -166,7 +166,8 @@
     "password_wrong": "The current password is incorrect.",
     "password_same": "The new password must be different from the current one.",
     "password_too_many": "Too many attempts. Wait a minute and try again.",
-    "password_failed": "The password could not be changed. Try again."
+    "password_failed": "The password could not be changed. Try again.",
+    "chat_id_hint": "Private chat: a positive number. Group: a negative number, for example -1001234567890."
   },
   "telegram": {
     "title": "Telegram Setup",
@@ -189,7 +190,10 @@
     "verified_asset": "Asset Bot Chat ID is connected",
     "verified_sentinel": "Sentinel Bot Chat ID is connected",
     "not_verified_asset": "Asset Bot Chat ID is not set yet",
-    "not_verified_sentinel": "Sentinel Bot Chat ID is not set yet"
+    "not_verified_sentinel": "Sentinel Bot Chat ID is not set yet",
+    "chat_types_title": "Private chat or group",
+    "private_note": "Private chat: your Chat ID is the same on both bots (it is your Telegram user ID). You still need to press Start on both bots, or a bot cannot message you.",
+    "group_note": "Group: add the bot to the group, then in the group pick /start for that bot from the command menu. The bot replies with the group's Chat ID, a negative number. Paste it into Profile. Each bot needs its own /start in the group."
   },
   "notifications": {
     "title": "Notifications",

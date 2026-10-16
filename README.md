@@ -6,7 +6,7 @@ You clone it, run one setup script, and the whole thing (database, API, web app,
 
 ## What it does
 
-- **Asset alerts.** Rules per symbol (20 crypto, 20 US stocks, ANTAM gold): a price level above/below, in USD or in rupiah, optionally labelled buy target, take profit or stop loss; a 24h % change; a trailing stop; and a 52-week high/low break. Each card in the web app shows every rule's level and how far the price is from it. A cooldown keeps the same alert from repeating every check.
+- **Asset alerts.** Rules per symbol (20 crypto, 20 US stocks plus the SPY S&P 500 ETF, ANTAM gold): a price level above/below, in USD or in rupiah, optionally labelled buy target, take profit or stop loss; a 24h % change; a trailing stop; and a 52-week high/low break. Each card in the web app shows every rule's level and how far the price is from it. A cooldown keeps the same alert from repeating every check.
 - **Status report.** A button sends one Telegram message with every symbol you track, its price and the distance to each rule, even when nothing triggered.
 - **Sentinel.** Polls NVD, CISA KEV, GitHub Security Advisories, BleepingComputer, The Hacker News, Exploit-DB and GitHub. Items matching your keywords arrive with CVSS severity, an "actively exploited" flag for CISA KEV entries, and CISA's required action.
 - **Check now.** A button on the web app runs your checks immediately instead of waiting for the schedule.
@@ -69,6 +69,10 @@ If a token leaks, send `/revoke` to @BotFather, pick the bot, and put the new to
 3. Press **Start** or send `/start`. The bot replies with "Chat ID kamu: `123456789`".
 4. Copy that number into **Asset Bot Chat ID** on the **Profile** page and save.
 5. Repeat with the sentinel bot for **Sentinel Bot Chat ID**. The Telegram Setup page shows both as connected once they are saved.
+
+In a private chat the chat ID is your Telegram user ID, so it is the same number on both bots. You still have to press **Start** on both bots: a bot cannot message someone who never started it.
+
+Alerts can also go to a group. Add the bot to the group, then pick `/start` for that bot from the group's command menu (Telegram sends it as `/start@YourBotName`, the only form a bot in privacy mode receives). The bot replies with "Chat ID grup ini: `-1001234567890`". Group chat IDs are negative; paste that number into the Profile field. Each bot needs its own `/start` in the group, and each field can point to a different chat (for example asset alerts to you, sentinel alerts to a team group).
 
 If the bot does not reply to `/start`, check that the API is running (`docker compose ps`; the API is the process that answers `/start`) and that the token in `.env` belongs to that bot.
 

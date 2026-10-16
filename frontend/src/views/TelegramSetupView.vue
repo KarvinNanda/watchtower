@@ -72,6 +72,11 @@ async function handleVerify() {
         {{ t('telegram.auto_open_note') }}
       </n-alert>
 
+      <n-alert type="default" :show-icon="false" :title="t('telegram.chat_types_title')" class="telegram-setup__note">
+        <p class="telegram-setup__para">{{ t('telegram.private_note') }}</p>
+        <p class="telegram-setup__para">{{ t('telegram.group_note') }}</p>
+      </n-alert>
+
       <n-divider />
 
       <n-space vertical>
@@ -118,5 +123,13 @@ async function handleVerify() {
 
 .telegram-setup__note {
   margin-bottom: 16px;
+}
+
+.telegram-setup__para {
+  margin: 0 0 8px;
+}
+
+.telegram-setup__para:last-child {
+  margin-bottom: 0;
 }
 </style>
