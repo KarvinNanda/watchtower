@@ -2,6 +2,8 @@ package quota
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,4 +79,29 @@ func TestTryUse_NilBudgetRefuses(t *testing.T) {
 	ok, err := b.TryUse(context.Background(), 1)
 	require.NoError(t, err)
 	assert.False(t, ok)
+}
+
+// #50: many concurrent manual refreshes at the limit get exactly the
+// remaining credits, never more, and refused reservations are released.
+func TestTryUse_ConcurrentCallsNeverExceedTheLimit(t *testing.T) {
+	b, mr := newTestBudget(t, 5)
+	var granted atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := b.TryUse(context.Background(), 1)
+			assert.NoError(t, err)
+			if ok {
+				granted.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(5), granted.Load())
+	got, err := mr.Get(KeyPrefix + "2026-10-15")
+	require.NoError(t, err)
+	assert.Equal(t, "5", got, "every refused reservation was given back")
 }

@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -161,29 +162,30 @@ func Load(envPath string) (*Config, error) {
 		}
 	}
 
+	num := &strictReader{v: v}
 	cfg := &Config{
 		Server: ServerConfig{
 			Env:            v.GetString("app_env"),
-			Port:           v.GetInt("app_port"),
+			Port:           num.intVal("app_port"),
 			FrontendURL:    v.GetString("frontend_url"),
-			CookieSecure:   v.GetBool("cookie_secure"),
+			CookieSecure:   num.boolVal("cookie_secure"),
 			TrustedProxies: splitList(v.GetString("trusted_proxies")),
 		},
 		Database: DatabaseConfig{
 			Host:     v.GetString("db_host"),
-			Port:     v.GetInt("db_port"),
+			Port:     num.intVal("db_port"),
 			User:     v.GetString("db_user"),
 			Password: v.GetString("db_password"),
 			Name:     v.GetString("db_name"),
 		},
 		Redis: RedisConfig{
 			Host:     v.GetString("redis_host"),
-			Port:     v.GetInt("redis_port"),
+			Port:     num.intVal("redis_port"),
 			Password: v.GetString("redis_password"),
 		},
 		JWT: JWTConfig{
 			Secret:      v.GetString("jwt_secret"),
-			ExpiryHours: v.GetInt("jwt_expiry_hours"),
+			ExpiryHours: num.intVal("jwt_expiry_hours"),
 		},
 		Telegram: TelegramConfig{
 			AssetBotToken:    v.GetString("telegram_asset_bot_token"),
@@ -197,17 +199,20 @@ func Load(envPath string) (*Config, error) {
 			GitHubToken:      v.GetString("github_token"),
 		},
 		Scheduler: SchedulerConfig{
-			AssetIntervalHours:    v.GetInt("asset_scheduler_interval_hours"),
-			SentinelIntervalHours: v.GetInt("sentinel_scheduler_interval_hours"),
+			AssetIntervalHours:    num.intVal("asset_scheduler_interval_hours"),
+			SentinelIntervalHours: num.intVal("sentinel_scheduler_interval_hours"),
 		},
 		Limits: LimitsConfig{
-			MaxUniqueSymbols:             v.GetInt("max_unique_symbols"),
-			AlertCooldownHours:           v.GetInt("alert_cooldown_hours"),
-			AlertPriceMovePct:            v.GetFloat64("alert_price_move_pct"),
-			TwelveDataManualDailyCredits: v.GetInt("twelve_data_manual_daily_credits"),
+			MaxUniqueSymbols:             num.intVal("max_unique_symbols"),
+			AlertCooldownHours:           num.intVal("alert_cooldown_hours"),
+			AlertPriceMovePct:            num.floatVal("alert_price_move_pct"),
+			TwelveDataManualDailyCredits: num.intVal("twelve_data_manual_daily_credits"),
 		},
 	}
 
+	if len(num.errs) > 0 {
+		return nil, fmt.Errorf("config: %s", strings.Join(num.errs, "; "))
+	}
 	if cfg.Database.Host == "" {
 		return nil, fmt.Errorf("config: DB_HOST is required")
 	}
@@ -229,6 +234,62 @@ func Load(envPath string) (*Config, error) {
 	cfg.Scheduler.Timezone = loc
 
 	return cfg, nil
+}
+
+// strictReader reads numeric and boolean settings strictly. viper's GetInt,
+// GetFloat64 and GetBool turn a typo like "abc" into 0 or false without an
+// error (#50); here every bad value is collected and named by its env var.
+// An unset value keeps viper's meaning (the config.yaml default, else 0).
+type strictReader struct {
+	v    *viper.Viper
+	errs []string
+}
+
+// raw returns the trimmed value and whether it was set at all. A value of
+// only spaces is set (viper returns it), so it is parsed and fails.
+func (r *strictReader) raw(key string) (string, bool) {
+	v := r.v.GetString(key)
+	return strings.TrimSpace(v), v != ""
+}
+
+func (r *strictReader) fail(key, want, got string) {
+	r.errs = append(r.errs, fmt.Sprintf("%s must be %s, got %q", envBindings[key], want, got))
+}
+
+func (r *strictReader) intVal(key string) int {
+	s, set := r.raw(key)
+	if !set {
+		return 0
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		r.fail(key, "a whole number", s)
+	}
+	return n
+}
+
+func (r *strictReader) floatVal(key string) float64 {
+	s, set := r.raw(key)
+	if !set {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		r.fail(key, "a number", s)
+	}
+	return f
+}
+
+func (r *strictReader) boolVal(key string) bool {
+	s, set := r.raw(key)
+	if !set {
+		return false
+	}
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		r.fail(key, "true or false", s)
+	}
+	return b
 }
 
 // DSN builds a MySQL data source name compatible with

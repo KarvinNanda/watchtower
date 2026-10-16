@@ -25,8 +25,7 @@ const (
 	defaultCoinGeckoBaseURL = "https://api.coingecko.com/api/v3"
 	hargaEmasURL            = "https://harga-emas.org/"
 
-	cryptoRateLimitDelay = 1 * time.Second
-	stockRateLimitRetry  = 60 * time.Second
+	stockRateLimitRetry = 60 * time.Second
 
 	stockDailyCallWarningThreshold = 800
 )
@@ -69,6 +68,7 @@ type AssetFetcher struct {
 	twelveDataKey string
 	httpClient    *http.Client
 	stockPacer    *pacer
+	cryptoPacer   *pacer
 }
 
 // NewAssetFetcher builds an AssetFetcher using twelveDataKey for Twelve
@@ -79,6 +79,7 @@ func NewAssetFetcher(twelveDataKey string) *AssetFetcher {
 		twelveDataKey: twelveDataKey,
 		httpClient:    utils.NewHTTPClient(),
 		stockPacer:    newPacer(twelveDataMinGap),
+		cryptoPacer:   newPacer(coinGeckoMinGap),
 	}
 }
 
@@ -105,10 +106,10 @@ func coinGeckoID(symbol string) string {
 }
 
 // FetchCrypto retrieves the latest quote for a crypto ticker (e.g. "BTC")
-// via CoinGecko's /coins/markets endpoint. It sleeps briefly beforehand to
-// stay within CoinGecko's free-tier rate limit of roughly 1 request/second.
+// via CoinGecko's /coins/markets endpoint, paced with every other CoinGecko
+// call (coinGeckoMinGap).
 func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
-	time.Sleep(cryptoRateLimitDelay)
+	f.cryptoPacer.wait()
 
 	coinID := coinGeckoID(symbol)
 	endpoint := fmt.Sprintf("%s/coins/markets?vs_currency=usd&ids=%s", CoinGeckoBaseURL, url.QueryEscape(coinID))
@@ -237,8 +238,10 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		Close         string `json:"close"`
 		PercentChange string `json:"percent_change"`
 		High          string `json:"high"`
-		Timestamp     int64  `json:"timestamp"`
-		FiftyTwoWeek  struct {
+		// Timestamp is read leniently (#48): a string or empty value must
+		// not fail the decode and lose the price.
+		Timestamp    json.RawMessage `json:"timestamp"`
+		FiftyTwoWeek struct {
 			High string `json:"high"`
 			Low  string `json:"low"`
 		} `json:"fifty_two_week"`
@@ -276,12 +279,27 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		FetchedAt:     time.Now(),
 	}
 	// high is the session's high; timestamp is the session's start. A high
-	// without its window start cannot be used safely, so both or neither.
-	if h := parseOptionalFloat(raw.High); h != nil && *h > 0 && raw.Timestamp > 0 {
-		since := time.Unix(raw.Timestamp, 0).UTC()
-		res.HighUSD, res.HighSince = h, &since
+	// without its window start cannot be used safely, so both or neither. A
+	// window that starts after the fetch is impossible and also unknown.
+	if h := parseOptionalFloat(raw.High); h != nil && *h > 0 {
+		if ts := parseUnixSeconds(raw.Timestamp); ts > 0 {
+			if since := time.Unix(ts, 0).UTC(); !since.After(res.FetchedAt) {
+				res.HighUSD, res.HighSince = h, &since
+			}
+		}
 	}
 	return res, nil
+}
+
+// parseUnixSeconds reads a JSON number or numeric string; anything else
+// (empty, null, text) is 0, meaning unknown.
+func parseUnixSeconds(raw json.RawMessage) int64 {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 func parseOptionalFloat(s string) *float64 {
@@ -454,7 +472,7 @@ func (f *AssetFetcher) FetchCryptoWeek52(symbol string) (high, low float64, err 
 	if t, ok := SymbolAssetType(symbol); !ok || t != "crypto" {
 		return 0, 0, fmt.Errorf("asset: unsupported crypto symbol: %s", symbol)
 	}
-	time.Sleep(cryptoRateLimitDelay)
+	f.cryptoPacer.wait()
 
 	endpoint := fmt.Sprintf("%s/coins/%s/market_chart?vs_currency=usd&days=365",
 		CoinGeckoBaseURL, url.PathEscape(coinGeckoID(symbol)))

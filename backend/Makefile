@@ -41,14 +41,10 @@ test-coverage:
 test-race:
 	go test ./... -race -count=1
 
-# Runs just the tests added for the post-Phase-10 RSI/batch-dedup/sentinel
-# structured-output logic, without the full suite's runtime.
+# Runs just the sentinel source parser tests, without the full suite's
+# runtime.
 test-new:
-	go test ./internal/asset/... \
-	       ./internal/scheduler/... \
-	       ./internal/sentinel/... \
-	       -v -run "TestCalculate|TestBatch|TestParse" \
-	       -count=1
+	go test ./internal/sentinel/... -v -run "TestParse" -count=1
 
 # Install the Go official vulnerability scanner and gosec static analyzer.
 install-tools:

@@ -64,6 +64,32 @@ func TestDecodeTwelveDataQuote_MissingHighOrTimestampIsUnknown(t *testing.T) {
 	assert.Nil(t, res.HighSince)
 }
 
+// #48: a timestamp that is not a JSON number must not lose the price.
+func TestDecodeTwelveDataQuote_LenientTimestamp(t *testing.T) {
+	res, err := decodeTwelveDataQuote(strings.NewReader(`{"close":"5","high":"6","timestamp":"1791984600"}`), "X")
+	require.NoError(t, err)
+	assert.Equal(t, 5.0, res.PriceUSD)
+	require.NotNil(t, res.HighSince, "a numeric string timestamp is read")
+	assert.Equal(t, time.Date(2026, 10, 14, 13, 30, 0, 0, time.UTC), *res.HighSince)
+
+	for _, raw := range []string{`""`, `"soon"`, `null`, `true`} {
+		res, err := decodeTwelveDataQuote(strings.NewReader(`{"close":"5","high":"6","timestamp":`+raw+`}`), "X")
+		require.NoError(t, err, raw)
+		assert.Equal(t, 5.0, res.PriceUSD, raw)
+		assert.Nil(t, res.HighUSD, "%s: an unknown window start makes the high unknown", raw)
+	}
+}
+
+// #48: a high window that starts after the fetch is impossible; treat it as
+// unknown instead of letting it raise a trailing stop's peak.
+func TestDecodeTwelveDataQuote_FutureWindowIsUnknown(t *testing.T) {
+	res, err := decodeTwelveDataQuote(strings.NewReader(`{"close":"5","high":"6","timestamp":4102444800}`), "X")
+	require.NoError(t, err)
+	assert.Equal(t, 5.0, res.PriceUSD)
+	assert.Nil(t, res.HighUSD)
+	assert.Nil(t, res.HighSince)
+}
+
 // A day's quota cannot come back in 60 s: retrying only holds the run
 // (and its lock) for a minute per symbol (final review, Important 1).
 func TestDecodeTwelveDataQuote_DailyQuotaIsNotTheMinuteLimit(t *testing.T) {

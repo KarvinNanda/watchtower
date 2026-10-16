@@ -1,6 +1,8 @@
-// Polls GET /api/runs/:id until the run finishes. The backend reports runs
-// stuck for 15 minutes as failed; timeoutMs (16 min) is only a safety net
-// in case the API itself stops answering.
+// Polls GET /api/runs/:id until the run finishes. The backend reports a run
+// as failed after 15 minutes queued or 30 minutes running (#50); timeoutMs
+// (46 min) is only a safety net in case the API itself stops answering.
+export const DEFAULT_POLL_TIMEOUT_MS = 46 * 60 * 1000
+
 const FINAL_STATUSES = new Set(['done', 'failed'])
 
 // A single failed poll (Wi-Fi blip, API restart) must not report the run as
@@ -14,7 +16,7 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 export async function pollRun(
   getRun,
   runId,
-  { intervalMs = 2000, timeoutMs = 16 * 60 * 1000, sleep = defaultSleep, now = Date.now, signal } = {},
+  { intervalMs = 2000, timeoutMs = DEFAULT_POLL_TIMEOUT_MS, sleep = defaultSleep, now = Date.now, signal } = {},
 ) {
   const deadline = now() + timeoutMs
   let failures = 0

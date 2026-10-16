@@ -167,6 +167,11 @@ func TestTrailingStop(t *testing.T) {
 			Outcome{Observed: Patch{PeakPriceUSD: f(105)}}},
 		{"a high after tracking started can fire the rule", trail(tracked(118)), withHigh(110, 125, -24*time.Hour),
 			fired(125, 110, Patch{PeakPriceUSD: f(125)})},
+		// #50: the boundary. A window that starts at the same instant tracking
+		// started is not "before" it, so its high counts.
+		{"a high whose window starts exactly when tracking started counts",
+			trail(State{PeakPriceUSD: f(100), PeakSince: at(-24 * time.Hour)}), withHigh(100, 105, -24*time.Hour),
+			Outcome{Observed: Patch{PeakPriceUSD: f(105)}}},
 		// The #21 example: created 10:00 (7 h ago), BTC hit 125k at 03:00, now 110k.
 		{"a high from before tracking started is ignored", trail(State{PeakPriceUSD: f(118), PeakSince: at(-7 * time.Hour)}),
 			withHigh(110, 125, -24*time.Hour), Outcome{}},
