@@ -185,13 +185,17 @@ func TestRegister_InvalidEmail(t *testing.T) {
 }
 
 var userColumns = []string{
-	"id", "email", "password_hash", "telegram_asset_chat_id", "telegram_sentinel_chat_id",
+	"id", "email", "password_hash", "token_version", "telegram_asset_chat_id", "telegram_sentinel_chat_id",
 	"alert_cooldown_hours", "preferred_language", "is_active", "created_at", "updated_at",
 }
 
 func userRow(id uint64, email, passwordHash string) *sqlmock.Rows {
+	return userRowVersion(id, email, passwordHash, 0)
+}
+
+func userRowVersion(id uint64, email, passwordHash string, version uint32) *sqlmock.Rows {
 	return sqlmock.NewRows(userColumns).
-		AddRow(id, email, passwordHash, nil, nil, 4, "id", true, time.Now(), time.Now())
+		AddRow(id, email, passwordHash, version, nil, nil, 4, "id", true, time.Now(), time.Now())
 }
 
 func TestLogin_Success(t *testing.T) {
