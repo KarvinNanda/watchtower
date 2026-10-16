@@ -18,7 +18,7 @@ import {
   setCurrency, changeAssetType, formatLevelInput, parseLevelInput,
 } from '@/utils/assetRules'
 import { groupRulesBySymbol } from '@/utils/groupRules'
-import { runChangedRuleIds } from '@/utils/runHighlight'
+import { highlightAfterRun } from '@/utils/runHighlight'
 
 const { t, te } = useI18n()
 const store = useSubscriptionsStore()
@@ -221,7 +221,7 @@ async function handleRunFinished(result) {
   // A report changes no rule state: nothing to reload or highlight (#7).
   if (result.status !== 'done' || result.type === 'asset_report') return
   await loadAll()
-  if (!rulesError.value) highlightIds.value = runChangedRuleIds(store.assets, result.run)
+  if (!rulesError.value) highlightIds.value = highlightAfterRun(runResult.value, result, store.assets)
 }
 
 function closeRunResult() {

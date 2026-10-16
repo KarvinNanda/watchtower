@@ -115,3 +115,12 @@ describe('IDR waiting text (#61)', () => {
     expect(messages.run.idr_waiting).toContain('{idr_waiting}')
   })
 })
+
+describe('header navigation label (#55)', () => {
+  it.each([
+    ['en', en],
+    ['id', id],
+  ])('%s labels the menu button', (_, messages) => {
+    expect(messages.common.toggle_navigation).toBeTruthy()
+  })
+})
