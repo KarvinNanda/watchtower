@@ -162,8 +162,8 @@ func TestGetAssetRules_MapsState(t *testing.T) {
 	fired := time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(`FROM asset_rules\s+WHERE user_id = \?`).WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{
 		"id", "asset_type", "asset_symbol", "rule_type", "direction", "intent", "level_usd", "pct", "is_active",
-		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd",
-	}).AddRow(int64(5), "crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, 126080.0, fired, 113400.0, fired, fired, "USD", nil, nil))
+		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd", "peak_price_idr", "triggered_price_idr",
+	}).AddRow(int64(5), "crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, 126080.0, fired, 113400.0, fired, fired, "USD", nil, nil, 2600000.0, 2340000.0))
 
 	got, err := svc.GetAssetRules(7)
 	require.NoError(t, err)
@@ -171,6 +171,10 @@ func TestGetAssetRules_MapsState(t *testing.T) {
 	assert.Nil(t, got[0].Direction)
 	require.NotNil(t, got[0].TriggeredAt)
 	assert.Equal(t, 126080.0, *got[0].PeakPriceUSD)
+	require.NotNil(t, got[0].PeakPriceIDR)
+	assert.Equal(t, 2600000.0, *got[0].PeakPriceIDR)
+	require.NotNil(t, got[0].TriggeredPriceIDR)
+	assert.Equal(t, 2340000.0, *got[0].TriggeredPriceIDR)
 	assert.Equal(t, "USD", got[0].LevelCurrency)
 }
 
@@ -202,7 +206,7 @@ func TestUpdateAssetRule_EditingFiredTrailingKeepsFiredState(t *testing.T) {
 		AddRow("crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, true, "USD", nil))
 	// Still inactive after the edit: the peak and cooldown reset, but the
 	// fired badge and the Re-arm button must stay, so triggered_* is kept.
-	mock.ExpectExec(`baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, peak_since = NULL, week52_ref_usd = NULL, last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL WHERE id = \? AND user_id = \?$`).
+	mock.ExpectExec(`baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, peak_since = NULL, week52_ref_usd = NULL, last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL, peak_price_idr = NULL WHERE id = \? AND user_id = \?$`).
 		WithArgs(false, "crypto", "BTC", "trailing_stop", nil, nil, nil, 5.0, "USD", nil, 5, 7).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -222,7 +226,7 @@ func TestRearmAssetRule_FiredTrailingResetsEverything(t *testing.T) {
 		AddRow("crypto", "BTC", "trailing_stop", nil, nil, nil, 10.0, false, true, "USD", nil))
 	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(false))
 	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"e"}).AddRow(true))
-	mock.ExpectExec(`peak_price_usd = NULL, peak_since = NULL[\s\S]*triggered_at = NULL, triggered_price_usd = NULL`).
+	mock.ExpectExec(`peak_price_usd = NULL, peak_since = NULL[\s\S]*triggered_at = NULL, triggered_price_usd = NULL, triggered_price_idr = NULL`).
 		WithArgs(true, 5, 7).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -236,12 +240,12 @@ func TestGetAssetRules_FlagsUnsupportedSymbols(t *testing.T) {
 	now := time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC)
 	cols := []string{
 		"id", "asset_type", "asset_symbol", "rule_type", "direction", "intent", "level_usd", "pct", "is_active",
-		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd",
+		"peak_price_usd", "triggered_at", "triggered_price_usd", "last_alerted_at", "created_at", "level_currency", "level_idr", "week52_ref_usd", "peak_price_idr", "triggered_price_idr",
 	}
 	mock.ExpectQuery(`FROM asset_rules`).WillReturnRows(sqlmock.NewRows(cols).
-		AddRow(int64(1), "crypto", "BTC", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil, 118000.0).
+		AddRow(int64(1), "crypto", "BTC", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil, 118000.0, nil, nil).
 		// A legacy free-form symbol copied by migration 000011: it can never be fetched.
-		AddRow(int64(2), "stock", "BRK-B", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil, nil))
+		AddRow(int64(2), "stock", "BRK-B", "pct_change_24h", nil, nil, nil, 5.0, true, nil, nil, nil, nil, now, "USD", nil, nil, nil, nil))
 
 	got, err := svc.GetAssetRules(7)
 	require.NoError(t, err)

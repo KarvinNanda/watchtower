@@ -66,11 +66,12 @@ var intentDirections = map[string]string{"buy_target": "below", "take_profit": "
 // stateResetKeepFiredSQL clears every scheduler-owned column except the
 // one-shot "fired" record of a trailing stop.
 const stateResetKeepFiredSQL = "baseline_pending = FALSE, last_beyond = NULL, peak_price_usd = NULL, peak_since = NULL, " +
-	"week52_ref_usd = NULL, last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL"
+	"week52_ref_usd = NULL, last_alerted_at = NULL, last_alerted_price_usd = NULL, cooldown_until = NULL, " +
+	"peak_price_idr = NULL" // #58: the rupiah peak too
 
 // stateResetSQL clears every scheduler-owned column, so an edited or
 // re-armed rule starts like a new one.
-const stateResetSQL = stateResetKeepFiredSQL + ", triggered_at = NULL, triggered_price_usd = NULL"
+const stateResetSQL = stateResetKeepFiredSQL + ", triggered_at = NULL, triggered_price_usd = NULL, triggered_price_idr = NULL"
 
 // AssetRule mirrors an asset_rules row, including the read-only state the
 // UI shows.
@@ -92,6 +93,9 @@ type AssetRule struct {
 	Week52RefUSD      *float64
 	TriggeredAt       *time.Time
 	TriggeredPriceUSD *float64
+	// #58: gold trailing stops, in rupiah.
+	PeakPriceIDR      *float64
+	TriggeredPriceIDR *float64
 	LastAlertedAt     *time.Time
 	CreatedAt         time.Time
 	// Supported is false for a symbol WatchTower cannot fetch (not on the
@@ -230,7 +234,8 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, asset_type, asset_symbol, rule_type, direction, intent, level_usd, pct, is_active,
-			peak_price_usd, triggered_at, triggered_price_usd, last_alerted_at, created_at, level_currency, level_idr, week52_ref_usd
+			peak_price_usd, triggered_at, triggered_price_usd, last_alerted_at, created_at, level_currency, level_idr, week52_ref_usd,
+			peak_price_idr, triggered_price_idr
 		FROM asset_rules
 		WHERE user_id = ?
 		ORDER BY asset_symbol, created_at`, userID,
@@ -247,16 +252,18 @@ func (s *UserService) GetAssetRules(userID uint64) ([]AssetRule, error) {
 			direction, intent           sql.NullString
 			level, pct, peak, trigPrice sql.NullFloat64
 			levelIDR, week52Ref         sql.NullFloat64
+			peakIDR, trigIDR            sql.NullFloat64
 			triggeredAt, lastAlertedAt  sql.NullTime
 		)
 		if err := rows.Scan(&r.ID, &r.AssetType, &r.AssetSymbol, &r.RuleType, &direction, &intent, &level, &pct,
 			&r.IsActive, &peak, &triggeredAt, &trigPrice, &lastAlertedAt, &r.CreatedAt,
-			&r.LevelCurrency, &levelIDR, &week52Ref); err != nil {
+			&r.LevelCurrency, &levelIDR, &week52Ref, &peakIDR, &trigIDR); err != nil {
 			return nil, fmt.Errorf("user: scan asset_rules: %w", err)
 		}
 		r.Direction, r.Intent = nullStringPtr(direction), nullStringPtr(intent)
 		r.LevelUSD, r.Pct, r.PeakPriceUSD, r.TriggeredPriceUSD = nullFloatPtr(level), nullFloatPtr(pct), nullFloatPtr(peak), nullFloatPtr(trigPrice)
 		r.LevelIDR, r.Week52RefUSD = nullFloatPtr(levelIDR), nullFloatPtr(week52Ref)
+		r.PeakPriceIDR, r.TriggeredPriceIDR = nullFloatPtr(peakIDR), nullFloatPtr(trigIDR)
 		r.TriggeredAt, r.LastAlertedAt = nullTimePtr(triggeredAt), nullTimePtr(lastAlertedAt)
 		t, ok := asset.SymbolAssetType(r.AssetSymbol)
 		r.Supported = ok && t == r.AssetType
