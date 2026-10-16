@@ -24,7 +24,11 @@ func Evaluate(r Rule, m Market, now time.Time, opt Options) Outcome {
 // evalPriceLevel is edge-triggered: it fires when the price crosses the
 // level, not on every run while the price stays beyond it (spec §5.2).
 func evalPriceLevel(r Rule, m Market, now time.Time, opt Options) Outcome {
-	beyond := isBeyond(r.Direction, m.PriceUSD, r.LevelUSD)
+	price, level, ok := levelPair(r, m)
+	if !ok {
+		return Outcome{Skip: SkipDataUnavailable}
+	}
+	beyond := isBeyond(r.Direction, price, level)
 	if r.State.BaselinePending {
 		return Outcome{Skip: SkipBaseline, Observed: Patch{ClearBaseline: true, LastBeyond: boolPtr(beyond)}}
 	}
@@ -79,6 +83,19 @@ func isBeyond(d Direction, price, level float64) bool {
 	return false
 }
 
+// levelPair returns the price and level a price_level rule compares, in the
+// rule's own currency (#40). An IDR rule without a known IDR price cannot be
+// evaluated, and is never evaluated on a made-up rate (#41).
+func levelPair(r Rule, m Market) (price, level float64, ok bool) {
+	if r.Currency == CurrencyIDR {
+		if m.PriceIDR == nil {
+			return 0, 0, false
+		}
+		return *m.PriceIDR, r.LevelIDR, true
+	}
+	return m.PriceUSD, r.LevelUSD, true
+}
+
 // inCooldown keeps today's per-symbol rule, now per rule: inside the
 // cooldown window an alert is held unless the price moved at least
 // AlertPriceMovePct since the last alert.
@@ -99,7 +116,7 @@ func alertMark(now time.Time, price float64, opt Options) *AlertMark {
 }
 
 func triggerFor(r Rule) Trigger {
-	return Trigger{Type: r.Type, Direction: r.Direction, Intent: r.Intent, LevelUSD: r.LevelUSD, Pct: r.Pct}
+	return Trigger{Type: r.Type, Direction: r.Direction, Intent: r.Intent, LevelUSD: r.LevelUSD, Pct: r.Pct, Currency: r.Currency, LevelIDR: r.LevelIDR}
 }
 
 func boolPtr(v bool) *bool           { return &v }

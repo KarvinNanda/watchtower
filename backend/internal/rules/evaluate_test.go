@@ -233,3 +233,48 @@ func TestWeek52Break(t *testing.T) {
 		})
 	}
 }
+
+func idrRule(dir Direction, level float64, st State) Rule {
+	return Rule{ID: 1, Type: TypePriceLevel, Direction: dir, Currency: CurrencyIDR, LevelIDR: level, State: st}
+}
+
+func marketIDR(usd, idr float64) Market { return Market{PriceUSD: usd, PriceIDR: f(idr)} }
+
+func TestPriceLevel_IDR(t *testing.T) {
+	idrTrigger := func(dir Direction, level float64) Trigger {
+		return Trigger{Type: TypePriceLevel, Direction: dir, Currency: CurrencyIDR, LevelIDR: level}
+	}
+	cases := []struct {
+		name string
+		rule Rule
+		mkt  Market
+		want Outcome
+	}{
+		{"crossing above in IDR fires; alert mark keeps the USD price",
+			idrRule(DirectionAbove, 1350000, State{LastBeyond: b(false)}), marketIDR(75.4, 1350000),
+			Outcome{Fire: true, Trigger: idrTrigger(DirectionAbove, 1350000), OnSent: Patch{LastBeyond: b(true), Alert: sentAlert(75.4)}}},
+		{"below in IDR fires",
+			idrRule(DirectionBelow, 2350000, State{LastBeyond: b(false)}), marketIDR(130, 2349999),
+			Outcome{Fire: true, Trigger: idrTrigger(DirectionBelow, 2350000), OnSent: Patch{LastBeyond: b(true), Alert: sentAlert(130)}}},
+		{"compares IDR, not USD: a USD price above the number does not fire",
+			idrRule(DirectionAbove, 1400000, State{LastBeyond: b(false)}), marketIDR(9999999, 1350000),
+			Outcome{}},
+		{"unknown IDR price is skipped with no state change",
+			idrRule(DirectionAbove, 1350000, State{LastBeyond: b(false)}), Market{PriceUSD: 80},
+			Outcome{Skip: SkipDataUnavailable}},
+		{"unknown IDR price keeps the baseline pending",
+			idrRule(DirectionAbove, 1350000, State{BaselinePending: true}), Market{PriceUSD: 80},
+			Outcome{Skip: SkipDataUnavailable}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Evaluate(tc.rule, tc.mkt, now, opts))
+		})
+	}
+}
+
+func TestPriceLevel_USDRuleIgnoresIDRPrice(t *testing.T) {
+	got := Evaluate(levelRule(DirectionAbove, 100, State{LastBeyond: b(false)}), marketIDR(105, 1), now, opts)
+	require.True(t, got.Fire)
+	assert.Equal(t, Trigger{Type: TypePriceLevel, Direction: DirectionAbove, LevelUSD: 100}, got.Trigger)
+}
