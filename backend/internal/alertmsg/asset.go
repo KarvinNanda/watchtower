@@ -29,16 +29,33 @@ type AssetAlert struct {
 	Symbol    string
 	PriceUSD  float64
 	NativeIDR float64
-	ChangePct *float64
+	ChangePct *float64 // 24h change; for a stock, the change against the previous close
 	Trigger   rules.Trigger
+
+	AssetType   string         // "crypto", "stock" or "gold"; empty is shown like crypto
+	ChangePct7d *float64       // nil when unknown
+	FetchedAt   time.Time      // when the price was fetched; zero = unknown
+	Week52High  *float64       // nil when unknown
+	Week52Low   *float64       // nil when unknown
+	Distance    rules.Distance // how far the price is from the rule that fired
 }
 
+// DataAgeThreshold is how old a price may be before the message says so. It
+// must equal cache.ManualMaxAge. alertmsg does not import the cache package,
+// so a test in internal/scheduler asserts the two are equal.
+const DataAgeThreshold = 15 * time.Minute
+
 type assetGroup struct {
-	symbol    string
-	priceUSD  float64
-	nativeIDR float64
-	changePct *float64
-	alerts    []AssetAlert
+	symbol      string
+	assetType   string
+	priceUSD    float64
+	nativeIDR   float64
+	changePct   *float64
+	changePct7d *float64
+	fetchedAt   time.Time
+	week52High  *float64
+	week52Low   *float64
+	alerts      []AssetAlert
 }
 
 // AssetMessages renders one user's fired rules as one or more message
@@ -51,7 +68,7 @@ func AssetMessages(lang string, at time.Time, rate Rate, alerts []AssetAlert) []
 	groups := groupAlerts(alerts)
 	blocks := make([]string, len(groups))
 	for i, g := range groups {
-		blocks[i] = assetBlock(lang, rate, g)
+		blocks[i] = assetBlock(lang, at, rate, g)
 	}
 	h := header{
 		first: "🔔 *" + pick(lang, "Asset alert", "Alert aset") + "* · " + esc(assetSummary(lang, groups, len(alerts))),
@@ -61,14 +78,19 @@ func AssetMessages(lang string, at time.Time, rate Rate, alerts []AssetAlert) []
 }
 
 // groupAlerts groups alerts by symbol. All alerts of a symbol come from the
-// same fetch in the same run, so the first alert's prices are the group's.
+// same fetch in the same run, so the first alert's prices, changes, fetch
+// time and 52-week range are the group's.
 func groupAlerts(alerts []AssetAlert) []assetGroup {
 	bySymbol := make(map[string]*assetGroup)
 	var symbols []string
 	for _, a := range alerts {
 		g, ok := bySymbol[a.Symbol]
 		if !ok {
-			g = &assetGroup{symbol: a.Symbol, priceUSD: a.PriceUSD, nativeIDR: a.NativeIDR, changePct: a.ChangePct}
+			g = &assetGroup{
+				symbol: a.Symbol, assetType: a.AssetType, priceUSD: a.PriceUSD, nativeIDR: a.NativeIDR,
+				changePct: a.ChangePct, changePct7d: a.ChangePct7d, fetchedAt: a.FetchedAt,
+				week52High: a.Week52High, week52Low: a.Week52Low,
+			}
 			bySymbol[a.Symbol] = g
 			symbols = append(symbols, a.Symbol)
 		}
@@ -114,21 +136,99 @@ func priceLine(rate Rate, g assetGroup) string {
 	return first
 }
 
-// changeLine is a symbol block's last line: "24h 1.20%" or "24h n/a".
-func changeLine(changePct *float64) string {
-	change := "n/a"
-	if changePct != nil {
-		change = fmt.Sprintf("%.2f%%", *changePct)
+// changeLine is the change line of a symbol block, "" when both values are
+// unknown. A stock's 24h value is the move since the previous close, so it
+// is labelled "Today". The emoji follows the first value shown.
+func changeLine(lang, assetType string, pct24h, pct7d *float64) string {
+	pct24h, pct7d = shownPct(pct24h), shownPct(pct7d)
+	var parts []string
+	if pct24h != nil {
+		label := pick(lang, "24h", "24 jam")
+		if assetType == "stock" {
+			label = pick(lang, "Today", "Hari ini")
+		}
+		part := fmt.Sprintf("%s: %+.2f%%", label, *pct24h)
+		if assetType == "stock" {
+			part += pick(lang, " (vs previous close)", " (vs tutup kemarin)")
+		}
+		parts = append(parts, part)
 	}
-	return esc("24h " + change)
+	if pct7d != nil {
+		parts = append(parts, fmt.Sprintf("%s: %+.2f%%", pick(lang, "7d", "7 hari"), *pct7d))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	first := pct7d
+	if pct24h != nil {
+		first = pct24h
+	}
+	emoji := "📈"
+	if *first < 0 {
+		emoji = "📉"
+	}
+	return esc(emoji + " " + strings.Join(parts, " · "))
 }
 
-func assetBlock(lang string, rate Rate, g assetGroup) string {
-	lines := []string{priceLine(rate, g)}
-	for _, a := range g.alerts {
-		lines = append(lines, triggerEmoji(a.Trigger)+" "+esc(triggerSentence(lang, rate, a.Trigger)))
+// shownPct is a change as it will be printed: nil for a value that is not a
+// finite number, otherwise rounded to 2 decimals with negative zero turned
+// into zero. The sign and the emoji are then decided on what the user reads.
+func shownPct(p *float64) *float64 {
+	if p == nil || math.IsNaN(*p) || math.IsInf(*p, 0) {
+		return nil
 	}
-	return strings.Join(append(lines, changeLine(g.changePct)), "\n")
+	v := math.Round(*p*100) / 100
+	if v == 0 {
+		v = 0
+	}
+	return &v
+}
+
+// week52Line shows where the price sits in its 52-week range, "" unless both
+// extremes are known. The extremes include the current price, like the
+// 52-week rule does, because a cached range can lag a new high or low.
+func week52Line(price float64, high, low *float64) string {
+	if high == nil || low == nil || *high <= 0 || *low <= 0 {
+		return ""
+	}
+	hi, lo := math.Max(*high, price), math.Min(*low, price)
+	return esc(fmt.Sprintf("📏 52-week: high %s (%+.1f%%) · low %s (%+.1f%%)",
+		formatUSD(hi), (price-hi)/hi*100, formatUSD(lo), (price-lo)/lo*100))
+}
+
+// ageLine says how old the price is, "" when it is fresh or the fetch time
+// is unknown.
+func ageLine(lang string, at, fetchedAt time.Time) string {
+	if fetchedAt.IsZero() || at.Sub(fetchedAt) <= DataAgeThreshold {
+		return ""
+	}
+	return "⏳ " + esc(staleText(lang, at.Sub(fetchedAt)))
+}
+
+// alertDistanceTail is the distance after a fired rule's sentence. Only a
+// level rule has one; other kinds show nothing.
+func alertDistanceTail(lang string, d rules.Distance) string {
+	if d.Kind != rules.DistanceLevel {
+		return ""
+	}
+	return distanceTail(lang, d)
+}
+
+func assetBlock(lang string, at time.Time, rate Rate, g assetGroup) string {
+	lines := []string{priceLine(rate, g)}
+	if l := ageLine(lang, at, g.fetchedAt); l != "" {
+		lines = append(lines, l)
+	}
+	for _, a := range g.alerts {
+		lines = append(lines, triggerEmoji(a.Trigger)+" "+esc(triggerSentence(lang, rate, a.Trigger)+alertDistanceTail(lang, a.Distance)))
+	}
+	if l := changeLine(lang, g.assetType, g.changePct, g.changePct7d); l != "" {
+		lines = append(lines, l)
+	}
+	if l := week52Line(g.priceUSD, g.week52High, g.week52Low); l != "" {
+		lines = append(lines, l)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func rateLine(lang string, loc *time.Location, rate Rate) string {

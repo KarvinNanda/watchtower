@@ -41,8 +41,10 @@ func (m *mockAssetNotifier) SendAssetAlert(chatID int64, message string) error {
 type fakeMarket struct {
 	data      map[string]*cache.MarketData
 	week52Err error
-	stale     bool
-	lastOpts  cache.FetchOptions
+	// week52Calls counts GetCryptoWeek52 calls.
+	week52Calls int
+	stale       bool
+	lastOpts    cache.FetchOptions
 }
 
 func (f *fakeMarket) GetMarketData(_ context.Context, symbol, _ string, opts cache.FetchOptions) (*cache.MarketData, error) {
@@ -57,6 +59,7 @@ func (f *fakeMarket) GetMarketData(_ context.Context, symbol, _ string, opts cac
 }
 
 func (f *fakeMarket) GetCryptoWeek52(_ context.Context, _ string) (float64, float64, error) {
+	f.week52Calls++
 	if f.week52Err != nil {
 		return 0, 0, f.week52Err
 	}
@@ -101,7 +104,7 @@ func TestEvaluateRules_OneBatchPerUserAcrossSymbols(t *testing.T) {
 
 	for i, symbol := range []string{"BTC", "ETH", "SOL"} {
 		rows := []ruleRow{levelRow(uint64(10+i), 1, 100), levelRow(uint64(20+i), 2, 100)}
-		triggered := w.evaluateRules(context.Background(), rows, symbol, rules.Market{PriceUSD: 150}, 150*16000, runScope{}, batches)
+		triggered := w.evaluateRules(context.Background(), rows, symbol, rules.Market{PriceUSD: 150}, 150*16000, alertMeta{}, runScope{}, batches)
 		assert.Equal(t, 2, triggered, symbol)
 	}
 
@@ -118,7 +121,7 @@ func TestEvaluateRules_TwoRulesOnOneSymbolBothFire(t *testing.T) {
 	tp.Rule.Intent = rules.IntentTakeProfit
 	plain := levelRow(2, 1, 120)
 
-	triggered := w.evaluateRules(context.Background(), []ruleRow{tp, plain}, "BTC", rules.Market{PriceUSD: 130}, 0, runScope{}, batches)
+	triggered := w.evaluateRules(context.Background(), []ruleRow{tp, plain}, "BTC", rules.Market{PriceUSD: 130}, 0, alertMeta{}, runScope{}, batches)
 
 	assert.Equal(t, 2, triggered)
 	require.Len(t, batches[1].Alerts, 2)
@@ -134,7 +137,7 @@ func TestEvaluateRules_PersistsObservedStateWithoutFiring(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	batches := make(map[uint64]*UserAlertBatch)
 
-	triggered := w.evaluateRules(context.Background(), []ruleRow{levelRow(5, 1, 100)}, "BTC", rules.Market{PriceUSD: 90}, 0, runScope{}, batches)
+	triggered := w.evaluateRules(context.Background(), []ruleRow{levelRow(5, 1, 100)}, "BTC", rules.Market{PriceUSD: 90}, 0, alertMeta{}, runScope{}, batches)
 
 	assert.Equal(t, 0, triggered)
 	assert.Empty(t, batches)
@@ -148,8 +151,8 @@ func TestEvaluateRules_ManualRunSkipsCooldown(t *testing.T) {
 	until := time.Now().Add(3 * time.Hour)
 	row.Rule.State = rules.State{LastBeyond: boolPtr(false), LastAlertedPriceUSD: floatPtr(104), CooldownUntil: &until}
 
-	periodic := w.evaluateRules(context.Background(), []ruleRow{row}, "BTC", rules.Market{PriceUSD: 105}, 0, runScope{}, map[uint64]*UserAlertBatch{})
-	manual := w.evaluateRules(context.Background(), []ruleRow{row}, "BTC", rules.Market{PriceUSD: 105}, 0, runScope{userID: 1, skipCooldown: true}, map[uint64]*UserAlertBatch{})
+	periodic := w.evaluateRules(context.Background(), []ruleRow{row}, "BTC", rules.Market{PriceUSD: 105}, 0, alertMeta{}, runScope{}, map[uint64]*UserAlertBatch{})
+	manual := w.evaluateRules(context.Background(), []ruleRow{row}, "BTC", rules.Market{PriceUSD: 105}, 0, alertMeta{}, runScope{userID: 1, skipCooldown: true}, map[uint64]*UserAlertBatch{})
 
 	assert.Equal(t, 0, periodic, "cooldown holds a periodic run")
 	assert.Equal(t, 1, manual, "Check now ignores cooldown")
@@ -159,7 +162,7 @@ func TestDispatchUserBatch_AppliesOnSentAfterSuccess(t *testing.T) {
 	t.Parallel()
 	w, mock, notif := newMockAssetWorker(t, 3)
 	batches := make(map[uint64]*UserAlertBatch)
-	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100), levelRow(2, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100), levelRow(2, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, alertMeta{}, runScope{}, batches)
 
 	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?, last_alerted_at`).WithArgs(true, sqlmock.AnyArg(), 150.0, sqlmock.AnyArg(), 1, 1).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?, last_alerted_at`).WithArgs(true, sqlmock.AnyArg(), 150.0, sqlmock.AnyArg(), 2, 1).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -177,7 +180,7 @@ func TestDispatchUserBatch_FailedSendKeepsState(t *testing.T) {
 	w, mock, notif := newMockAssetWorker(t, 3)
 	notif.err = errors.New("telegram down")
 	batches := make(map[uint64]*UserAlertBatch)
-	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, alertMeta{}, runScope{}, batches)
 
 	// sqlmock does not report unexpected calls, and applyPatch only logs its
 	// error, so "no UPDATE expected" alone proves nothing. Instead, set a trap:
@@ -310,7 +313,7 @@ func TestDispatchBatches_FetchesRateOnceAndHidesFallback(t *testing.T) {
 	calls := 0
 	w.rateFn = func() currency.Rate { calls++; return currency.Rate{Value: 16000, Fallback: true} }
 	batches := make(map[uint64]*UserAlertBatch)
-	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100), levelRow(2, 2, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100), levelRow(2, 2, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, alertMeta{}, runScope{}, batches)
 	mock.MatchExpectationsInOrder(false)
 	for i := 0; i < 2; i++ {
 		mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -335,7 +338,7 @@ func TestDispatchBatches_UsesInstanceTimezone(t *testing.T) {
 	w, mock, notif := newMockAssetWorker(t, 3)
 	w.loc = time.FixedZone("TST", 3*60*60)
 	batches := make(map[uint64]*UserAlertBatch)
-	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, runScope{}, batches)
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "BTC", rules.Market{PriceUSD: 150}, 0, alertMeta{}, runScope{}, batches)
 	mock.MatchExpectationsInOrder(false)
 	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -485,4 +488,172 @@ func TestProcessSymbol_GoldTrailingStopUsesRupiah(t *testing.T) {
 	assert.Equal(t, rules.CurrencyIDR, tr.Currency)
 	assert.Equal(t, 2600000.0, tr.PeakPriceIDR)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEvaluateRules_DistanceUsesPatchedPeak(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	mock.ExpectExec(`UPDATE asset_rules SET`).WillReturnResult(sqlmock.NewResult(0, 1))
+	since := time.Now().Add(-2 * time.Hour)
+	row := ruleRow{
+		Rule: rules.Rule{ID: 3, Type: rules.TypeTrailingStop, Pct: 10,
+			State: rules.State{PeakPriceUSD: floatPtr(100), PeakSince: &since}},
+		UserID: 1, ParamsVersion: 1, TelegramAssetChatID: 1000, AlertCooldownHours: 4, PreferredLanguage: "en",
+	}
+	// The recent high 120 raises the peak in this very run, and 100 is a
+	// 16.7% drop from it, so the stop fires.
+	highSince := time.Now().Add(-time.Hour)
+	market := rules.Market{PriceUSD: 100, HighUSD: floatPtr(120), HighSince: &highSince}
+	batches := make(map[uint64]*UserAlertBatch)
+
+	n := w.evaluateRules(context.Background(), []ruleRow{row}, "BTC", market, 0, alertMeta{}, runScope{}, batches)
+
+	require.Equal(t, 1, n)
+	d := batches[1].Alerts[0].Distance
+	assert.Equal(t, rules.DistanceLevel, d.Kind)
+	assert.Equal(t, 120.0, d.PeakUSD, "distance is measured from the peak raised in this run, not the stored 100")
+	assert.InDelta(t, 108.0, d.Level, 1e-9)
+	assert.True(t, d.Passed)
+}
+
+func TestEvaluateRules_CarriesMeta(t *testing.T) {
+	t.Parallel()
+	w, _, _ := newMockAssetWorker(t, 3)
+	fetched := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	meta := alertMeta{AssetType: "stock", ChangePct7d: floatPtr(-2.5), FetchedAt: fetched}
+	market := rules.Market{PriceUSD: 150, Week52High: floatPtr(200), Week52Low: floatPtr(90)}
+	batches := make(map[uint64]*UserAlertBatch)
+
+	w.evaluateRules(context.Background(), []ruleRow{levelRow(1, 1, 100)}, "AAPL", market, 0, meta, runScope{}, batches)
+
+	require.Len(t, batches[1].Alerts, 1)
+	a := batches[1].Alerts[0]
+	assert.Equal(t, "stock", a.AssetType)
+	assert.Equal(t, floatPtr(-2.5), a.ChangePct7d)
+	assert.Equal(t, fetched, a.FetchedAt)
+	assert.Equal(t, floatPtr(200), a.Week52High)
+	assert.Equal(t, floatPtr(90), a.Week52Low)
+	assert.Equal(t, rules.DistanceLevel, a.Distance.Kind)
+}
+
+func expectWeek52Rules(mock sqlmock.Sqlmock, withWeek52 bool) {
+	rows := sqlmock.NewRows(ruleColumns).
+		AddRow(int64(1), int64(1), "price_level", "above", nil, 100.0, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil)
+	if withWeek52 {
+		rows.AddRow(int64(2), int64(1), "week52_break", "above", nil, nil, nil, int64(1), false, nil, nil, nil, nil, nil, nil, int64(1000), int64(4), "en", "USD", nil, nil)
+	}
+	mock.ExpectQuery(`FROM asset_rules r`).WithArgs("BTC").WillReturnRows(rows)
+}
+
+func TestProcessSymbol_LazyCryptoWeek52(t *testing.T) {
+	t.Parallel()
+	run := func(t *testing.T, assetType string, price float64) (*fakeMarket, map[uint64]*UserAlertBatch, symbolResult) {
+		w, mock, _ := newMockAssetWorker(t, 3)
+		fm := &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: price}}}
+		w.cache = fm
+		expectWeek52Rules(mock, false)
+		if price < 100 {
+			mock.ExpectExec(`UPDATE asset_rules SET`).WillReturnResult(sqlmock.NewResult(0, 1))
+		}
+		batches := make(map[uint64]*UserAlertBatch)
+		res, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: assetType}, runScope{}, batches)
+		require.NoError(t, err)
+		return fm, batches, res
+	}
+
+	t.Run("crypto with a fired alert fetches once", func(t *testing.T) {
+		fm, batches, res := run(t, "crypto", 150)
+		assert.Equal(t, 1, fm.week52Calls)
+		a := batches[1].Alerts[0]
+		assert.Equal(t, floatPtr(120), a.Week52High)
+		assert.Equal(t, floatPtr(50), a.Week52Low)
+		assert.Zero(t, res.dataErrors)
+	})
+	t.Run("crypto without an alert does not fetch", func(t *testing.T) {
+		fm, batches, _ := run(t, "crypto", 90)
+		assert.Zero(t, fm.week52Calls)
+		assert.Empty(t, batches)
+	})
+	t.Run("stock does not fetch", func(t *testing.T) {
+		fm, batches, _ := run(t, "stock", 150)
+		assert.Zero(t, fm.week52Calls)
+		assert.Nil(t, batches[1].Alerts[0].Week52High)
+	})
+	t.Run("a week52 rule already loaded it, so no second fetch", func(t *testing.T) {
+		w, mock, _ := newMockAssetWorker(t, 3)
+		fm := &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150}}}
+		w.cache = fm
+		expectWeek52Rules(mock, true)
+		batches := make(map[uint64]*UserAlertBatch)
+		_, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto", NeedsWeek52: true}, runScope{}, batches)
+		require.NoError(t, err)
+		assert.Equal(t, 1, fm.week52Calls)
+		assert.Equal(t, floatPtr(120), batches[1].Alerts[0].Week52High)
+	})
+}
+
+func TestProcessSymbol_LazyWeek52FailureStillAlerts(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	fm := &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150}}, week52Err: errors.New("coingecko 429")}
+	w.cache = fm
+	expectWeek52Rules(mock, false)
+	batches := make(map[uint64]*UserAlertBatch)
+
+	res, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, runScope{}, batches)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, fm.week52Calls)
+	require.Len(t, batches[1].Alerts, 1)
+	assert.Nil(t, batches[1].Alerts[0].Week52High)
+	assert.Equal(t, symbolResult{checked: 1, triggered: 1}, res, "a lazy 52-week failure is not a data error")
+}
+
+func TestProcessSymbol_PassesMetaFromMarketData(t *testing.T) {
+	t.Parallel()
+	w, mock, _ := newMockAssetWorker(t, 3)
+	fetched := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150, ChangePct7d: floatPtr(4), LastFetched: fetched}}}
+	expectWeek52Rules(mock, false)
+	batches := make(map[uint64]*UserAlertBatch)
+
+	_, err := w.processSymbol(SymbolInfo{Symbol: "BTC", AssetType: "gold"}, runScope{}, batches)
+
+	require.NoError(t, err)
+	a := batches[1].Alerts[0]
+	assert.Equal(t, "gold", a.AssetType)
+	assert.Equal(t, floatPtr(4), a.ChangePct7d)
+	assert.Equal(t, fetched, a.FetchedAt)
+}
+
+func TestDispatchUserBatch_MapsNewFields(t *testing.T) {
+	t.Parallel()
+	w, mock, notif := newMockAssetWorker(t, 3)
+	fetched := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	at := fetched.Add(time.Hour) // data is 1 h old, past the 15 min threshold
+	batch := &UserAlertBatch{UserID: 1, ChatID: 1000, Language: "en", Alerts: []AlertItem{{
+		RuleID: 1, ParamsVersion: 1, Symbol: "AAPL", PriceUSD: 150, ChangePct: floatPtr(1.2),
+		AssetType: "stock", ChangePct7d: floatPtr(-2.5), FetchedAt: fetched,
+		Week52High: floatPtr(200), Week52Low: floatPtr(90),
+		Trigger:  rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: 100, Currency: rules.CurrencyUSD},
+		Distance: rules.Distance{Kind: rules.DistanceLevel, Level: 100, Pct: -100.0 / 3, Passed: true},
+	}}}
+	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	require.True(t, w.dispatchUserBatch(batch, at, alertmsg.Rate{Value: 16000}))
+
+	require.Len(t, notif.calls, 1)
+	msg := notif.calls[0].Message
+	assert.Contains(t, msg, "7d")
+	assert.Contains(t, msg, "52")
+	assert.Contains(t, msg, "200")
+	assert.Contains(t, msg, "90")
+	assert.Contains(t, msg, "⏳", "FetchedAt is mapped: the 1 h old data gets an age line")
+	assert.Contains(t, msg, `past by 33\.3%`, "Distance is mapped")
+	assert.Contains(t, msg, "Today", "AssetType is mapped: a stock's 24h label")
+}
+
+func TestDataAgeThresholdMatchesManualMaxAge(t *testing.T) {
+	assert.Equal(t, cache.ManualMaxAge, alertmsg.DataAgeThreshold)
 }

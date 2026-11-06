@@ -2,6 +2,7 @@ package alertmsg
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ type ReportSymbol struct {
 	PriceUSD    float64
 	NativeIDR   float64 // gold: the source's own rupiah price; 0 otherwise
 	ChangePct   *float64
+	AssetType   string     // "crypto", "stock" or "gold"; empty is shown like crypto
+	ChangePct7d *float64   // nil when unknown
 	StaleSince  *time.Time // cached data used after a refused or failed refresh
 	Rules       []ReportRule
 }
@@ -73,7 +76,10 @@ func reportBlock(lang string, at time.Time, rate Rate, s ReportSymbol) string {
 	for _, r := range rs {
 		lines = append(lines, triggerEmoji(r.Trigger)+" "+esc(reportRuleText(lang, rate, r)))
 	}
-	return strings.Join(append(lines, changeLine(s.ChangePct)), "\n")
+	if l := changeLine(lang, s.AssetType, s.ChangePct, s.ChangePct7d); l != "" {
+		lines = append(lines, l)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // reportRuleText names the user's rule and where the price is relative to
@@ -137,7 +143,7 @@ func distanceTail(lang string, d rules.Distance) string {
 	switch d.Kind {
 	case rules.DistanceLevel:
 		if d.Passed {
-			return pick(lang, " · passed", " · sudah lewat")
+			return pick(lang, " · past by ", " · sudah lewat ") + fmt.Sprintf("%.1f%%", math.Abs(d.Pct))
 		}
 		s := pick(lang, " · distance ", " · jarak ") + fmt.Sprintf("%+.1f%%", d.Pct)
 		if d.Near {

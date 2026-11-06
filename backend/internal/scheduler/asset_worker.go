@@ -110,6 +110,22 @@ type AlertItem struct {
 	ChangePct *float64
 	Trigger   rules.Trigger
 	OnSent    rules.Patch
+
+	AssetType   string
+	ChangePct7d *float64
+	FetchedAt   time.Time
+	Week52High  *float64
+	Week52Low   *float64
+	// Distance is measured with the state this run just observed, so a
+	// trailing stop that raised its peak and fired reports the new peak.
+	Distance rules.Distance
+}
+
+// alertMeta is the per-symbol context copied onto every alert of a run.
+type alertMeta struct {
+	AssetType   string
+	ChangePct7d *float64
+	FetchedAt   time.Time
 }
 
 // UserAlertBatch accumulates every AlertItem fired for one user during a
@@ -372,7 +388,9 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	}
 	market := marketFromData(marketData)
 	res.idrWaiting = countIDRWaiting(symbol.Symbol, rows, market)
+	week52Tried := false
 	if symbol.NeedsWeek52 && symbol.AssetType == "crypto" {
+		week52Tried = true
 		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
 		if wErr != nil {
 			res.dataErrors++
@@ -384,8 +402,33 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 
 	nativeIDR := nativeIDRFor(symbol.AssetType, marketData)
 
-	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, nativeIDR, scope, batches)
+	meta := alertMeta{AssetType: symbol.AssetType, ChangePct7d: marketData.ChangePct7d, FetchedAt: marketData.LastFetched}
+	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, nativeIDR, meta, scope, batches)
+
+	// A crypto alert shows the 52-week range, but only a week52_break rule
+	// loads it up front. Fetch it once now that an alert fired. A failure is
+	// not a data error: the alert is sent without the 52-week line.
+	if symbol.AssetType == "crypto" && res.triggered > 0 && market.Week52High == nil && !week52Tried {
+		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
+		if wErr != nil {
+			log.Printf("[WARN] processSymbol: 52-week range for %s skipped in the alert: %v", symbol.Symbol, wErr)
+		} else {
+			fillWeek52(batches, symbol.Symbol, &high, &low)
+		}
+	}
 	return res, nil
+}
+
+// fillWeek52 sets the 52-week range on every alert of symbol that has none.
+func fillWeek52(batches map[uint64]*UserAlertBatch, symbol string, high, low *float64) {
+	for _, batch := range batches {
+		for i := range batch.Alerts {
+			a := &batch.Alerts[i]
+			if a.Symbol == symbol && a.Week52High == nil {
+				a.Week52High, a.Week52Low = high, low
+			}
+		}
+	}
 }
 
 // evaluateRules evaluates every row against market, persists each rule's
@@ -398,6 +441,7 @@ func (w *AssetWorker) evaluateRules(
 	symbol string,
 	market rules.Market,
 	nativeIDR float64,
+	meta alertMeta,
 	scope runScope,
 	batches map[uint64]*UserAlertBatch,
 ) int {
@@ -434,6 +478,12 @@ func (w *AssetWorker) evaluateRules(
 			ChangePct:     market.ChangePct24h,
 			Trigger:       out.Trigger,
 			OnSent:        out.OnSent,
+			AssetType:     meta.AssetType,
+			ChangePct7d:   meta.ChangePct7d,
+			FetchedAt:     meta.FetchedAt,
+			Week52High:    market.Week52High,
+			Week52Low:     market.Week52Low,
+			Distance:      rules.DistanceTo(rules.WithPatch(row.Rule, out.Observed), market),
 		})
 		triggered++
 	}
@@ -495,6 +545,8 @@ func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, at time.Time, rat
 		alerts = append(alerts, alertmsg.AssetAlert{
 			RuleID: a.RuleID, Symbol: a.Symbol, PriceUSD: a.PriceUSD,
 			NativeIDR: a.NativeIDR, ChangePct: a.ChangePct, Trigger: a.Trigger,
+			AssetType: a.AssetType, ChangePct7d: a.ChangePct7d, FetchedAt: a.FetchedAt,
+			Week52High: a.Week52High, Week52Low: a.Week52Low, Distance: a.Distance,
 		})
 	}
 	messages := alertmsg.AssetMessages(batch.Language, at, rate, alerts)

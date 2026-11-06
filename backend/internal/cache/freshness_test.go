@@ -21,6 +21,15 @@ type fakeFetcher struct {
 	calls int
 	res   *asset.FetchResult
 	err   error
+
+	closesCalls int
+	closes      []asset.DailyClose
+	closesErr   error
+}
+
+func (f *fakeFetcher) FetchStockCloses(string) ([]asset.DailyClose, error) {
+	f.closesCalls++
+	return f.closes, f.closesErr
 }
 
 func (f *fakeFetcher) FetchAsset(symbol, _ string) (*asset.FetchResult, error) {
@@ -48,7 +57,7 @@ func (b *fakeBudget) TryUse(context.Context, int) (bool, error) {
 	return b.allow && b.err == nil, b.err
 }
 
-var marketColumns = []string{"symbol", "price_usd", "price_idr", "change_pct_24h", "week52_high_usd", "week52_low_usd", "high_usd", "high_since", "last_fetched", "source"}
+var marketColumns = []string{"symbol", "price_usd", "price_idr", "change_pct_24h", "change_pct_7d", "week52_high_usd", "week52_low_usd", "high_usd", "high_since", "last_fetched", "source"}
 
 // freshnessCache has `cached` (if not nil) in Redis, a 4 h TTL, a fixed
 // clock and rate, and no MySQL row unless the test adds one.
@@ -112,7 +121,7 @@ func TestGetMarketData_ManualStockWithBudgetRefreshes(t *testing.T) {
 	d, err := c.GetMarketData(context.Background(), "AAPL", "stock", manual)
 	require.NoError(t, err)
 	assert.Equal(t, 200.0, d.PriceUSD)
-	assert.Equal(t, 1, b.calls)
+	assert.Equal(t, 2, b.calls, "one credit for the quote, one for the 7-day reference")
 }
 
 func TestGetMarketData_ManualStockWithoutBudgetUsesCacheMarkedStale(t *testing.T) {
@@ -165,7 +174,7 @@ func TestGetMarketData_PeriodicNeverUsesBudget(t *testing.T) {
 	// An expired entry is refetched with no budget check at all.
 	c2, mock := freshnessCache(t, nil, f, b)
 	mock.ExpectQuery(`FROM market_cache`).WithArgs("AAPL").WillReturnRows(sqlmock.NewRows(marketColumns).
-		AddRow("AAPL", 100.0, 1790800.0, nil, nil, nil, nil, nil, now.Add(-5*time.Hour), "test"))
+		AddRow("AAPL", 100.0, 1790800.0, nil, nil, nil, nil, nil, nil, now.Add(-5*time.Hour), "test"))
 	expectUpsert(mock)
 	d, err = c2.GetMarketData(context.Background(), "AAPL", "stock", FetchOptions{})
 	require.NoError(t, err)
@@ -177,7 +186,7 @@ func TestGetMarketData_PeriodicFetchErrorStaysAnError(t *testing.T) {
 	f := &fakeFetcher{err: errors.New("down")}
 	c, mock := freshnessCache(t, nil, f, &fakeBudget{})
 	mock.ExpectQuery(`FROM market_cache`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(marketColumns).
-		AddRow("BTC", 100.0, 1790800.0, nil, nil, nil, nil, nil, now.Add(-5*time.Hour), "test"))
+		AddRow("BTC", 100.0, 1790800.0, nil, nil, nil, nil, nil, nil, now.Add(-5*time.Hour), "test"))
 	_, err := c.GetMarketData(context.Background(), "BTC", "crypto", FetchOptions{})
 	assert.Error(t, err)
 }
@@ -187,7 +196,7 @@ func TestGetMarketData_StoresTheHighAndItsWindow(t *testing.T) {
 	f := &fakeFetcher{res: &asset.FetchResult{PriceUSD: 81211, HighUSD: &high, HighSince: &since, FetchedAt: now}}
 	c, mock := freshnessCache(t, entry("BTC", 20*time.Minute), f, &fakeBudget{})
 	mock.ExpectExec(`INSERT INTO market_cache`).
-		WithArgs("BTC", 81211.0, 81211*17908.0, nil, nil, nil, high, since, now, "").
+		WithArgs("BTC", 81211.0, 81211*17908.0, nil, nil, nil, nil, high, since, now, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	d, err := c.GetMarketData(context.Background(), "BTC", "crypto", manual)
@@ -211,7 +220,7 @@ func TestGetMarketData_ReadsTheHighFromMySQL(t *testing.T) {
 	c, mock := freshnessCache(t, nil, &fakeFetcher{}, &fakeBudget{})
 	since := now.Add(-3 * time.Hour)
 	mock.ExpectQuery(`FROM market_cache`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(marketColumns).
-		AddRow("BTC", 100.0, 1790800.0, nil, nil, nil, 105.0, since, now.Add(-time.Hour), "coingecko"))
+		AddRow("BTC", 100.0, 1790800.0, nil, nil, nil, nil, 105.0, since, now.Add(-time.Hour), "coingecko"))
 	d, err := c.GetMarketData(context.Background(), "BTC", "crypto", FetchOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, d.HighUSD)
@@ -240,7 +249,7 @@ func TestGetMarketData_RedisDownUsesTheMySQLRow(t *testing.T) {
 	}
 	row := func(mock sqlmock.Sqlmock, age time.Duration) {
 		mock.ExpectQuery(`FROM market_cache`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(marketColumns).
-			AddRow("BTC", 100.0, 1790800.0, nil, nil, nil, nil, nil, now.Add(-age), "test"))
+			AddRow("BTC", 100.0, 1790800.0, nil, nil, nil, nil, nil, nil, now.Add(-age), "test"))
 	}
 
 	t.Run("fresh row is served without a fetch", func(t *testing.T) {

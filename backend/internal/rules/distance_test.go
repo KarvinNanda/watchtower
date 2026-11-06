@@ -2,6 +2,7 @@ package rules
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -112,4 +113,27 @@ func TestDistanceTo_TrailingStopIDR(t *testing.T) {
 	assert.Equal(t, Distance{Kind: DistanceUnavailable}, DistanceTo(r, Market{PriceUSD: 130}))
 	r.State.PeakPriceIDR = nil
 	assert.Equal(t, Distance{Kind: DistanceWaitingPeak}, DistanceTo(r, Market{PriceUSD: 130, PriceIDR: &idr}))
+}
+
+func TestWithPatch(t *testing.T) {
+	peak, newPeak := 100.0, 110.0
+	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	beyond := true
+	orig := Rule{ID: 1, State: State{BaselinePending: true, PeakPriceUSD: &peak, PeakSince: &since}}
+
+	got := WithPatch(orig, Patch{ClearBaseline: true, PeakPriceUSD: &newPeak, LastBeyond: &beyond,
+		Alert: &AlertMark{PriceUSD: 5}, Fired: &FiredMark{PriceUSD: 5}})
+
+	assert.Equal(t, 110.0, *got.State.PeakPriceUSD)
+	assert.False(t, got.State.BaselinePending)
+	assert.True(t, *got.State.LastBeyond)
+	assert.Equal(t, &since, got.State.PeakSince, "nil patch fields stay untouched")
+	assert.Nil(t, got.State.PeakPriceIDR)
+	assert.Nil(t, got.State.Week52RefUSD)
+	assert.Nil(t, got.State.LastAlertedPriceUSD, "Alert is not rule state for WithPatch")
+	assert.Equal(t, 100.0, *orig.State.PeakPriceUSD, "the original rule is unchanged")
+	assert.True(t, orig.State.BaselinePending)
+	assert.Nil(t, orig.State.LastBeyond)
+
+	assert.Equal(t, orig, WithPatch(orig, Patch{}), "an empty patch changes nothing")
 }

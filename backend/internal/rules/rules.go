@@ -154,6 +154,32 @@ func (p Patch) IsEmpty() bool {
 		p.Week52RefUSD == nil && p.Alert == nil && p.Fired == nil
 }
 
+// WithPatch returns a copy of r with the state fields of p applied: the five
+// observed state fields plus ClearBaseline, which clears BaselinePending.
+// Alert and Fired are not rule state here and are ignored. r itself is not
+// changed.
+func WithPatch(r Rule, p Patch) Rule {
+	if p.ClearBaseline {
+		r.State.BaselinePending = false
+	}
+	if p.LastBeyond != nil {
+		r.State.LastBeyond = p.LastBeyond
+	}
+	if p.PeakPriceUSD != nil {
+		r.State.PeakPriceUSD = p.PeakPriceUSD
+	}
+	if p.PeakSince != nil {
+		r.State.PeakSince = p.PeakSince
+	}
+	if p.PeakPriceIDR != nil {
+		r.State.PeakPriceIDR = p.PeakPriceIDR
+	}
+	if p.Week52RefUSD != nil {
+		r.State.Week52RefUSD = p.Week52RefUSD
+	}
+	return r
+}
+
 // Trigger is what the alert message needs to describe why a rule fired.
 type Trigger struct {
 	Type         Type

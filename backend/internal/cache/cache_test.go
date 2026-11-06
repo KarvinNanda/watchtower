@@ -44,15 +44,16 @@ func TestGoldChangeFromSnapshots_ComputesInIDR(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO price_snapshots`).WithArgs("ANTAM", 2392157.0, now).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`DELETE FROM price_snapshots`).WithArgs("ANTAM", now.Add(-snapshotRetention)).WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectQuery(`SELECT price, observed_at FROM price_snapshots`).
-		WithArgs("ANTAM", now.Add(-changeWindowMax), now.Add(-changeWindowMin)).
+		WithArgs("ANTAM", now.Add(-weekWindowMax), now.Add(-changeWindowMin)).
 		WillReturnRows(sqlmock.NewRows([]string{"price", "observed_at"}).
 			AddRow(2370000.0, now.Add(-24*time.Hour)).
 			AddRow(2380000.0, now.Add(-21*time.Hour)))
 
-	change, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
+	day, week, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
 	require.NoError(t, err)
-	require.NotNil(t, change)
-	assert.InDelta(t, (2392157.0-2370000.0)/2370000.0*100, *change, 1e-9)
+	require.NotNil(t, day)
+	assert.InDelta(t, (2392157.0-2370000.0)/2370000.0*100, *day, 1e-9)
+	assert.Nil(t, week)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -67,9 +68,10 @@ func TestGoldChangeFromSnapshots_UnknownWithoutHistory(t *testing.T) {
 	mock.ExpectQuery(`SELECT price, observed_at FROM price_snapshots`).
 		WillReturnRows(sqlmock.NewRows([]string{"price", "observed_at"}))
 
-	change, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
+	day, week, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
 	require.NoError(t, err)
-	assert.Nil(t, change)
+	assert.Nil(t, day)
+	assert.Nil(t, week)
 }
 
 func TestGetFromMySQL_NullChangeAndWeek52(t *testing.T) {
@@ -79,7 +81,7 @@ func TestGetFromMySQL_NullChangeAndWeek52(t *testing.T) {
 	c := &Cache{db: db, ttlHours: 4}
 
 	mock.ExpectQuery(`FROM market_cache`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(marketColumns).
-		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, nil, nil, time.Now(), "harga-emas.org"))
+		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, nil, nil, nil, time.Now(), "harga-emas.org"))
 
 	d, err := c.getFromMySQL(context.Background(), "ANTAM")
 	require.NoError(t, err)
@@ -132,7 +134,7 @@ func TestGetMarketData_IgnoresPreUpgradeRedisEntries(t *testing.T) {
 		`{"symbol":"ANTAM","price_usd":146,"price_idr":2392157,"change_pct_24h":0,"last_fetched":"2026-10-15T00:00:00Z","source":"harga-emas.org"}`))
 
 	mock.ExpectQuery(`FROM market_cache`).WithArgs("ANTAM").WillReturnRows(sqlmock.NewRows(marketColumns).
-		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, nil, nil, time.Now(), "harga-emas.org"))
+		AddRow("ANTAM", 146.0, 2392157.0, nil, nil, nil, nil, nil, nil, time.Now(), "harga-emas.org"))
 
 	d, err := c.GetMarketData(context.Background(), "ANTAM", "gold", FetchOptions{})
 	require.NoError(t, err)
@@ -146,4 +148,59 @@ func TestDisplayIDR(t *testing.T) {
 	assert.Equal(t, 150*17908.0, displayIDR(0, 150, currency.Rate{Value: 17908}))
 	assert.Zero(t, displayIDR(0, 150, currency.Rate{Value: 16000, Fallback: true}), "fallback rate: IDR unknown")
 	assert.Zero(t, displayIDR(0, 150, currency.Rate{}), "no rate: IDR unknown")
+}
+
+func TestSetMarketData_WritesChangePct7d(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	mr := miniredis.RunT(t)
+	c := &Cache{redis: redis.NewClient(&redis.Options{Addr: mr.Addr()}), db: db, ttlHours: 4}
+
+	d7 := 1234.5678
+	data := &MarketData{Symbol: "BTC", PriceUSD: 100, PriceIDR: 1790800, ChangePct7d: &d7, LastFetched: now, Source: "test"}
+	mock.ExpectExec(`INSERT INTO market_cache .*change_pct_7d.*ON DUPLICATE KEY UPDATE.*change_pct_7d = VALUES\(change_pct_7d\)`).
+		WithArgs("BTC", 100.0, 1790800.0, nil, 1234.5678, nil, nil, nil, nil, now, "test").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	require.NoError(t, c.SetMarketData(context.Background(), data))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetFromMySQL_ReadsChangePct7d(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	c := &Cache{db: db, ttlHours: 4}
+
+	mock.ExpectQuery(`FROM market_cache`).WithArgs("BTC").WillReturnRows(sqlmock.NewRows(marketColumns).
+		AddRow("BTC", 100.0, 1790800.0, nil, -3.0276, nil, nil, nil, nil, now, "test"))
+	d, err := c.getFromMySQL(context.Background(), "BTC")
+	require.NoError(t, err)
+	require.NotNil(t, d.ChangePct7d)
+	assert.Equal(t, -3.0276, *d.ChangePct7d)
+
+	mock.ExpectQuery(`FROM market_cache`).WithArgs("ETH").WillReturnRows(sqlmock.NewRows(marketColumns).
+		AddRow("ETH", 100.0, 1790800.0, nil, nil, nil, nil, nil, nil, now, "test"))
+	d, err = c.getFromMySQL(context.Background(), "ETH")
+	require.NoError(t, err)
+	assert.Nil(t, d.ChangePct7d)
+}
+
+func TestMarketDataJSON_ChangePct7d(t *testing.T) {
+	mr := miniredis.RunT(t)
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	c := &Cache{redis: redis.NewClient(&redis.Options{Addr: mr.Addr()}), db: db, ttlHours: 4}
+
+	d7 := -3.0276
+	require.NoError(t, c.setRedis(context.Background(), &MarketData{Symbol: "BTC", ChangePct7d: &d7}))
+	raw, err := mr.Get(marketKey("BTC"))
+	require.NoError(t, err)
+	assert.Contains(t, raw, `"change_pct_7d":-3.0276`)
+	var got MarketData
+	require.NoError(t, json.Unmarshal([]byte(raw), &got))
+	require.NotNil(t, got.ChangePct7d)
+	assert.Equal(t, -3.0276, *got.ChangePct7d)
 }

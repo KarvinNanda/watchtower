@@ -102,3 +102,24 @@ func TestAssetReportMessages_Content(t *testing.T) {
 	assert.Less(t, strings.Index(m, "*AAPL*"), strings.Index(m, "*ANTAM*"))
 	assert.Less(t, strings.Index(m, "1\\.600\\.000\\.000"), strings.Index(m, "Trailing stop"), "rules by ID: 2 before 3")
 }
+
+func TestReportMessages_ChangeLineAndPassedAmount(t *testing.T) {
+	passed := rules.Distance{Kind: rules.DistanceLevel, Passed: true, Pct: -2.1}
+	syms := []ReportSymbol{
+		{Symbol: "AAPL", AssetType: "stock", PriceUSD: 190, ChangePct: f64(1.5), ChangePct7d: f64(-2), Rules: []ReportRule{
+			{RuleID: 1, Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: 186}, Distance: passed}}},
+		{Symbol: "BTC", AssetType: "crypto", PriceUSD: 81714, ChangePct: f64(-1.8), ChangePct7d: f64(-3.0276)},
+		{Symbol: "ETH", AssetType: "crypto", PriceUSD: 2500},
+	}
+	id := AssetReportMessages("id", jakartaAt(t), testRate, syms)
+	en := AssetReportMessages("en", jakartaAt(t), testRate, syms)
+	require.Len(t, id, 1)
+	require.Len(t, en, 1)
+	assert.Contains(t, id[0], esc("sudah lewat 2.1%"))
+	assert.Contains(t, en[0], esc("past by 2.1%"))
+	assert.Contains(t, id[0], esc("📈 Hari ini: +1.50% (vs tutup kemarin) · 7 hari: -2.00%"))
+	assert.Contains(t, id[0], esc("📉 24 jam: -1.80% · 7 hari: -3.03%"))
+	assert.NotContains(t, id[0], "n/a", "a missing change drops the line")
+	assertGolden(t, "report_id_enriched", id)
+	assertGolden(t, "report_en_enriched", en)
+}

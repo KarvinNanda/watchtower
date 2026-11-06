@@ -45,6 +45,9 @@ type FetchResult struct {
 	PriceIDR float64
 	// ChangePct24h is nil when the source gives no usable 24h change.
 	ChangePct24h *float64
+	// ChangePct7d is the source's 7-day change, crypto only. Nil when the
+	// source does not give it.
+	ChangePct7d *float64
 	// Week52HighUSD and Week52LowUSD come from Twelve Data's /quote for
 	// stocks. Crypto uses FetchCryptoWeek52; gold has no source.
 	Week52HighUSD *float64
@@ -54,8 +57,12 @@ type FetchResult struct {
 	// last) trading session. Both nil when unknown; gold has no source.
 	HighUSD   *float64
 	HighSince *time.Time
-	Source    string
-	FetchedAt time.Time
+	// SessionDay is the trading date of a stock quote (its "datetime"), at
+	// 00:00 UTC. Zero when unknown or for crypto and gold. The stock 7-day
+	// change is measured from this session, not from the fetch time.
+	SessionDay time.Time
+	Source     string
+	FetchedAt  time.Time
 }
 
 // AssetFetcher fetches live market data for stocks, crypto, and gold. The
@@ -138,7 +145,11 @@ func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
 	f.cryptoPacer.wait()
 
 	coinID := coinGeckoID(symbol)
-	endpoint := fmt.Sprintf("%s/coins/markets?vs_currency=usd&ids=%s", CoinGeckoBaseURL, url.QueryEscape(coinID))
+	q := url.Values{}
+	q.Set("vs_currency", "usd")
+	q.Set("ids", coinID)
+	q.Set("price_change_percentage", "7d")
+	endpoint := CoinGeckoBaseURL + "/coins/markets?" + q.Encode()
 
 	req, err := f.coinGeckoRequest(endpoint)
 	if err != nil {
@@ -164,6 +175,7 @@ func decodeCoinGeckoMarkets(r io.Reader, symbol string, now time.Time) (*FetchRe
 	var results []struct {
 		CurrentPrice             float64  `json:"current_price"`
 		PriceChangePercentage24h *float64 `json:"price_change_percentage_24h"`
+		PriceChangePercentage7d  *float64 `json:"price_change_percentage_7d_in_currency"`
 		High24h                  *float64 `json:"high_24h"`
 	}
 	if err := json.NewDecoder(r).Decode(&results); err != nil {
@@ -177,6 +189,7 @@ func decodeCoinGeckoMarkets(r io.Reader, symbol string, now time.Time) (*FetchRe
 		Symbol:       symbol,
 		PriceUSD:     results[0].CurrentPrice,
 		ChangePct24h: results[0].PriceChangePercentage24h,
+		ChangePct7d:  results[0].PriceChangePercentage7d,
 		Source:       "coingecko",
 		FetchedAt:    now,
 	}
@@ -264,6 +277,7 @@ func (f *AssetFetcher) fetchStockOnce(symbol string) (*FetchResult, error) {
 func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 	var raw struct {
 		Close         string `json:"close"`
+		Datetime      string `json:"datetime"`
 		PercentChange string `json:"percent_change"`
 		High          string `json:"high"`
 		// Timestamp is read leniently (#48): a string or empty value must
@@ -305,6 +319,9 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		Week52LowUSD:  parseOptionalFloat(raw.FiftyTwoWeek.Low),
 		Source:        "twelve_data",
 		FetchedAt:     time.Now(),
+	}
+	if day, err := time.Parse("2006-01-02", raw.Datetime); err == nil {
+		res.SessionDay = day
 	}
 	// high is the session's high; timestamp is the session's start. A high
 	// without its window start cannot be used safely, so both or neither. A

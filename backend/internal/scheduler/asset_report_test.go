@@ -77,7 +77,7 @@ func TestReportForUser_SendsOneReportAndWritesNoRuleState(t *testing.T) {
 	require.Len(t, notif.calls, 1)
 	assert.Equal(t, int64(1000), notif.calls[0].ChatID)
 	assert.Contains(t, notif.calls[0].Message, "Asset status report")
-	assert.Contains(t, notif.calls[0].Message, "passed")
+	assert.Contains(t, notif.calls[0].Message, "past by")
 	assert.NoError(t, mock.ExpectationsWereMet())
 	for _, stmt := range seen.stmts {
 		assert.NotContains(t, strings.ToUpper(stmt), "UPDATE", "the report must never write rule state")
@@ -204,4 +204,16 @@ func TestReportForUser_WaitsForTheRunLock(t *testing.T) {
 		t.Fatal("ReportForUser never ran after the lock was released")
 	}
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestReportSymbol_CarriesAssetTypeAnd7d(t *testing.T) {
+	w, mock, _, _ := newRecordingAssetWorker(t)
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150, ChangePct7d: floatPtr(3.5)}}}
+	expectReportRule(mock, "BTC", 1)
+
+	item, _, err := w.reportSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, 7)
+
+	require.NoError(t, err)
+	assert.Equal(t, "crypto", item.AssetType)
+	assert.Equal(t, floatPtr(3.5), item.ChangePct7d)
 }

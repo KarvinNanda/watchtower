@@ -124,3 +124,17 @@ func TestMigrations_LegacyDataUpgradeAndRollback(t *testing.T) {
 	require.True(t, err == nil || errors.Is(err, migrate.ErrNoChange), "%v", err)
 	assert.Equal(t, 9, count(t, db, `SELECT COUNT(*) FROM asset_rules`))
 }
+
+// TestMigration24_ChangePct7d checks that market_cache.change_pct_7d is added
+// as a nullable column and removed again on rollback.
+func TestMigration24_ChangePct7d(t *testing.T) {
+	db, m := newMigrationDB(t)
+	const q = `SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = 'market_cache'
+		AND column_name = 'change_pct_7d' AND is_nullable = 'YES'`
+	require.NoError(t, m.Migrate(24))
+	assert.Equal(t, 1, count(t, db, q))
+	require.NoError(t, m.Migrate(23))
+	assert.Equal(t, 0, count(t, db, `SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = 'market_cache' AND column_name = 'change_pct_7d'`))
+}

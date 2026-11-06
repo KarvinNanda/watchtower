@@ -43,6 +43,12 @@ const (
 	snapshotRetention = 8 * 24 * time.Hour
 	changeWindowMin   = 20 * time.Hour
 	changeWindowMax   = 28 * time.Hour
+	// The 7-day change picks the snapshot closest to 7 d ago within 6-8 d.
+	// One SELECT from changeWindowMin to weekWindowMax feeds both picks.
+	weekWindowMin = 6 * 24 * time.Hour
+	weekWindowMax = snapshotRetention
+
+	closes7dKeyPrefix = "asset:closes7d:"
 )
 
 // ManualMaxAge is the oldest price a manual run accepts (spec Q2).
@@ -60,6 +66,7 @@ type FetchOptions struct {
 type marketFetcher interface {
 	FetchAsset(symbol, assetType string) (*asset.FetchResult, error)
 	FetchCryptoWeek52(symbol string) (high, low float64, err error)
+	FetchStockCloses(symbol string) ([]asset.DailyClose, error)
 }
 
 // manualBudget is the subset of quota.Budget the cache uses.
@@ -74,6 +81,7 @@ type MarketData struct {
 	PriceUSD      float64    `json:"price_usd"`
 	PriceIDR      float64    `json:"price_idr"`
 	ChangePct24h  *float64   `json:"change_pct_24h"`
+	ChangePct7d   *float64   `json:"change_pct_7d"`
 	Week52HighUSD *float64   `json:"week52_high_usd"`
 	Week52LowUSD  *float64   `json:"week52_low_usd"`
 	HighUSD       *float64   `json:"high_usd"`
@@ -166,7 +174,7 @@ func (c *Cache) GetMarketData(ctx context.Context, symbol, assetType string, opt
 		}
 	}
 
-	fresh, err := c.refresh(ctx, symbol, assetType)
+	fresh, err := c.refresh(ctx, symbol, assetType, opts.Manual)
 	if err != nil {
 		if opts.Manual && usable {
 			log.Printf("[WARN] GetMarketData: manual refresh of %s failed, using cached data: %v", symbol, err)
@@ -199,7 +207,9 @@ func markStale(d *MarketData) *MarketData {
 }
 
 // refresh fetches symbol from its external API and stores it in both layers.
-func (c *Cache) refresh(ctx context.Context, symbol, assetType string) (*MarketData, error) {
+// manual is true for a user's Check now: the stock 7-day reference then
+// spends its own manual budget credit.
+func (c *Cache) refresh(ctx context.Context, symbol, assetType string, manual bool) (*MarketData, error) {
 	result, err := c.fetcher.FetchAsset(symbol, assetType)
 	if err != nil {
 		return nil, fmt.Errorf("cache: refresh %s from external api: %w", symbol, err)
@@ -217,6 +227,7 @@ func (c *Cache) refresh(ctx context.Context, symbol, assetType string) (*MarketD
 		PriceUSD:      result.PriceUSD,
 		PriceIDR:      displayIDR(result.PriceIDR, result.PriceUSD, rate),
 		ChangePct24h:  result.ChangePct24h,
+		ChangePct7d:   result.ChangePct7d,
 		Week52HighUSD: result.Week52HighUSD,
 		Week52LowUSD:  result.Week52LowUSD,
 		HighUSD:       result.HighUSD,
@@ -226,11 +237,15 @@ func (c *Cache) refresh(ctx context.Context, symbol, assetType string) (*MarketD
 	}
 
 	if assetType == "gold" && result.PriceIDR > 0 {
-		change, err := c.goldChangeFromSnapshots(ctx, symbol, result.PriceIDR, result.FetchedAt)
+		day, week, err := c.goldChangeFromSnapshots(ctx, symbol, result.PriceIDR, result.FetchedAt)
 		if err != nil {
 			log.Printf("[ERROR] GetMarketData: gold change for %s: %v", symbol, err)
 		}
-		freshData.ChangePct24h = change
+		freshData.ChangePct24h = day
+		freshData.ChangePct7d = week
+	}
+	if assetType == "stock" {
+		freshData.ChangePct7d = c.stockChange7d(ctx, symbol, result.PriceUSD, result.SessionDay, manual)
 	}
 
 	if err := c.SetMarketData(ctx, freshData); err != nil {
@@ -241,14 +256,16 @@ func (c *Cache) refresh(ctx context.Context, symbol, assetType string) (*MarketD
 
 // goldChangeFromSnapshots stores priceIDR as a snapshot, prunes snapshots
 // older than snapshotRetention, and returns the change against the
-// snapshot closest to 24 h ago (nil when none is in the 20-28 h window).
-// The change is computed in IDR so USD/IDR movement does not leak in.
-func (c *Cache) goldChangeFromSnapshots(ctx context.Context, symbol string, priceIDR float64, now time.Time) (*float64, error) {
+// snapshot closest to 24 h ago (day, nil when none is in the 20-28 h
+// window) and against the one closest to 7 d ago (week, nil when none is
+// in the 6-8 d window). Changes are computed in IDR so USD/IDR movement
+// does not leak in.
+func (c *Cache) goldChangeFromSnapshots(ctx context.Context, symbol string, priceIDR float64, now time.Time) (day, week *float64, err error) {
 	if _, err := c.db.ExecContext(ctx,
 		`INSERT INTO price_snapshots (symbol, price, currency, observed_at) VALUES (?, ?, 'IDR', ?)`,
 		symbol, priceIDR, now,
 	); err != nil {
-		return nil, fmt.Errorf("insert price snapshot: %w", err)
+		return nil, nil, fmt.Errorf("insert price snapshot: %w", err)
 	}
 	if _, err := c.db.ExecContext(ctx,
 		`DELETE FROM price_snapshots WHERE symbol = ? AND observed_at < ?`,
@@ -257,12 +274,13 @@ func (c *Cache) goldChangeFromSnapshots(ctx context.Context, symbol string, pric
 		log.Printf("[ERROR] goldChangeFromSnapshots: prune %s: %v", symbol, err)
 	}
 
+	// One query covers both windows; the pick functions filter by age.
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT price, observed_at FROM price_snapshots WHERE symbol = ? AND observed_at BETWEEN ? AND ?`,
-		symbol, now.Add(-changeWindowMax), now.Add(-changeWindowMin),
+		symbol, now.Add(-weekWindowMax), now.Add(-changeWindowMin),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query price snapshots: %w", err)
+		return nil, nil, fmt.Errorf("query price snapshots: %w", err)
 	}
 	defer rows.Close()
 
@@ -270,35 +288,50 @@ func (c *Cache) goldChangeFromSnapshots(ctx context.Context, symbol string, pric
 	for rows.Next() {
 		var s Snapshot
 		if err := rows.Scan(&s.Price, &s.ObservedAt); err != nil {
-			return nil, fmt.Errorf("scan price snapshot: %w", err)
+			return nil, nil, fmt.Errorf("scan price snapshot: %w", err)
 		}
 		snaps = append(snaps, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read price snapshots: %w", err)
+		return nil, nil, fmt.Errorf("read price snapshots: %w", err)
 	}
 
-	prev, ok := pickDaySnapshot(snaps, now)
-	if !ok || prev.Price == 0 {
-		return nil, nil
+	if prev, ok := pickDaySnapshot(snaps, now); ok && prev.Price != 0 {
+		v := (priceIDR - prev.Price) / prev.Price * 100
+		day = &v
 	}
-	change := (priceIDR - prev.Price) / prev.Price * 100
-	return &change, nil
+	if prev, ok := pickWeekSnapshot(snaps, now); ok && prev.Price != 0 {
+		v := (priceIDR - prev.Price) / prev.Price * 100
+		week = &v
+	}
+	return day, week, nil
 }
 
 // pickDaySnapshot returns the snapshot closest to 24 h before now among
 // those observed between changeWindowMax and changeWindowMin ago.
 func pickDaySnapshot(snaps []Snapshot, now time.Time) (Snapshot, bool) {
-	target := now.Add(-24 * time.Hour)
+	return pickClosest(snaps, now, 24*time.Hour, changeWindowMin, changeWindowMax)
+}
+
+// pickWeekSnapshot returns the snapshot closest to 7 d before now among
+// those observed between weekWindowMax and weekWindowMin ago.
+func pickWeekSnapshot(snaps []Snapshot, now time.Time) (Snapshot, bool) {
+	return pickClosest(snaps, now, 7*24*time.Hour, weekWindowMin, weekWindowMax)
+}
+
+// pickClosest returns the snapshot whose age is closest to target, among
+// those with an age between minAge and maxAge.
+func pickClosest(snaps []Snapshot, now time.Time, target, minAge, maxAge time.Duration) (Snapshot, bool) {
+	want := now.Add(-target)
 	var best Snapshot
 	var bestDist time.Duration
 	found := false
 	for _, s := range snaps {
 		age := now.Sub(s.ObservedAt)
-		if age < changeWindowMin || age > changeWindowMax {
+		if age < minAge || age > maxAge {
 			continue
 		}
-		dist := s.ObservedAt.Sub(target)
+		dist := s.ObservedAt.Sub(want)
 		if dist < 0 {
 			dist = -dist
 		}
@@ -307,6 +340,100 @@ func pickDaySnapshot(snaps []Snapshot, now time.Time) (Snapshot, bool) {
 		}
 	}
 	return best, found
+}
+
+func closes7dKey(symbol string) string {
+	return closes7dKeyPrefix + symbol
+}
+
+// untilNextUTCMidnight is how long a daily reference stays valid: until
+// the next UTC midnight, but never less than a minute so a key written
+// just before midnight is not born already expired.
+func untilNextUTCMidnight(now time.Time) time.Duration {
+	u := now.UTC()
+	next := time.Date(u.Year(), u.Month(), u.Day()+1, 0, 0, 0, 0, time.UTC)
+	d := next.Sub(u)
+	if d < time.Minute {
+		d = time.Minute
+	}
+	return d
+}
+
+// closes7dTimeout bounds the stock closes lookup. It has its own context
+// so a slow /time_series call or Redis write does not run on the caller's
+// per-symbol context.
+const closes7dTimeout = 20 * time.Second
+
+// stockChange7d returns the percent change of price against the stock's
+// close about 7 days before sessionDay (the trading date of price), or nil
+// when unknown. A zero sessionDay falls back to the newest cached bar.
+//
+// The last daily closes are cached in Redis until the next UTC midnight,
+// and the reference is picked from that list on every call, so it follows
+// the session of the price (before the US open the price is still the
+// previous session's close). A miss costs one extra Twelve Data credit on
+// top of the quote, so a manual run takes its own budget credit first. A
+// failed fetch stores nothing, so the next refresh retries. A Redis read
+// error returns nil without fetching, so Redis being down does not spend a
+// credit on every refresh.
+func (c *Cache) stockChange7d(ctx context.Context, symbol string, price float64, sessionDay time.Time, manual bool) *float64 {
+	own, cancel := context.WithTimeout(context.Background(), closes7dTimeout)
+	defer cancel()
+
+	var closes []asset.DailyClose
+	raw, err := c.redis.Get(own, closes7dKey(symbol)).Bytes()
+	switch {
+	case err == nil:
+		if jsonErr := json.Unmarshal(raw, &closes); jsonErr != nil {
+			log.Printf("[ERROR] stockChange7d: decode cached closes for %s: %v", symbol, jsonErr)
+			closes = nil
+		}
+	case errors.Is(err, redis.Nil):
+	default:
+		log.Printf("[ERROR] stockChange7d: redis get %s: %v", symbol, err)
+		return nil
+	}
+
+	if len(closes) == 0 {
+		if manual {
+			ok, err := false, error(nil)
+			if c.budget != nil {
+				ok, err = c.budget.TryUse(ctx, 1)
+			}
+			if err != nil {
+				log.Printf("[ERROR] stockChange7d: manual budget for %s: %v", symbol, err)
+			}
+			if !ok {
+				return nil
+			}
+		}
+		fetched, err := c.fetcher.FetchStockCloses(symbol)
+		if err != nil {
+			log.Printf("[WARN] stockChange7d: daily closes for %s: %v", symbol, err)
+			return nil
+		}
+		if len(fetched) == 0 {
+			return nil
+		}
+		closes = fetched
+		raw, err := json.Marshal(closes)
+		if err == nil {
+			err = c.redis.Set(own, closes7dKey(symbol), raw, untilNextUTCMidnight(c.clock())).Err()
+		}
+		if err != nil {
+			log.Printf("[ERROR] stockChange7d: redis set %s: %v", symbol, err)
+		}
+	}
+
+	if sessionDay.IsZero() {
+		sessionDay = closes[0].Day
+	}
+	ref, ok := asset.PickRef7d(closes, sessionDay)
+	if !ok || ref.Close <= 0 {
+		return nil
+	}
+	change := (price - ref.Close) / ref.Close * 100
+	return &change
 }
 
 type week52Range struct {
@@ -356,15 +483,15 @@ func (c *Cache) getFromRedis(ctx context.Context, symbol string) (*MarketData, e
 
 func (c *Cache) getFromMySQL(ctx context.Context, symbol string) (*MarketData, error) {
 	var (
-		d                    MarketData
-		change, hi, lo, high sql.NullFloat64
-		highSince            sql.NullTime
+		d                              MarketData
+		change, change7d, hi, lo, high sql.NullFloat64
+		highSince                      sql.NullTime
 	)
 	err := c.db.QueryRowContext(ctx, `
-		SELECT symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source
+		SELECT symbol, price_usd, price_idr, change_pct_24h, change_pct_7d, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source
 		FROM market_cache
 		WHERE symbol = ?`, symbol,
-	).Scan(&d.Symbol, &d.PriceUSD, &d.PriceIDR, &change, &hi, &lo, &high, &highSince, &d.LastFetched, &d.Source)
+	).Scan(&d.Symbol, &d.PriceUSD, &d.PriceIDR, &change, &change7d, &hi, &lo, &high, &highSince, &d.LastFetched, &d.Source)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -372,6 +499,7 @@ func (c *Cache) getFromMySQL(ctx context.Context, symbol string) (*MarketData, e
 		return nil, fmt.Errorf("query market_cache for %s: %w", symbol, err)
 	}
 	d.ChangePct24h = nullFloatPtr(change)
+	d.ChangePct7d = nullFloatPtr(change7d)
 	d.Week52HighUSD = nullFloatPtr(hi)
 	d.Week52LowUSD = nullFloatPtr(lo)
 	d.HighUSD = nullFloatPtr(high)
@@ -410,19 +538,20 @@ func (c *Cache) SetMarketData(ctx context.Context, data *MarketData) error {
 	}
 
 	_, err := c.db.ExecContext(ctx, `
-		INSERT INTO market_cache (symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO market_cache (symbol, price_usd, price_idr, change_pct_24h, change_pct_7d, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 			price_usd = VALUES(price_usd),
 			price_idr = VALUES(price_idr),
 			change_pct_24h = VALUES(change_pct_24h),
+			change_pct_7d = VALUES(change_pct_7d),
 			week52_high_usd = VALUES(week52_high_usd),
 			week52_low_usd = VALUES(week52_low_usd),
 			high_usd = VALUES(high_usd),
 			high_since = VALUES(high_since),
 			last_fetched = VALUES(last_fetched),
 			source = VALUES(source)`,
-		data.Symbol, data.PriceUSD, data.PriceIDR, data.ChangePct24h, data.Week52HighUSD, data.Week52LowUSD, data.HighUSD, data.HighSince, data.LastFetched, data.Source,
+		data.Symbol, data.PriceUSD, data.PriceIDR, data.ChangePct24h, data.ChangePct7d, data.Week52HighUSD, data.Week52LowUSD, data.HighUSD, data.HighSince, data.LastFetched, data.Source,
 	)
 	if err != nil {
 		return fmt.Errorf("cache: upsert market_cache for %s: %w", data.Symbol, err)
