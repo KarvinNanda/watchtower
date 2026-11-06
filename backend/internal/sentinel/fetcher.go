@@ -50,7 +50,9 @@ type SentinelItem struct {
 	CVEID          string
 	Severity       string // upper-case: CRITICAL, HIGH, MEDIUM, LOW
 	CVSSScore      float64
-	KnownExploited bool // listed in CISA KEV
+	CVSSVector     string    // vector of the chosen metric, empty if unknown
+	SourceDate     time.Time // publish date from the source, zero = unknown or unparseable
+	KnownExploited bool      // listed in CISA KEV
 	RequiredAction string
 	DueDate        string
 	Ransomware     bool
@@ -161,7 +163,11 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 	if len(rss.Channel.Items) > 0 {
 		items := make([]SentinelItem, 0, len(rss.Channel.Items))
 		for _, it := range rss.Channel.Items {
-			published := parseFlexibleTime(it.PubDate, time.Now())
+			sourceDate, _ := parseTimeKnown(it.PubDate)
+			published := sourceDate
+			if published.IsZero() {
+				published = time.Now()
+			}
 			if published.Before(cutoff) {
 				continue
 			}
@@ -180,6 +186,7 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 				Description: it.Description,
 				URL:         it.Link,
 				PublishedAt: published,
+				SourceDate:  sourceDate,
 				Keywords:    extractKeywords(it.Title + " " + it.Description + " " + rawContent),
 				RawContent:  rawContent,
 			})
@@ -198,7 +205,11 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 		if dateStr == "" {
 			dateStr = e.Updated
 		}
-		published := parseFlexibleTime(dateStr, time.Now())
+		sourceDate, _ := parseTimeKnown(dateStr)
+		published := sourceDate
+		if published.IsZero() {
+			published = time.Now()
+		}
 		if published.Before(cutoff) {
 			continue
 		}
@@ -220,6 +231,7 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 			Description: e.Summary,
 			URL:         link,
 			PublishedAt: published,
+			SourceDate:  sourceDate,
 			Keywords:    extractKeywords(e.Title + " " + e.Summary + " " + rawContent),
 			RawContent:  rawContent,
 		})
@@ -293,6 +305,7 @@ func (f *SentinelFetcher) searchGitHubRepos(query string) ([]SentinelItem, error
 
 	items := make([]SentinelItem, 0, len(payload.Items))
 	for _, r := range payload.Items {
+		sourceDate, _ := parseTimeKnown(r.CreatedAt)
 		title := fmt.Sprintf("%s: %s", r.FullName, r.Description)
 		description := r.Description
 		rawContent := r.Description
@@ -307,6 +320,7 @@ func (f *SentinelFetcher) searchGitHubRepos(query string) ([]SentinelItem, error
 			Description: description,
 			URL:         r.HTMLURL,
 			PublishedAt: parseFlexibleTime(r.CreatedAt, time.Now()),
+			SourceDate:  sourceDate,
 			Keywords:    keywords,
 			RawContent:  rawContent,
 		})
@@ -481,20 +495,30 @@ var feedTimeLayouts = []string{
 	"2006-01-02",
 }
 
-// parseFlexibleTime tries a handful of common feed/API timestamp formats,
-// returning fallback (rather than erroring) if none match — a single
-// unparseable timestamp should never take down a whole fetch.
-func parseFlexibleTime(s string, fallback time.Time) time.Time {
+// parseTimeKnown tries a handful of common feed/API timestamp formats. The
+// bool is false for an empty or unparseable string, so callers can tell a
+// real date from a fallback.
+func parseTimeKnown(s string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return fallback
+		return time.Time{}, false
 	}
 	for _, layout := range feedTimeLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t
+			return t, true
 		}
 	}
-	log.Printf("[WARN] parseFlexibleTime: could not parse %q, using fallback", s)
+	log.Printf("[WARN] parseTimeKnown: could not parse %q", s)
+	return time.Time{}, false
+}
+
+// parseFlexibleTime returns the parsed time, or fallback (rather than
+// erroring) if none match: a single unparseable timestamp should never take
+// down a whole fetch.
+func parseFlexibleTime(s string, fallback time.Time) time.Time {
+	if t, ok := parseTimeKnown(s); ok {
+		return t
+	}
 	return fallback
 }
 

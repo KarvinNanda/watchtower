@@ -2,6 +2,7 @@ package sentinel
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,4 +116,74 @@ func TestParseGitHubAdvisories_ReadsCVSSSeverities(t *testing.T) {
 	v4 := m["GHSA-p8wg-vrv2-v86f"]
 	assert.Equal(t, "CRITICAL", v4.Severity)
 	assert.InDelta(t, 9.2, v4.CVSSScore, 0.001)
+}
+
+func TestParseNVD_CarriesVectorOfChosenMetric(t *testing.T) {
+	items, err := parseNVD(readFixture(t, "nvd.json"), fixtureNow)
+	require.NoError(t, err)
+	m := byID(items)
+
+	// NVD Primary v3.1 entry wins, so its vector (not the CNA one) is kept.
+	assert.Equal(t, "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N", m["CVE-2026-74871"].CVSSVector)
+	// Only a v4.0 metric exists here.
+	assert.True(t, strings.HasPrefix(m["CVE-2026-96535"].CVSSVector, "CVSS:4.0/"))
+	// No metrics, no vector.
+	assert.Empty(t, m["CVE-2026-109708"].CVSSVector)
+}
+
+func TestParseNVD_SourceDateIsPublished(t *testing.T) {
+	items, err := parseNVD(readFixture(t, "nvd.json"), fixtureNow)
+	require.NoError(t, err)
+	want := time.Date(2024, 3, 29, 17, 15, 21, 150000000, time.UTC)
+	assert.True(t, byID(items)["CVE-2024-3094"].SourceDate.Equal(want))
+}
+
+func TestParseTimeKnown(t *testing.T) {
+	got, ok := parseTimeKnown("")
+	assert.False(t, ok)
+	assert.True(t, got.IsZero())
+
+	got, ok = parseTimeKnown("garbage")
+	assert.False(t, ok)
+	assert.True(t, got.IsZero())
+
+	got, ok = parseTimeKnown("2024-04-12T08:15:06.230")
+	assert.True(t, ok)
+	assert.True(t, got.Equal(time.Date(2024, 4, 12, 8, 15, 6, 230000000, time.UTC)))
+}
+
+func TestParseGitHubAdvisories_VectorFollowsScore(t *testing.T) {
+	items, err := parseGitHubAdvisories(readFixture(t, "ghsa.json"), fixtureNow)
+	require.NoError(t, err)
+	m := byID(items)
+
+	// v3 score > 0: the v3 vector.
+	assert.Equal(t, "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:N", m["GHSA-pwhx-cvv3-qj5c"].CVSSVector)
+	// v3 score 0, v4 score > 0: the v4 vector.
+	assert.Equal(t, "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N", m["GHSA-p8wg-vrv2-v86f"].CVSSVector)
+	// Everything null: empty vector.
+	assert.Empty(t, m["GHSA-aaaa-bbbb-cccc"].CVSSVector)
+}
+
+func TestFirstScored_NullVectorOfWinner(t *testing.T) {
+	score, vec := firstScored(scoredVector{Score: 0}, scoredVector{Score: 7.5, Vector: ""})
+	assert.InDelta(t, 7.5, score, 0.001)
+	assert.Empty(t, vec)
+}
+
+func TestParseGitHubAdvisories_SourceDate(t *testing.T) {
+	items, err := parseGitHubAdvisories(readFixture(t, "ghsa.json"), fixtureNow)
+	require.NoError(t, err)
+	want := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	assert.True(t, byID(items)["GHSA-4j9v-h7pp-725h"].SourceDate.Equal(want))
+}
+
+func TestParseKEV_SourceDateIsZero(t *testing.T) {
+	cutoff := fixtureNow.Add(-lookbackWindow)
+	items, err := parseKEV(readFixture(t, "kev.json"), cutoff)
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+	for _, it := range items {
+		assert.True(t, it.SourceDate.IsZero(), "KEV dateAdded is not the publish date")
+	}
 }
