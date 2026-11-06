@@ -41,4 +41,5 @@ func TestSendMessage_ErrorDoesNotContainToken(t *testing.T) {
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), testToken)
+	assert.Contains(t, err.Error(), "<redacted>")
 }

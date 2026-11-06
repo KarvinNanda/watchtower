@@ -17,6 +17,8 @@ func (e *redactedError) Unwrap() error { return e.err }
 // secret (Telegram puts the bot token in the path): net/http quotes the full
 // URL in its errors, and those errors are logged. nil, an empty secret, or
 // an error that does not contain the secret is returned unchanged.
+// Unwrap still returns the original error, which holds the secret: never
+// print an unwrapped cause (for example a *url.Error's URL) from these.
 func RedactSecret(err error, secret string) error {
 	if err == nil || secret == "" || !strings.Contains(err.Error(), secret) {
 		return err
