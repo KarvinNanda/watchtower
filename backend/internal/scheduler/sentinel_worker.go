@@ -296,6 +296,32 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 	return nil
 }
 
+// isMergedKEV reports whether item is an NVD item that dedupeByIdentifier
+// merged with a CISA KEV item for the same CVE.
+func isMergedKEV(item sentinel.SentinelItem) bool {
+	return item.SourceType == "cve" && item.KnownExploited
+}
+
+// seenInsertSources lists the source types a processed item is recorded
+// under. A merged item is recorded under both "cve" and "cisa_kev", so a
+// later run that sees the KEV item alone does not alert again.
+func seenInsertSources(item sentinel.SentinelItem) []string {
+	if isMergedKEV(item) {
+		return []string{"cve", "cisa_kev"}
+	}
+	return []string{item.SourceType}
+}
+
+// seenCheckSource is the single source type looked up to decide if an item
+// is new. A merged item is checked only as "cisa_kev": the user may already
+// have the plain CVE alert but has not been told it is exploited yet.
+func seenCheckSource(item sentinel.SentinelItem) string {
+	if isMergedKEV(item) {
+		return "cisa_kev"
+	}
+	return item.SourceType
+}
+
 func (w *SentinelWorker) itemAlreadySeen(item sentinel.SentinelItem) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
@@ -304,7 +330,7 @@ func (w *SentinelWorker) itemAlreadySeen(item sentinel.SentinelItem) (bool, erro
 	err := w.db.QueryRowContext(ctx, `
 		SELECT id FROM sentinel_seen_items
 		WHERE source_type = ? AND item_identifier = ?`,
-		item.SourceType, item.Identifier,
+		seenCheckSource(item), item.Identifier,
 	).Scan(&id)
 
 	if err != nil {
@@ -401,13 +427,22 @@ func groupMatchesByUser(matches []matchRow) []userMatchInfo {
 // insertSeenItem records item in sentinel_seen_items for global dedup, so
 // it isn't reprocessed on the next run.
 func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem) error {
+	for _, source := range seenInsertSources(item) {
+		if err := w.insertSeenRow(source, item.Identifier); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *SentinelWorker) insertSeenRow(sourceType, identifier string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
 	_, err := w.db.ExecContext(ctx, `
 		INSERT INTO sentinel_seen_items (source_type, item_identifier, first_seen_at, expires_at)
 		VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 7 DAY))`,
-		item.SourceType, item.Identifier,
+		sourceType, identifier,
 	)
 	if err != nil {
 		var mysqlErr *mysqldriver.MySQLError
