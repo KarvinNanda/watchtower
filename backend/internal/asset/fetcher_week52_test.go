@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -62,7 +63,7 @@ func TestFetchCryptoWeek52_CallsMarketChart(t *testing.T) {
 	CoinGeckoBaseURL = srv.URL
 	t.Cleanup(func() { CoinGeckoBaseURL = old })
 
-	high, low, err := NewAssetFetcher("").FetchCryptoWeek52("BTC")
+	high, low, err := NewAssetFetcher("").FetchCryptoWeek52(context.Background(), "BTC")
 	require.NoError(t, err)
 	assert.Equal(t, "/coins/bitcoin/market_chart", gotPath)
 	assert.Equal(t, "365", gotDays)
@@ -71,7 +72,7 @@ func TestFetchCryptoWeek52_CallsMarketChart(t *testing.T) {
 }
 
 func TestFetchCryptoWeek52_RejectsUnknownSymbol(t *testing.T) {
-	_, _, err := NewAssetFetcher("").FetchCryptoWeek52("../../etc")
+	_, _, err := NewAssetFetcher("").FetchCryptoWeek52(context.Background(), "../../etc")
 	assert.Error(t, err)
 }
 
@@ -88,6 +89,6 @@ func TestSymbolAssetType(t *testing.T) {
 }
 
 func TestFetchAsset_RejectsTypeMismatch(t *testing.T) {
-	_, err := NewAssetFetcher("").FetchAsset("BTC", "stock")
+	_, err := NewAssetFetcher("").FetchAsset(context.Background(), "BTC", "stock")
 	assert.Error(t, err)
 }

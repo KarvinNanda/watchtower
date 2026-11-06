@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -23,25 +24,37 @@ const coinGeckoKeyedMinGap = 1200 * time.Millisecond
 // the previous one. It is per process; only the scheduler calls the paced
 // providers.
 type pacer struct {
-	mu    sync.Mutex
-	gap   time.Duration
-	last  time.Time
-	now   func() time.Time
-	sleep func(time.Duration)
+	mu   sync.Mutex
+	gap  time.Duration
+	last time.Time
+	now  func() time.Time
+	// after is time.After; tests replace it with a fake clock.
+	after func(time.Duration) <-chan time.Time
 }
 
 func newPacer(gap time.Duration) *pacer {
-	return &pacer{gap: gap, now: time.Now, sleep: time.Sleep}
+	return &pacer{gap: gap, now: time.Now, after: time.After}
 }
 
-// wait blocks until the next call may start, then records it.
-func (p *pacer) wait() {
+// wait blocks until the next call may start, then records it. When ctx
+// ends first it returns ctx.Err() and records nothing, since no call is
+// made (#86).
+func (p *pacer) wait(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// The caller may have given up while it queued for the lock.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !p.last.IsZero() {
 		if d := p.gap - p.now().Sub(p.last); d > 0 {
-			p.sleep(d)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-p.after(d):
+			}
 		}
 	}
 	p.last = p.now()
+	return nil
 }

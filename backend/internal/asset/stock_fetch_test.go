@@ -2,6 +2,7 @@ package asset
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -33,7 +34,7 @@ func TestFetchStock_MakesExactlyOneRequest(t *testing.T) {
 	f := NewAssetFetcher("test-key")
 	f.SetHTTPClient(&http.Client{Transport: rt})
 
-	res, err := f.FetchStock("AAPL")
+	res, err := f.FetchStock(context.Background(), "AAPL")
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"api.twelvedata.com/quote"}, rt.urls)
@@ -68,7 +69,7 @@ func TestFetchStock_KeyInHeaderNotURL(t *testing.T) {
 	f := NewAssetFetcher("secret-key-123")
 	f.SetHTTPClient(&http.Client{Transport: rc})
 
-	_, err = f.FetchStock("AAPL")
+	_, err = f.FetchStock(context.Background(), "AAPL")
 
 	require.NoError(t, err)
 	assert.Equal(t, "apikey secret-key-123", rc.auth)
@@ -79,7 +80,7 @@ func TestFetchStock_NetworkErrorDoesNotLeakTheKey(t *testing.T) {
 	f := NewAssetFetcher("secret-key-123")
 	f.SetHTTPClient(&http.Client{Transport: failingTransport{}})
 
-	_, err := f.FetchStock("AAPL")
+	_, err := f.FetchStock(context.Background(), "AAPL")
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "secret-key-123")

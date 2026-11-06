@@ -45,10 +45,29 @@ type fakeMarket struct {
 	week52Calls int
 	stale       bool
 	lastOpts    cache.FetchOptions
+	// delay makes both methods slow. Like the real fetchers they give up
+	// when ctx ends first.
+	delay time.Duration
 }
 
-func (f *fakeMarket) GetMarketData(_ context.Context, symbol, _ string, opts cache.FetchOptions) (*cache.MarketData, error) {
+// wait sleeps for f.delay, or returns ctx's error when ctx ends first.
+func (f *fakeMarket) wait(ctx context.Context) error {
+	if f.delay <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(f.delay):
+		return nil
+	}
+}
+
+func (f *fakeMarket) GetMarketData(ctx context.Context, symbol, _ string, opts cache.FetchOptions) (*cache.MarketData, error) {
 	f.lastOpts = opts
+	if err := f.wait(ctx); err != nil {
+		return nil, err
+	}
 	d, ok := f.data[symbol]
 	if !ok {
 		return nil, errors.New("no market data")
@@ -58,8 +77,11 @@ func (f *fakeMarket) GetMarketData(_ context.Context, symbol, _ string, opts cac
 	return &cp, nil
 }
 
-func (f *fakeMarket) GetCryptoWeek52(_ context.Context, _ string) (float64, float64, error) {
+func (f *fakeMarket) GetCryptoWeek52(ctx context.Context, _ string) (float64, float64, error) {
 	f.week52Calls++
+	if err := f.wait(ctx); err != nil {
+		return 0, 0, err
+	}
 	if f.week52Err != nil {
 		return 0, 0, f.week52Err
 	}

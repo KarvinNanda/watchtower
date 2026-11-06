@@ -23,9 +23,22 @@ import (
 )
 
 const (
-	dbQueryTimeout  = 30 * time.Second
 	telegramSendGap = 50 * time.Millisecond
+
+	// marketFetchTimeout bounds one symbol's market data fetch. Worst case
+	// for a stock: the quote takes 8 s pacer + 30 s HTTP + 60 s rate-limit
+	// retry + 30 s HTTP = 128 s (the retry needs no second pacer wait, the
+	// 60 s already covers the gap). The daily closes fetch then takes up to
+	// closes7dTimeout (40 s), and refresh still writes Redis and MySQL in
+	// the same window. 128 s + 40 s + margin for those writes = 200 s.
+	// It is separate from dbQueryTimeout so a slow fetch cannot use up the
+	// deadline of the DB work that follows (#86).
+	marketFetchTimeout = 200 * time.Second
 )
+
+// dbQueryTimeout bounds a unit of DB work. It is a variable only so tests
+// can shorten it.
+var dbQueryTimeout = 30 * time.Second
 
 // NotifierInterface is the subset of notifier.Notifier's behavior
 // AssetWorker depends on, allowing tests to inject a mock sender.
@@ -368,9 +381,13 @@ func countIDRWaiting(symbol string, rows []ruleRow, market rules.Market) int {
 // processSymbol fetches market data for symbol via the cache layer, loads
 // its active rules, and evaluates each one — appending fired alerts to the
 // owner's UserAlertBatch instead of sending anything directly.
+//
+// The external fetches run under their own fetchCtx (marketFetchTimeout).
+// Each DB step gets a dbQueryTimeout context created after the fetch
+// before it, so a slow fetch cannot skip the rules (#86).
 func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches map[uint64]*UserAlertBatch) (symbolResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
-	defer cancel()
+	fetchCtx, cancelFetch := context.WithTimeout(context.Background(), marketFetchTimeout)
+	defer cancelFetch()
 
 	// Periodic runs accept the cache TTL; a user's Check now wants prices
 	// at most cache.ManualMaxAge old (#20).
@@ -378,7 +395,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	if scope.userID != 0 {
 		opts = manualFetch
 	}
-	marketData, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType, opts)
+	marketData, err := w.cache.GetMarketData(fetchCtx, symbol.Symbol, symbol.AssetType, opts)
 	if err != nil {
 		return symbolResult{}, fmt.Errorf("fetch market data for %s: %w", symbol.Symbol, err)
 	}
@@ -388,7 +405,9 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 		return symbolResult{}, fmt.Errorf("invalid price %v for %s", marketData.PriceUSD, symbol.Symbol)
 	}
 
-	rows, err := w.loadRules(ctx, symbol.Symbol, scope.userID)
+	loadCtx, cancelLoad := context.WithTimeout(context.Background(), dbQueryTimeout)
+	rows, err := w.loadRules(loadCtx, symbol.Symbol, scope.userID)
+	cancelLoad()
 	if err != nil {
 		return symbolResult{}, fmt.Errorf("load rules for %s: %w", symbol.Symbol, err)
 	}
@@ -406,7 +425,7 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 	week52Tried := false
 	if symbol.NeedsWeek52 && symbol.AssetType == "crypto" {
 		week52Tried = true
-		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
+		high, low, wErr := w.cache.GetCryptoWeek52(fetchCtx, symbol.Symbol)
 		if wErr != nil {
 			res.dataErrors++
 			log.Printf("[ERROR] processSymbol: 52-week range for %s: %v", symbol.Symbol, wErr)
@@ -421,13 +440,16 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 		AssetType: symbol.AssetType, ChangePct7d: marketData.ChangePct7d, FetchedAt: marketData.LastFetched,
 		SessionStart: stockSessionStart(symbol.AssetType, marketData),
 	}
-	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, nativeIDR, meta, scope, batches)
+	// Created after the 52-week fetch above, so it has the full DB deadline.
+	dbCtx, cancelDB := context.WithTimeout(context.Background(), dbQueryTimeout)
+	defer cancelDB()
+	res.triggered = w.evaluateRules(dbCtx, rows, symbol.Symbol, market, nativeIDR, meta, scope, batches)
 
 	// A crypto alert shows the 52-week range, but only a week52_break rule
 	// loads it up front. Fetch it once now that an alert fired. A failure is
 	// not a data error: the alert is sent without the 52-week line.
 	if symbol.AssetType == "crypto" && res.triggered > 0 && market.Week52High == nil && !week52Tried {
-		high, low, wErr := w.cache.GetCryptoWeek52(ctx, symbol.Symbol)
+		high, low, wErr := w.cache.GetCryptoWeek52(fetchCtx, symbol.Symbol)
 		if wErr != nil {
 			log.Printf("[WARN] processSymbol: 52-week range for %s skipped in the alert: %v", symbol.Symbol, wErr)
 		} else {

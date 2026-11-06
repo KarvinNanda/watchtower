@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"strings"
@@ -107,7 +108,7 @@ func TestFetchStock_DoesNotRetryTheDailyQuota(t *testing.T) {
 	f := NewAssetFetcher("k")
 	f.SetHTTPClient(&http.Client{Transport: rt})
 	done := make(chan error, 1)
-	go func() { _, err := f.FetchStock("AAPL"); done <- err }()
+	go func() { _, err := f.FetchStock(context.Background(), "AAPL"); done <- err }()
 	select {
 	case err := <-done:
 		assert.ErrorIs(t, err, errTwelveDataDailyLimit)

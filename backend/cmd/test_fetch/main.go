@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -33,7 +34,7 @@ func main() {
 	}
 
 	// Test crypto
-	btc, err := fetcher.FetchAsset("BTC", "crypto")
+	btc, err := fetcher.FetchAsset(context.Background(), "BTC", "crypto")
 	if err != nil {
 		log.Printf("[ERROR] FetchCrypto BTC: %v", err)
 	} else {
@@ -41,7 +42,7 @@ func main() {
 	}
 
 	// Test stock
-	nvda, err := fetcher.FetchAsset("NVDA", "stock")
+	nvda, err := fetcher.FetchAsset(context.Background(), "NVDA", "stock")
 	if err != nil {
 		log.Printf("[ERROR] FetchStock NVDA: %v", err)
 	} else {
@@ -49,7 +50,7 @@ func main() {
 	}
 
 	// Test gold
-	gold, err := fetcher.FetchAsset("ANTAM", "gold")
+	gold, err := fetcher.FetchAsset(context.Background(), "ANTAM", "gold")
 	if err != nil {
 		log.Printf("[ERROR] FetchGold: %v", err)
 	} else {
