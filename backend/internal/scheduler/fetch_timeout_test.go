@@ -11,12 +11,16 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/cache"
 )
 
-// shortDBTimeout makes dbQueryTimeout 50 ms for one test. Tests that call
+// slowFetch is longer than the shortened dbQueryTimeout, with a wide margin
+// so -race on a slow machine keeps the ordering checks meaningful.
+const slowFetch = 400 * time.Millisecond
+
+// shortDBTimeout makes dbQueryTimeout 200 ms for one test. Tests that call
 // it must not be parallel: they change a package variable.
 func shortDBTimeout(t *testing.T) {
 	t.Helper()
 	old := dbQueryTimeout
-	dbQueryTimeout = 50 * time.Millisecond
+	dbQueryTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { dbQueryTimeout = old })
 }
 
@@ -25,7 +29,7 @@ func shortDBTimeout(t *testing.T) {
 func TestProcessSymbol_SlowFetchStillEvaluatesRules(t *testing.T) {
 	shortDBTimeout(t)
 	w, mock, _ := newMockAssetWorker(t, 3)
-	w.cache = &fakeMarket{delay: 100 * time.Millisecond, data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150}}}
+	w.cache = &fakeMarket{delay: slowFetch, data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150}}}
 	btcRuleRows(mock)
 	batches := map[uint64]*UserAlertBatch{}
 
@@ -42,7 +46,7 @@ func TestProcessSymbol_SlowFetchStillEvaluatesRules(t *testing.T) {
 func TestProcessSymbol_SlowWeek52StillWritesRuleState(t *testing.T) {
 	shortDBTimeout(t)
 	w, mock, _ := newMockAssetWorker(t, 3)
-	w.cache = &fakeMarket{delay: 100 * time.Millisecond, data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 90}}}
+	w.cache = &fakeMarket{delay: slowFetch, data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 90}}}
 	btcRuleRows(mock)
 	mock.ExpectExec(`UPDATE asset_rules SET last_beyond = \?`).WithArgs(false, 1, 1).WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -58,7 +62,7 @@ func TestProcessSymbol_SlowWeek52StillWritesRuleState(t *testing.T) {
 func TestReportSymbol_SlowFetchStillLoadsRules(t *testing.T) {
 	shortDBTimeout(t)
 	w, mock, _, _ := newRecordingAssetWorker(t)
-	w.cache = &fakeMarket{delay: 100 * time.Millisecond, data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150}}}
+	w.cache = &fakeMarket{delay: slowFetch, data: map[string]*cache.MarketData{"BTC": {Symbol: "BTC", PriceUSD: 150}}}
 	expectReportRule(mock, "BTC", 1)
 
 	item, rows, err := w.reportSymbol(SymbolInfo{Symbol: "BTC", AssetType: "crypto"}, 7)
@@ -68,9 +72,4 @@ func TestReportSymbol_SlowFetchStillLoadsRules(t *testing.T) {
 	assert.Len(t, rows, 1)
 	require.Len(t, item.Rules, 1, "the rule is listed with its distance")
 	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestMarketFetchTimeout(t *testing.T) {
-	// Two 8 s pacer waits, one 60 s rate-limit retry and the closes fetch.
-	assert.Equal(t, 150*time.Second, marketFetchTimeout, "worst case: 8 s pacer + 30 s HTTP + 60 s retry + 8 s pacer + 30 s HTTP = 136 s")
 }

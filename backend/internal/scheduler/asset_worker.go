@@ -26,11 +26,14 @@ const (
 	telegramSendGap = 50 * time.Millisecond
 
 	// marketFetchTimeout bounds one symbol's market data fetch. Worst case
-	// for a stock: 8 s pacer + 30 s HTTP + 60 s rate-limit retry + 8 s
-	// pacer + 30 s HTTP = 136 s, so 150 s never cuts a legitimate retry.
+	// for a stock: the quote takes 8 s pacer + 30 s HTTP + 60 s rate-limit
+	// retry + 30 s HTTP = 128 s (the retry needs no second pacer wait, the
+	// 60 s already covers the gap). The daily closes fetch then takes up to
+	// closes7dTimeout (40 s), and refresh still writes Redis and MySQL in
+	// the same window. 128 s + 40 s + margin for those writes = 200 s.
 	// It is separate from dbQueryTimeout so a slow fetch cannot use up the
 	// deadline of the DB work that follows (#86).
-	marketFetchTimeout = 150 * time.Second
+	marketFetchTimeout = 200 * time.Second
 )
 
 // dbQueryTimeout bounds a unit of DB work. It is a variable only so tests

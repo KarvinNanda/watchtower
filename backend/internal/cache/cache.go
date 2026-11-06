@@ -361,8 +361,11 @@ func untilNextUTCMidnight(now time.Time) time.Duration {
 
 // closes7dTimeout bounds the stock closes lookup. It has its own context
 // so a slow /time_series call or Redis write does not run on the caller's
-// per-symbol context.
-const closes7dTimeout = 20 * time.Second
+// per-symbol context. The fetch runs right after the quote, so it first
+// waits the 8 s Twelve Data pacer gap inside this context, then gets up
+// to the 30 s HTTP client timeout: 40 s covers both with a small margin
+// for Redis (#86).
+const closes7dTimeout = 40 * time.Second
 
 // stockChange7d returns the percent change of price against the stock's
 // close about 7 days before sessionDay (the trading date of price), or nil
