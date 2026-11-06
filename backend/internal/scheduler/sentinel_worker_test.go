@@ -43,9 +43,6 @@ func TestProcessItem_MatchedItemIsAlwaysBatched(t *testing.T) {
 		CVEID: "CVE-2024-3094", KnownExploited: true, RequiredAction: "Downgrade xz.",
 	}
 
-	mock.ExpectQuery(`SELECT id FROM sentinel_seen_items`).
-		WithArgs("cisa_kev", "CVE-2024-3094").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectQuery(`FROM keyword_subscriptions ks`).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "keyword", "telegram_sentinel_chat_id", "preferred_language"}).
 			AddRow(1, "xz", 100, "en").
