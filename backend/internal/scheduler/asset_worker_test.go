@@ -632,11 +632,11 @@ func TestDispatchUserBatch_MapsNewFields(t *testing.T) {
 	fetched := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	at := fetched.Add(time.Hour) // data is 1 h old, past the 15 min threshold
 	batch := &UserAlertBatch{UserID: 1, ChatID: 1000, Language: "en", Alerts: []AlertItem{{
-		RuleID: 1, ParamsVersion: 1, Symbol: "AAPL", PriceUSD: 150,
+		RuleID: 1, ParamsVersion: 1, Symbol: "AAPL", PriceUSD: 150, ChangePct: floatPtr(1.2),
 		AssetType: "stock", ChangePct7d: floatPtr(-2.5), FetchedAt: fetched,
 		Week52High: floatPtr(200), Week52Low: floatPtr(90),
 		Trigger:  rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: 100, Currency: rules.CurrencyUSD},
-		Distance: rules.Distance{Kind: rules.DistanceLevel, Level: 100, Passed: true},
+		Distance: rules.Distance{Kind: rules.DistanceLevel, Level: 100, Pct: -100.0 / 3, Passed: true},
 	}}}
 	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -649,6 +649,9 @@ func TestDispatchUserBatch_MapsNewFields(t *testing.T) {
 	assert.Contains(t, msg, "52")
 	assert.Contains(t, msg, "200")
 	assert.Contains(t, msg, "90")
+	assert.Contains(t, msg, "⏳", "FetchedAt is mapped: the 1 h old data gets an age line")
+	assert.Contains(t, msg, `past by 33\.3%`, "Distance is mapped")
+	assert.Contains(t, msg, "Today", "AssetType is mapped: a stock's 24h label")
 }
 
 func TestDataAgeThresholdMatchesManualMaxAge(t *testing.T) {
