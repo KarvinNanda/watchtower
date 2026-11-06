@@ -72,5 +72,5 @@ func TestReportSymbol_SlowFetchStillLoadsRules(t *testing.T) {
 
 func TestMarketFetchTimeout(t *testing.T) {
 	// Two 8 s pacer waits, one 60 s rate-limit retry and the closes fetch.
-	assert.Equal(t, 2*time.Minute, marketFetchTimeout)
+	assert.Equal(t, 150*time.Second, marketFetchTimeout, "worst case: 8 s pacer + 30 s HTTP + 60 s retry + 8 s pacer + 30 s HTTP = 136 s")
 }

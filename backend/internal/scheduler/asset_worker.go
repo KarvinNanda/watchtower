@@ -25,11 +25,12 @@ import (
 const (
 	telegramSendGap = 50 * time.Millisecond
 
-	// marketFetchTimeout bounds one symbol's market data fetch: two 8 s
-	// Twelve Data pacer waits, one 60 s rate-limit retry and the daily
-	// closes fetch. It is separate from dbQueryTimeout so a slow fetch
-	// cannot use up the deadline of the DB work that follows (#86).
-	marketFetchTimeout = 2 * time.Minute
+	// marketFetchTimeout bounds one symbol's market data fetch. Worst case
+	// for a stock: 8 s pacer + 30 s HTTP + 60 s rate-limit retry + 8 s
+	// pacer + 30 s HTTP = 136 s, so 150 s never cuts a legitimate retry.
+	// It is separate from dbQueryTimeout so a slow fetch cannot use up the
+	// deadline of the DB work that follows (#86).
+	marketFetchTimeout = 150 * time.Second
 )
 
 // dbQueryTimeout bounds a unit of DB work. It is a variable only so tests
