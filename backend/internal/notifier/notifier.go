@@ -97,7 +97,9 @@ func (n *Notifier) send(botToken string, chatID int64, message string) error {
 	return err
 }
 
-func (n *Notifier) sendOnce(botToken string, chatID int64, message string) error {
+func (n *Notifier) sendOnce(botToken string, chatID int64, message string) (err error) {
+	// The token is part of the URL, and net/http quotes the URL in its errors.
+	defer func() { err = utils.RedactSecret(err, botToken) }()
 	endpoint := telegramAPIBase + botToken + "/sendMessage"
 
 	body, err := json.Marshal(telegramSendMessageRequest{
