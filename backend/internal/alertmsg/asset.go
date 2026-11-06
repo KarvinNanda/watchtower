@@ -140,6 +140,7 @@ func priceLine(rate Rate, g assetGroup) string {
 // unknown. A stock's 24h value is the move since the previous close, so it
 // is labelled "Today". The emoji follows the first value shown.
 func changeLine(lang, assetType string, pct24h, pct7d *float64) string {
+	pct24h, pct7d = shownPct(pct24h), shownPct(pct7d)
 	var parts []string
 	if pct24h != nil {
 		label := pick(lang, "24h", "24 jam")
@@ -167,6 +168,20 @@ func changeLine(lang, assetType string, pct24h, pct7d *float64) string {
 		emoji = "📉"
 	}
 	return esc(emoji + " " + strings.Join(parts, " · "))
+}
+
+// shownPct is a change as it will be printed: nil for a value that is not a
+// finite number, otherwise rounded to 2 decimals with negative zero turned
+// into zero. The sign and the emoji are then decided on what the user reads.
+func shownPct(p *float64) *float64 {
+	if p == nil || math.IsNaN(*p) || math.IsInf(*p, 0) {
+		return nil
+	}
+	v := math.Round(*p*100) / 100
+	if v == 0 {
+		v = 0
+	}
+	return &v
 }
 
 // week52Line shows where the price sits in its 52-week range, "" unless both

@@ -2,6 +2,7 @@ package alertmsg
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +175,10 @@ func TestChangeLine(t *testing.T) {
 		{"gold id 7d only zero", "id", "gold", nil, f64(0), "📈 7 hari: +0.00%"},
 		{"empty type is crypto", "en", "", f64(1), nil, "📈 24h: +1.00%"},
 		{"first shown value is 7d", "en", "crypto", nil, f64(-1), "📉 7d: -1.00%"},
+		{"tiny negative rounds to zero", "en", "crypto", f64(-0.001), nil, "📈 24h: +0.00%"},
+		{"negative zero", "en", "crypto", f64(math.Copysign(0, -1)), nil, "📈 24h: +0.00%"},
+		{"NaN 24h is dropped", "id", "crypto", f64(math.NaN()), f64(-1.5), "📉 7 hari: -1.50%"},
+		{"Inf 7d is dropped", "en", "crypto", f64(1), f64(math.Inf(1)), "📈 24h: +1.00%"},
 		{"both nil", "id", "crypto", nil, nil, ""},
 	}
 	for _, tc := range cases {
@@ -217,14 +222,16 @@ func TestAssetMessages_EnrichedGolden(t *testing.T) {
 	at := jakartaAt(t)
 	fresh := at.Add(-3 * time.Minute)
 	old := at.Add(-23 * time.Minute)
-	passed := rules.Distance{Kind: rules.DistanceLevel, Passed: true, Pct: -2.1}
-	crypto := AssetAlert{RuleID: 1, Symbol: "BTC", AssetType: "crypto", PriceUSD: 81714, ChangePct: f64(-1.8), ChangePct7d: f64(-3.0276),
-		FetchedAt: old, Week52High: f64(90000), Week52Low: f64(49000), Distance: passed,
+	// A fired level rule is always passed, with Pct = (level - price) / price * 100
+	// as levelDistance computes it.
+	btcPassed := rules.Distance{Kind: rules.DistanceLevel, Passed: true, Pct: (80000 - 78000.0) / 78000.0 * 100}
+	aaplPassed := rules.Distance{Kind: rules.DistanceLevel, Passed: true, Pct: (194.5 - 198.6) / 198.6 * 100}
+	crypto := AssetAlert{RuleID: 1, Symbol: "BTC", AssetType: "crypto", PriceUSD: 78000, ChangePct: f64(-1.8), ChangePct7d: f64(-3.0276),
+		FetchedAt: old, Week52High: f64(90000), Week52Low: f64(49000), Distance: btcPassed,
 		Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionBelow, Intent: rules.IntentBuyTarget, LevelUSD: 80000}}
-	stock := AssetAlert{RuleID: 2, Symbol: "AAPL", AssetType: "stock", PriceUSD: 190.5, ChangePct: f64(-1.53),
-		FetchedAt: fresh, Week52High: f64(200), Week52Low: f64(150),
-		Distance: rules.Distance{Kind: rules.DistanceLevel, Pct: 2.1},
-		Trigger:  rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: 194.5}}
+	stock := AssetAlert{RuleID: 2, Symbol: "AAPL", AssetType: "stock", PriceUSD: 198.6, ChangePct: f64(1.53),
+		FetchedAt: fresh, Week52High: f64(200), Week52Low: f64(150), Distance: aaplPassed,
+		Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: 194.5}}
 	gold := AssetAlert{RuleID: 3, Symbol: "ANTAM", AssetType: "gold", PriceUSD: 133.58, NativeIDR: 2392157, ChangePct: f64(0.42), ChangePct7d: f64(1.1),
 		FetchedAt: fresh, Distance: rules.Distance{Kind: rules.DistanceChange24h},
 		Trigger: rules.Trigger{Type: rules.TypePctChange24h, Pct: 0.4}}
