@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,11 +43,11 @@ func TestCoinGeckoKey_SentAsHeaderOnEveryCall(t *testing.T) {
 	headers, queries := coinGeckoStub(t, http.StatusOK)
 	f := NewAssetFetcher("")
 	f.SetCoinGeckoAPIKey("demo-key-123")
-	f.cryptoPacer.sleep = func(time.Duration) {}
+	f.cryptoPacer.after = noWait
 
-	_, err := f.FetchCrypto("BTC")
+	_, err := f.FetchCrypto(context.Background(), "BTC")
 	require.NoError(t, err)
-	_, _, err = f.FetchCryptoWeek52("BTC")
+	_, _, err = f.FetchCryptoWeek52(context.Background(), "BTC")
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"demo-key-123", "demo-key-123"}, *headers)
@@ -60,7 +61,7 @@ func TestCoinGeckoKey_NoKeyKeepsTheKeylessRequest(t *testing.T) {
 	f := NewAssetFetcher("")
 	f.SetCoinGeckoAPIKey("")
 
-	_, err := f.FetchCrypto("BTC")
+	_, err := f.FetchCrypto(context.Background(), "BTC")
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{""}, *headers)
@@ -80,12 +81,12 @@ func TestCoinGeckoKey_NeverInErrors(t *testing.T) {
 	coinGeckoStub(t, http.StatusTooManyRequests)
 	f := NewAssetFetcher("")
 	f.SetCoinGeckoAPIKey("demo-key-123")
-	f.cryptoPacer.sleep = func(time.Duration) {}
+	f.cryptoPacer.after = noWait
 
-	_, err := f.FetchCrypto("BTC")
+	_, err := f.FetchCrypto(context.Background(), "BTC")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "demo-key-123")
-	_, _, err = f.FetchCryptoWeek52("BTC")
+	_, _, err = f.FetchCryptoWeek52(context.Background(), "BTC")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "demo-key-123")
 }

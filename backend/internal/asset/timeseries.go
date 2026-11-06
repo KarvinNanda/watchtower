@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,8 +23,10 @@ type DailyClose struct {
 
 // FetchStockCloses returns the last daily closes of a stock, newest
 // first. It costs one Twelve Data credit. An empty list is an error.
-func (f *AssetFetcher) FetchStockCloses(symbol string) ([]DailyClose, error) {
-	f.stockPacer.wait()
+func (f *AssetFetcher) FetchStockCloses(ctx context.Context, symbol string) ([]DailyClose, error) {
+	if err := f.stockPacer.wait(ctx); err != nil {
+		return nil, fmt.Errorf("asset: wait to fetch stock time series %s: %w", symbol, err)
+	}
 	recordStockAPICall()
 
 	q := url.Values{}
@@ -32,7 +35,7 @@ func (f *AssetFetcher) FetchStockCloses(symbol string) ([]DailyClose, error) {
 	q.Set("outputsize", "10")
 	// The key goes in the Authorization header, never in the URL: a network
 	// error quotes the full URL, and that error is logged (#74).
-	req, err := http.NewRequest(http.MethodGet, twelveDataTimeSeriesURL+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, twelveDataTimeSeriesURL+"?"+q.Encode(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("asset: build twelve data time series request for %s: %w", symbol, err)
 	}

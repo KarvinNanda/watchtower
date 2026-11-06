@@ -25,15 +25,23 @@ type fakeFetcher struct {
 	closesCalls int
 	closes      []asset.DailyClose
 	closesErr   error
+
+	// assetCtx and closesCtx are the contexts of the last calls;
+	// closesCtxErr is closesCtx.Err() at the time of the call.
+	assetCtx     context.Context
+	closesCtx    context.Context
+	closesCtxErr error
 }
 
-func (f *fakeFetcher) FetchStockCloses(string) ([]asset.DailyClose, error) {
+func (f *fakeFetcher) FetchStockCloses(ctx context.Context, _ string) ([]asset.DailyClose, error) {
 	f.closesCalls++
+	f.closesCtx, f.closesCtxErr = ctx, ctx.Err()
 	return f.closes, f.closesErr
 }
 
-func (f *fakeFetcher) FetchAsset(symbol, _ string) (*asset.FetchResult, error) {
+func (f *fakeFetcher) FetchAsset(ctx context.Context, symbol, _ string) (*asset.FetchResult, error) {
 	f.calls++
+	f.assetCtx = ctx
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -42,7 +50,7 @@ func (f *fakeFetcher) FetchAsset(symbol, _ string) (*asset.FetchResult, error) {
 	return &r, nil
 }
 
-func (f *fakeFetcher) FetchCryptoWeek52(string) (float64, float64, error) {
+func (f *fakeFetcher) FetchCryptoWeek52(context.Context, string) (float64, float64, error) {
 	return 0, 0, errors.New("unused")
 }
 

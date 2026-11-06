@@ -64,9 +64,9 @@ type FetchOptions struct {
 
 // marketFetcher is the subset of asset.AssetFetcher the cache uses.
 type marketFetcher interface {
-	FetchAsset(symbol, assetType string) (*asset.FetchResult, error)
-	FetchCryptoWeek52(symbol string) (high, low float64, err error)
-	FetchStockCloses(symbol string) ([]asset.DailyClose, error)
+	FetchAsset(ctx context.Context, symbol, assetType string) (*asset.FetchResult, error)
+	FetchCryptoWeek52(ctx context.Context, symbol string) (high, low float64, err error)
+	FetchStockCloses(ctx context.Context, symbol string) ([]asset.DailyClose, error)
 }
 
 // manualBudget is the subset of quota.Budget the cache uses.
@@ -210,7 +210,7 @@ func markStale(d *MarketData) *MarketData {
 // manual is true for a user's Check now: the stock 7-day reference then
 // spends its own manual budget credit.
 func (c *Cache) refresh(ctx context.Context, symbol, assetType string, manual bool) (*MarketData, error) {
-	result, err := c.fetcher.FetchAsset(symbol, assetType)
+	result, err := c.fetcher.FetchAsset(ctx, symbol, assetType)
 	if err != nil {
 		return nil, fmt.Errorf("cache: refresh %s from external api: %w", symbol, err)
 	}
@@ -407,7 +407,7 @@ func (c *Cache) stockChange7d(ctx context.Context, symbol string, price float64,
 				return nil
 			}
 		}
-		fetched, err := c.fetcher.FetchStockCloses(symbol)
+		fetched, err := c.fetcher.FetchStockCloses(own, symbol)
 		if err != nil {
 			log.Printf("[WARN] stockChange7d: daily closes for %s: %v", symbol, err)
 			return nil
@@ -456,7 +456,7 @@ func (c *Cache) GetCryptoWeek52(ctx context.Context, symbol string) (high, low f
 		log.Printf("[ERROR] GetCryptoWeek52: redis get %s: %v", symbol, err)
 	}
 
-	high, low, err = c.fetcher.FetchCryptoWeek52(symbol)
+	high, low, err = c.fetcher.FetchCryptoWeek52(ctx, symbol)
 	if err != nil {
 		return 0, 0, fmt.Errorf("cache: fetch 52-week range for %s: %w", symbol, err)
 	}

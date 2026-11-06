@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -42,7 +43,7 @@ func TestFetchCrypto_Requests7d(t *testing.T) {
 	CoinGeckoBaseURL = srv.URL
 	t.Cleanup(func() { CoinGeckoBaseURL = old })
 
-	_, err := NewAssetFetcher("k").FetchCrypto("BTC")
+	_, err := NewAssetFetcher("k").FetchCrypto(context.Background(), "BTC")
 
 	require.NoError(t, err)
 	vals, err := parseQuery(query)
@@ -156,7 +157,7 @@ func TestFetchStockCloses_KeyInHeaderOnly(t *testing.T) {
 	t.Cleanup(func() { twelveDataTimeSeriesURL = old })
 
 	f := NewAssetFetcher("k")
-	closes, err := f.FetchStockCloses("AAPL")
+	closes, err := f.FetchStockCloses(context.Background(), "AAPL")
 
 	require.NoError(t, err)
 	assert.Equal(t, "apikey k", auth)
@@ -172,7 +173,7 @@ func TestFetchStockCloses_KeyInHeaderOnly(t *testing.T) {
 	// Server down: the error must not carry the key.
 	srv.Close()
 	f2 := NewAssetFetcher("k-secret")
-	_, err = f2.FetchStockCloses("AAPL")
+	_, err = f2.FetchStockCloses(context.Background(), "AAPL")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "k-secret")
 }
@@ -186,7 +187,7 @@ func TestFetchStockCloses_NoClosesIsAnError(t *testing.T) {
 	twelveDataTimeSeriesURL = srv.URL
 	t.Cleanup(func() { twelveDataTimeSeriesURL = old })
 
-	_, err := NewAssetFetcher("k").FetchStockCloses("AAPL")
+	_, err := NewAssetFetcher("k").FetchStockCloses(context.Background(), "AAPL")
 	require.Error(t, err)
 }
 

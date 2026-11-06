@@ -3,6 +3,7 @@
 package asset
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,8 +21,10 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
+// twelveDataQuoteURL is a variable so tests can point it at a stub.
+var twelveDataQuoteURL = "https://api.twelvedata.com/quote"
+
 const (
-	twelveDataQuoteURL      = "https://api.twelvedata.com/quote"
 	defaultCoinGeckoBaseURL = "https://api.coingecko.com/api/v3"
 	hargaEmasURL            = "https://harga-emas.org/"
 
@@ -105,8 +108,8 @@ func (f *AssetFetcher) SetCoinGeckoAPIKey(key string) {
 
 // coinGeckoRequest builds a GET for endpoint, adding the Demo key header
 // when one is set.
-func (f *AssetFetcher) coinGeckoRequest(endpoint string) (*http.Request, error) {
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+func (f *AssetFetcher) coinGeckoRequest(ctx context.Context, endpoint string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +144,10 @@ func coinGeckoID(symbol string) string {
 // FetchCrypto retrieves the latest quote for a crypto ticker (e.g. "BTC")
 // via CoinGecko's /coins/markets endpoint, paced with every other CoinGecko
 // call (coinGeckoMinGap).
-func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
-	f.cryptoPacer.wait()
+func (f *AssetFetcher) FetchCrypto(ctx context.Context, symbol string) (*FetchResult, error) {
+	if err := f.cryptoPacer.wait(ctx); err != nil {
+		return nil, fmt.Errorf("asset: wait to fetch crypto %s: %w", symbol, err)
+	}
 
 	coinID := coinGeckoID(symbol)
 	q := url.Values{}
@@ -151,7 +156,7 @@ func (f *AssetFetcher) FetchCrypto(symbol string) (*FetchResult, error) {
 	q.Set("price_change_percentage", "7d")
 	endpoint := CoinGeckoBaseURL + "/coins/markets?" + q.Encode()
 
-	req, err := f.coinGeckoRequest(endpoint)
+	req, err := f.coinGeckoRequest(ctx, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("asset: build coingecko request for %s: %w", symbol, err)
 	}
@@ -233,13 +238,20 @@ func recordStockAPICall() {
 
 // FetchStock retrieves the latest quote for a stock ticker (e.g. "AAPL")
 // via Twelve Data's /quote (one API credit). On a rate-limit response it
-// retries exactly once after waiting 60 seconds.
-func (f *AssetFetcher) FetchStock(symbol string) (*FetchResult, error) {
-	result, err := f.fetchStockOnce(symbol)
+// retries exactly once after waiting 60 seconds. ctx bounds the pacer
+// wait, the requests and the retry wait.
+func (f *AssetFetcher) FetchStock(ctx context.Context, symbol string) (*FetchResult, error) {
+	result, err := f.fetchStockOnce(ctx, symbol)
 	if err != nil && errors.Is(err, errTwelveDataRateLimit) {
 		log.Printf("[WARN] FetchStock: rate limit hit for %s, retrying in %s", symbol, stockRateLimitRetry)
-		time.Sleep(stockRateLimitRetry)
-		result, err = f.fetchStockOnce(symbol)
+		timer := time.NewTimer(stockRateLimitRetry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("asset: rate limit retry for %s stopped: %w", symbol, ctx.Err())
+		case <-timer.C:
+		}
+		result, err = f.fetchStockOnce(ctx, symbol)
 	}
 	if err != nil {
 		return nil, err
@@ -248,15 +260,17 @@ func (f *AssetFetcher) FetchStock(symbol string) (*FetchResult, error) {
 	return result, nil
 }
 
-func (f *AssetFetcher) fetchStockOnce(symbol string) (*FetchResult, error) {
-	f.stockPacer.wait()
+func (f *AssetFetcher) fetchStockOnce(ctx context.Context, symbol string) (*FetchResult, error) {
+	if err := f.stockPacer.wait(ctx); err != nil {
+		return nil, fmt.Errorf("asset: wait to fetch stock %s: %w", symbol, err)
+	}
 	recordStockAPICall()
 
 	// The key goes in the Authorization header, never in the URL: a network
 	// error quotes the full URL, and that error is logged (#74).
 	endpoint := fmt.Sprintf("%s?symbol=%s", twelveDataQuoteURL, url.QueryEscape(symbol))
 
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("asset: build twelve data request for %s: %w", symbol, err)
 	}
@@ -378,8 +392,8 @@ type goldProductLD struct {
 // XAU/USD spot prices. It deliberately does not fall back to a generic
 // XAU/USD spot price — callers need the Indonesian retail price
 // specifically.
-func (f *AssetFetcher) FetchGold() (*FetchResult, error) {
-	priceIDR, err := f.fetchGoldPriceIDR()
+func (f *AssetFetcher) FetchGold(ctx context.Context) (*FetchResult, error) {
+	priceIDR, err := f.fetchGoldPriceIDR(ctx)
 	if err != nil {
 		log.Printf("[ERROR] FetchGold: %v", err)
 		return nil, fmt.Errorf("asset: fetch gold price: %w", err)
@@ -413,8 +427,8 @@ func goldResult(priceIDR float64, rate currency.Rate, now time.Time) (*FetchResu
 	}, nil
 }
 
-func (f *AssetFetcher) fetchGoldPriceIDR() (float64, error) {
-	req, err := http.NewRequest(http.MethodGet, hargaEmasURL, nil)
+func (f *AssetFetcher) fetchGoldPriceIDR(ctx context.Context) (float64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hargaEmasURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("build harga-emas.org request: %w", err)
 	}
@@ -492,18 +506,18 @@ func SymbolAssetType(symbol string) (string, bool) {
 // FetchAsset routes to the correct fetch method based on assetType
 // ("stock", "crypto", or "gold"), after checking symbol against
 // symbolAssetTypes (see SymbolAssetType).
-func (f *AssetFetcher) FetchAsset(symbol, assetType string) (*FetchResult, error) {
+func (f *AssetFetcher) FetchAsset(ctx context.Context, symbol, assetType string) (*FetchResult, error) {
 	if t, ok := SymbolAssetType(symbol); !ok || t != assetType {
 		return nil, fmt.Errorf("asset: unsupported symbol %s for asset type %s", symbol, assetType)
 	}
 
 	switch assetType {
 	case "crypto":
-		return f.FetchCrypto(symbol)
+		return f.FetchCrypto(ctx, symbol)
 	case "stock":
-		return f.FetchStock(symbol)
+		return f.FetchStock(ctx, symbol)
 	case "gold":
-		return f.FetchGold()
+		return f.FetchGold(ctx)
 	default:
 		return nil, fmt.Errorf("asset: unknown asset type %q", assetType)
 	}
@@ -515,15 +529,17 @@ const maxMarketChartBytes = 1 << 20
 // FetchCryptoWeek52 returns the highest and lowest USD price of a crypto
 // ticker over the last 365 days from CoinGecko's market_chart endpoint.
 // The values are daily prices, not intraday highs and lows (spec §2).
-func (f *AssetFetcher) FetchCryptoWeek52(symbol string) (high, low float64, err error) {
+func (f *AssetFetcher) FetchCryptoWeek52(ctx context.Context, symbol string) (high, low float64, err error) {
 	if t, ok := SymbolAssetType(symbol); !ok || t != "crypto" {
 		return 0, 0, fmt.Errorf("asset: unsupported crypto symbol: %s", symbol)
 	}
-	f.cryptoPacer.wait()
+	if err := f.cryptoPacer.wait(ctx); err != nil {
+		return 0, 0, fmt.Errorf("asset: wait to fetch coingecko market_chart for %s: %w", symbol, err)
+	}
 
 	endpoint := fmt.Sprintf("%s/coins/%s/market_chart?vs_currency=usd&days=365",
 		CoinGeckoBaseURL, url.PathEscape(coinGeckoID(symbol)))
-	req, err := f.coinGeckoRequest(endpoint)
+	req, err := f.coinGeckoRequest(ctx, endpoint)
 	if err != nil {
 		return 0, 0, fmt.Errorf("asset: build coingecko market_chart request for %s: %w", symbol, err)
 	}
