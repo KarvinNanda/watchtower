@@ -1,0 +1,30 @@
+🛡️ *Sentinel* · 3 items \(1 actively exploited\)
+⏰ 15 Oct 2026 09:30 WIB
+━━━━━━━━━━━━━━━
+
+🚨 *CVE\-2026\-1111* · ACTIVELY EXPLOITED · CRITICAL 9\.8
+Fortinet FortiOS heap overflow
+Action: Apply mitigations per vendor instructions\.
+Due: 5 Nov 2026 · Ransomware: yes
+💥 Impact: data can leak, data can be changed, the service can go down
+🚪 How it is attacked: from the internet · no login needed · no action from the victim
+📦 FortiOS: affected < 7\.4\.3 · safe from 7\.4\.3
+📈 EPSS: 94% chance of exploitation in the next 30 days
+📅 Published: 12 Oct 2026
+🏷️ fortios · CISA KEV
+🔗 [nvd\.nist\.gov](https://nvd.nist.gov/vuln/detail/CVE-2026-1111)
+
+🟠 *CVE\-2026\-2222* · HIGH 7\.5
+Acme gateway auth bypass
+💥 Impact: data can leak
+🚪 How it is attacked: from the internet · no login needed · no action from the victim
+📦 acme gateway: affected ≥ 2\.0, < 2\.4 · safe from 2\.4
+📦 acme gateway: affected ≤ 1\.9
+📦 \+1 more
+📈 EPSS: 0\.4% chance of exploitation in the next 30 days
+🏷️ acme · NVD
+🔗 [nvd\.nist\.gov](https://nvd.nist.gov/vuln/detail/CVE-2026-2222)
+
+⚪ *Patch Tuesday roundup*
+🏷️ windows · RSS
+🔗 [example\.com](https://example.com/news)

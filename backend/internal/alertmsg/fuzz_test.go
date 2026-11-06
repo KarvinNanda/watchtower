@@ -49,6 +49,8 @@ func FuzzSentinelMessages(f *testing.F) {
 				SourceType: "cve", CVEID: cve, Title: title, Description: desc, URL: rawURL, Severity: severity,
 				CVSSScore: 7.5, KnownExploited: kev, RequiredAction: desc, DueDate: due, Ransomware: kev,
 				MatchedKeywords: []string{keyword},
+				CVSSVector:      title,
+				Affected:        []AffectedVersion{{Product: title, Range: desc, Fixed: keyword}, {Product: cve, Range: due, NoFix: kev}},
 			}})
 			for i, m := range msgs {
 				if err := checkMarkdownV2(m); err != nil {
