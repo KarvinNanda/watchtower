@@ -40,10 +40,10 @@ type AssetAlert struct {
 	Distance    rules.Distance // how far the price is from the rule that fired
 }
 
-// dataAgeThreshold is how old a price may be before the message says so. It
+// DataAgeThreshold is how old a price may be before the message says so. It
 // must equal cache.ManualMaxAge. alertmsg does not import the cache package,
 // so a test in internal/scheduler asserts the two are equal.
-const dataAgeThreshold = 15 * time.Minute
+const DataAgeThreshold = 15 * time.Minute
 
 type assetGroup struct {
 	symbol      string
@@ -199,7 +199,7 @@ func week52Line(price float64, high, low *float64) string {
 // ageLine says how old the price is, "" when it is fresh or the fetch time
 // is unknown.
 func ageLine(lang string, at, fetchedAt time.Time) string {
-	if fetchedAt.IsZero() || at.Sub(fetchedAt) <= dataAgeThreshold {
+	if fetchedAt.IsZero() || at.Sub(fetchedAt) <= DataAgeThreshold {
 		return ""
 	}
 	return "⏳ " + esc(staleText(lang, at.Sub(fetchedAt)))
