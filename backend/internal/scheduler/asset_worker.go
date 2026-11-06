@@ -119,13 +119,26 @@ type AlertItem struct {
 	// Distance is measured with the state this run just observed, so a
 	// trailing stop that raised its peak and fired reports the new peak.
 	Distance rules.Distance
+	// SessionStart is the stock session behind the price (nil otherwise).
+	SessionStart *time.Time
 }
 
 // alertMeta is the per-symbol context copied onto every alert of a run.
 type alertMeta struct {
-	AssetType   string
-	ChangePct7d *float64
-	FetchedAt   time.Time
+	AssetType    string
+	ChangePct7d  *float64
+	FetchedAt    time.Time
+	SessionStart *time.Time
+}
+
+// stockSessionStart is when a stock's trading session behind the cached
+// price began. For a stock, HighSince is the quote's session start; for
+// crypto it is the start of a 24 h window, so it is not used there.
+func stockSessionStart(assetType string, d *cache.MarketData) *time.Time {
+	if assetType != "stock" {
+		return nil
+	}
+	return d.HighSince
 }
 
 // UserAlertBatch accumulates every AlertItem fired for one user during a
@@ -402,7 +415,10 @@ func (w *AssetWorker) processSymbol(symbol SymbolInfo, scope runScope, batches m
 
 	nativeIDR := nativeIDRFor(symbol.AssetType, marketData)
 
-	meta := alertMeta{AssetType: symbol.AssetType, ChangePct7d: marketData.ChangePct7d, FetchedAt: marketData.LastFetched}
+	meta := alertMeta{
+		AssetType: symbol.AssetType, ChangePct7d: marketData.ChangePct7d, FetchedAt: marketData.LastFetched,
+		SessionStart: stockSessionStart(symbol.AssetType, marketData),
+	}
 	res.triggered = w.evaluateRules(ctx, rows, symbol.Symbol, market, nativeIDR, meta, scope, batches)
 
 	// A crypto alert shows the 52-week range, but only a week52_break rule
@@ -481,6 +497,7 @@ func (w *AssetWorker) evaluateRules(
 			AssetType:     meta.AssetType,
 			ChangePct7d:   meta.ChangePct7d,
 			FetchedAt:     meta.FetchedAt,
+			SessionStart:  meta.SessionStart,
 			Week52High:    market.Week52High,
 			Week52Low:     market.Week52Low,
 			Distance:      rules.DistanceTo(rules.WithPatch(row.Rule, out.Observed), market),
@@ -547,6 +564,7 @@ func (w *AssetWorker) dispatchUserBatch(batch *UserAlertBatch, at time.Time, rat
 			NativeIDR: a.NativeIDR, ChangePct: a.ChangePct, Trigger: a.Trigger,
 			AssetType: a.AssetType, ChangePct7d: a.ChangePct7d, FetchedAt: a.FetchedAt,
 			Week52High: a.Week52High, Week52Low: a.Week52Low, Distance: a.Distance,
+			SessionStart: a.SessionStart,
 		})
 	}
 	messages := alertmsg.AssetMessages(batch.Language, at, rate, alerts)

@@ -657,3 +657,31 @@ func TestDispatchUserBatch_MapsNewFields(t *testing.T) {
 func TestDataAgeThresholdMatchesManualMaxAge(t *testing.T) {
 	assert.Equal(t, cache.ManualMaxAge, alertmsg.DataAgeThreshold)
 }
+
+func TestStockSessionStart_OnlyForStocks(t *testing.T) {
+	session := time.Date(2026, 11, 5, 14, 30, 0, 0, time.UTC)
+	stock := stockSessionStart("stock", &cache.MarketData{HighSince: &session})
+	require.NotNil(t, stock)
+	assert.Equal(t, session, *stock)
+	assert.Nil(t, stockSessionStart("crypto", &cache.MarketData{HighSince: &session}), "crypto HighSince is a 24 h window, not a session")
+	assert.Nil(t, stockSessionStart("stock", &cache.MarketData{}))
+}
+
+func TestDispatchUserBatch_StockLastSessionLabel(t *testing.T) {
+	t.Parallel()
+	w, mock, notif := newMockAssetWorker(t, 3)
+	session := time.Date(2026, 11, 5, 14, 30, 0, 0, time.UTC)
+	at := time.Date(2026, 11, 6, 6, 41, 0, 0, time.UTC) // Friday before the US open
+	batch := &UserAlertBatch{UserID: 1, ChatID: 1000, Language: "id", Alerts: []AlertItem{{
+		RuleID: 1, ParamsVersion: 1, Symbol: "NVDA", PriceUSD: 181.6, ChangePct: floatPtr(-9.26),
+		AssetType: "stock", SessionStart: &session, FetchedAt: at,
+		Trigger: rules.Trigger{Type: rules.TypePctChange24h, Pct: 5},
+	}}}
+	mock.ExpectExec(`UPDATE asset_rules`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO notification_logs`).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	require.True(t, w.dispatchUserBatch(batch, at, alertmsg.Rate{Value: 16000}))
+
+	require.Len(t, notif.calls, 1)
+	assert.Contains(t, notif.calls[0].Message, "Sesi terakhir", "SessionStart is mapped onto the alert")
+}

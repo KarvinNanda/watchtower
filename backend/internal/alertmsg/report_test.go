@@ -123,3 +123,13 @@ func TestReportMessages_ChangeLineAndPassedAmount(t *testing.T) {
 	assertGolden(t, "report_id_enriched", id)
 	assertGolden(t, "report_en_enriched", en)
 }
+
+func TestReportMessages_StockLastSessionLabel(t *testing.T) {
+	session := time.Date(2026, 11, 5, 14, 30, 0, 0, time.UTC)
+	at := time.Date(2026, 11, 6, 6, 41, 0, 0, time.UTC) // Friday before the US open
+	syms := []ReportSymbol{{Symbol: "SPY", AssetType: "stock", PriceUSD: 733, ChangePct: f64(-4.41), ChangePct7d: f64(-4.726), SessionStart: &session}}
+	id := AssetReportMessages("id", at, testRate, syms)
+	require.Len(t, id, 1)
+	assert.Contains(t, id[0], esc("📉 Sesi terakhir: -4.41% · 7 hari: -4.73%"))
+	assert.NotContains(t, id[0], "tutup kemarin")
+}

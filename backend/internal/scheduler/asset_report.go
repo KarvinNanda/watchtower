@@ -114,6 +114,7 @@ func (w *AssetWorker) reportSymbol(symbol SymbolInfo, userID uint64) (alertmsg.R
 	market := marketFromData(data)
 	item.PriceUSD, item.NativeIDR, item.ChangePct = data.PriceUSD, nativeIDRFor(symbol.AssetType, data), data.ChangePct24h
 	item.AssetType, item.ChangePct7d = symbol.AssetType, data.ChangePct7d
+	item.SessionStart = stockSessionStart(symbol.AssetType, data)
 	if data.Stale {
 		since := data.LastFetched
 		item.StaleSince = &since

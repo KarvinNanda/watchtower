@@ -217,3 +217,16 @@ func TestReportSymbol_CarriesAssetTypeAnd7d(t *testing.T) {
 	assert.Equal(t, "crypto", item.AssetType)
 	assert.Equal(t, floatPtr(3.5), item.ChangePct7d)
 }
+
+func TestReportSymbol_CarriesStockSessionStart(t *testing.T) {
+	w, mock, _, _ := newRecordingAssetWorker(t)
+	session := time.Date(2026, 11, 5, 14, 30, 0, 0, time.UTC)
+	w.cache = &fakeMarket{data: map[string]*cache.MarketData{"SPY": {Symbol: "SPY", PriceUSD: 733, HighSince: &session}}}
+	expectReportRule(mock, "SPY", 1)
+
+	item, _, err := w.reportSymbol(SymbolInfo{Symbol: "SPY", AssetType: "stock"}, 7)
+
+	require.NoError(t, err)
+	require.NotNil(t, item.SessionStart)
+	assert.Equal(t, session, *item.SessionStart)
+}
