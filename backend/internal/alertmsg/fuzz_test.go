@@ -22,8 +22,11 @@ func FuzzAssetMessages(f *testing.F) {
 		}
 		for _, rate := range []Rate{{}, {Value: 17908, UpdatedAt: fuzzAt}} {
 			msgs := AssetMessages(lang, fuzzAt, rate, []AssetAlert{
-				{RuleID: 1, Symbol: symbol, PriceUSD: price, Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: level}},
-				{RuleID: 2, Symbol: symbol, PriceUSD: price, NativeIDR: price, Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: level, PeakPriceUSD: price}},
+				{RuleID: 1, Symbol: symbol, AssetType: "stock", PriceUSD: price, ChangePct: &level, ChangePct7d: &price,
+					FetchedAt: fuzzAt.Add(-time.Hour), Week52High: &price, Week52Low: &level,
+					Distance: rules.Distance{Kind: rules.DistanceLevel, Passed: true, Pct: -level},
+					Trigger:  rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: level}},
+				{RuleID: 2, Symbol: symbol, PriceUSD: price, NativeIDR: price, Distance: rules.Distance{Kind: rules.DistanceLevel, Pct: level}, Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: level, PeakPriceUSD: price}},
 			})
 			for i, m := range msgs {
 				if err := checkMarkdownV2(m); err != nil {
@@ -111,7 +114,7 @@ func FuzzAssetReportMessages(f *testing.F) {
 		}
 		for _, rate := range []Rate{{}, {Value: 17908, UpdatedAt: fuzzAt}} {
 			msgs := AssetReportMessages(lang, fuzzAt, rate, []ReportSymbol{
-				{Symbol: symbol, PriceUSD: price, ChangePct: &pct, Rules: []ReportRule{
+				{Symbol: symbol, AssetType: "stock", PriceUSD: price, ChangePct: &pct, ChangePct7d: &level, Rules: []ReportRule{
 					{RuleID: 1, Trigger: rules.Trigger{Type: rules.TypePriceLevel, Direction: rules.DirectionAbove, LevelUSD: level},
 						Distance: rules.Distance{Kind: rules.DistanceLevel, Level: level, Pct: pct}},
 					{RuleID: 2, Trigger: rules.Trigger{Type: rules.TypeTrailingStop, Pct: pct},
