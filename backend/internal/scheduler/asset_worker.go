@@ -132,8 +132,10 @@ type alertMeta struct {
 }
 
 // stockSessionStart is when a stock's trading session behind the cached
-// price began. For a stock, HighSince is the quote's session start; for
-// crypto it is the start of a 24 h window, so it is not used there.
+// price began. For a stock, HighSince is the quote's session start (the
+// open of the latest daily bar, for example 14:30 UTC); it is nil when the
+// quote had no high or no usable timestamp, and the label then stays
+// "Today". For crypto it is the start of a 24 h window, so it is not used.
 func stockSessionStart(assetType string, d *cache.MarketData) *time.Time {
 	if assetType != "stock" {
 		return nil

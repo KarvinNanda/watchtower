@@ -141,9 +141,6 @@ func priceLine(rate Rate, g assetGroup) string {
 	return first
 }
 
-// changeLine is the change line of a symbol block, "" when both values are
-// unknown. A stock's 24h value is the move since the previous close, so it
-// is labelled "Today". The emoji follows the first value shown.
 // newYork is the US exchanges' time zone, used to tell whether a stock's
 // session is today's.
 var newYork = mustLoadLocation("America/New_York")
@@ -168,9 +165,11 @@ func stockSessionIsToday(sessionStart *time.Time, at time.Time) bool {
 	return sy == ay && sm == am && sd == ad
 }
 
-// changeLine is the symbol block's change line. lastSession is true when a
-// stock's price comes from an earlier session than today's (weekend, holiday
-// or before the open); the stock label then says so.
+// changeLine is the change line of a symbol block, "" when both values are
+// unknown. A stock's 24h value is the move since the previous close, so it
+// is labelled "Today", or "Last session" when lastSession is true (the price
+// comes from an earlier session: weekend, holiday or before the open). The
+// emoji follows the first value shown.
 func changeLine(lang, assetType string, pct24h, pct7d *float64, lastSession bool) string {
 	pct24h, pct7d = shownPct(pct24h), shownPct(pct7d)
 	var parts []string
