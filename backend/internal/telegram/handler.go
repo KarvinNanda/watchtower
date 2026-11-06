@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 const (
@@ -209,7 +211,9 @@ type telegramAPIResponse struct {
 
 // sendMessage delivers text to chatID via the Telegram Bot API using the
 // given bot token.
-func (h *BotHandler) sendMessage(token string, chatID int64, text string) error {
+func (h *BotHandler) sendMessage(token string, chatID int64, text string) (err error) {
+	// The token is part of the URL, and net/http quotes the URL in its errors.
+	defer func() { err = utils.RedactSecret(err, token) }()
 	endpoint := telegramAPIBase + token + "/sendMessage"
 
 	body, err := json.Marshal(telegramSendMessageRequest{

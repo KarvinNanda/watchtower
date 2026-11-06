@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
 const (
@@ -81,7 +83,10 @@ func (h *BotHandler) StartPolling(ctx context.Context, botType string) error {
 // polling for up to pollingTimeoutSecs. The request is bound to ctx so a
 // shutdown signal aborts an in-flight poll immediately instead of waiting
 // out the full timeout.
-func (h *BotHandler) getUpdates(ctx context.Context, token string, offset int64) ([]TelegramUpdate, error) {
+func (h *BotHandler) getUpdates(ctx context.Context, token string, offset int64) (updates []TelegramUpdate, err error) {
+	// The token is part of the URL, and net/http quotes the URL in its
+	// errors, which StartPolling logs.
+	defer func() { err = utils.RedactSecret(err, token) }()
 	endpoint := fmt.Sprintf("%s%s/getUpdates?offset=%d&timeout=%d", telegramAPIBase, token, offset, pollingTimeoutSecs)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
