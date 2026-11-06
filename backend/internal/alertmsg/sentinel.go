@@ -67,6 +67,7 @@ type AffectedVersion struct {
 const (
 	productMaxRunes  = 40
 	versionMaxRunes  = 30
+	rangeMaxRunes    = 60
 	maxAffectedLines = 2
 )
 
@@ -329,7 +330,7 @@ func affectedLines(lang string, av []AffectedVersion) []string {
 			rest++
 			continue
 		}
-		rng := TruncateRunes(a.Range, versionMaxRunes)
+		rng := TruncateRunes(a.Range, rangeMaxRunes)
 		var phrase string
 		if strings.ContainsRune("<>≤≥=", []rune(a.Range)[0]) {
 			phrase = pick(lang, "affected ", "terdampak ") + rng

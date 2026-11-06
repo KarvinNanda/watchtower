@@ -271,3 +271,10 @@ func TestSentinelMessages_ManyEnrichedItemsStayUnderLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestAffectedLines_KeepsWholeTwoVersionRange(t *testing.T) {
+	rng := ">= 4.0.0-canary.0, < 4.0.0-canary.34"
+	got := affectedLines("en", []AffectedVersion{{Product: "next", Range: rng}})
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], rng)
+}
