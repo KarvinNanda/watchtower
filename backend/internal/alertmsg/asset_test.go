@@ -162,28 +162,73 @@ func TestAssetMessages_FallbackFreeWhenRateUnavailable(t *testing.T) {
 	assert.NotContains(t, msgs[0], "Rp", "no converted IDR without a real rate")
 }
 
+func TestStockSessionIsToday(t *testing.T) {
+	utc := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		require.NoError(t, err)
+		return v
+	}
+	ptr := func(v time.Time) *time.Time { return &v }
+	cases := []struct {
+		name    string
+		session *time.Time
+		at      time.Time
+		want    bool
+	}{
+		{"unknown session keeps today", nil, utc("2026-11-06T06:41:00Z"), true},
+		{"weekday before the open", ptr(utc("2026-11-05T14:30:00Z")), utc("2026-11-06T06:41:00Z"), false},
+		{"during the session", ptr(utc("2026-11-06T14:30:00Z")), utc("2026-11-06T20:00:00Z"), true},
+		{"friday evening in new york is still friday", ptr(utc("2026-11-06T14:30:00Z")), utc("2026-11-07T03:00:00Z"), true},
+		{"saturday", ptr(utc("2026-11-06T14:30:00Z")), utc("2026-11-07T15:00:00Z"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, stockSessionIsToday(tc.session, tc.at))
+		})
+	}
+}
+
+func TestAssetMessages_StockLastSessionLabel(t *testing.T) {
+	session := time.Date(2026, 11, 5, 14, 30, 0, 0, time.UTC)
+	at := time.Date(2026, 11, 6, 6, 41, 0, 0, time.UTC) // Friday before the US open
+	alert := AssetAlert{RuleID: 1, Symbol: "NVDA", AssetType: "stock", PriceUSD: 181.6, ChangePct: f64(-9.26),
+		ChangePct7d: f64(-15.0051), SessionStart: &session, Trigger: rules.Trigger{Type: rules.TypePctChange24h, Pct: 5}}
+
+	id := AssetMessages("id", at, testRate, []AssetAlert{alert})[0]
+	assert.Contains(t, id, esc("📉 Sesi terakhir: -9.26% · 7 hari: -15.01%"))
+	assert.NotContains(t, id, "Hari ini")
+	assert.NotContains(t, id, "tutup kemarin")
+
+	en := AssetMessages("en", at, testRate, []AssetAlert{alert})[0]
+	assert.Contains(t, en, esc("📉 Last session: -9.26% · 7d: -15.01%"))
+}
+
 func TestChangeLine(t *testing.T) {
 	cases := []struct {
 		name, lang, typ string
 		p24, p7         *float64
 		want            string
+		lastSession     bool
 	}{
-		{"crypto id both", "id", "crypto", f64(-1.8), f64(-3.0276), "📉 24 jam: -1.80% · 7 hari: -3.03%"},
-		{"crypto en both", "en", "crypto", f64(1.5), f64(2), "📈 24h: +1.50% · 7d: +2.00%"},
-		{"stock en today only", "en", "stock", f64(1.5), nil, "📈 Today: +1.50% (vs previous close)"},
-		{"stock id both", "id", "stock", f64(-1.53), f64(2.1), "📉 Hari ini: -1.53% (vs tutup kemarin) · 7 hari: +2.10%"},
-		{"gold id 7d only zero", "id", "gold", nil, f64(0), "📈 7 hari: +0.00%"},
-		{"empty type is crypto", "en", "", f64(1), nil, "📈 24h: +1.00%"},
-		{"first shown value is 7d", "en", "crypto", nil, f64(-1), "📉 7d: -1.00%"},
-		{"tiny negative rounds to zero", "en", "crypto", f64(-0.001), nil, "📈 24h: +0.00%"},
-		{"negative zero", "en", "crypto", f64(math.Copysign(0, -1)), nil, "📈 24h: +0.00%"},
-		{"NaN 24h is dropped", "id", "crypto", f64(math.NaN()), f64(-1.5), "📉 7 hari: -1.50%"},
-		{"Inf 7d is dropped", "en", "crypto", f64(1), f64(math.Inf(1)), "📈 24h: +1.00%"},
-		{"both nil", "id", "crypto", nil, nil, ""},
+		{"stock id last session", "id", "stock", f64(-1.53), f64(2.1), "📉 Sesi terakhir: -1.53% · 7 hari: +2.10%", true},
+		{"stock en last session", "en", "stock", f64(1.5), nil, "📈 Last session: +1.50%", true},
+		{"crypto ignores last session", "en", "crypto", f64(1.5), nil, "📈 24h: +1.50%", true},
+		{"crypto id both", "id", "crypto", f64(-1.8), f64(-3.0276), "📉 24 jam: -1.80% · 7 hari: -3.03%", false},
+		{"crypto en both", "en", "crypto", f64(1.5), f64(2), "📈 24h: +1.50% · 7d: +2.00%", false},
+		{"stock en today only", "en", "stock", f64(1.5), nil, "📈 Today: +1.50% (vs previous close)", false},
+		{"stock id both", "id", "stock", f64(-1.53), f64(2.1), "📉 Hari ini: -1.53% (vs tutup kemarin) · 7 hari: +2.10%", false},
+		{"gold id 7d only zero", "id", "gold", nil, f64(0), "📈 7 hari: +0.00%", false},
+		{"empty type is crypto", "en", "", f64(1), nil, "📈 24h: +1.00%", false},
+		{"first shown value is 7d", "en", "crypto", nil, f64(-1), "📉 7d: -1.00%", false},
+		{"tiny negative rounds to zero", "en", "crypto", f64(-0.001), nil, "📈 24h: +0.00%", false},
+		{"negative zero", "en", "crypto", f64(math.Copysign(0, -1)), nil, "📈 24h: +0.00%", false},
+		{"NaN 24h is dropped", "id", "crypto", f64(math.NaN()), f64(-1.5), "📉 7 hari: -1.50%", false},
+		{"Inf 7d is dropped", "en", "crypto", f64(1), f64(math.Inf(1)), "📈 24h: +1.00%", false},
+		{"both nil", "id", "crypto", nil, nil, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, esc(tc.want), changeLine(tc.lang, tc.typ, tc.p24, tc.p7))
+			assert.Equal(t, esc(tc.want), changeLine(tc.lang, tc.typ, tc.p24, tc.p7, tc.lastSession))
 		})
 	}
 }

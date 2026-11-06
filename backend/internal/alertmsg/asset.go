@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	_ "time/tzdata" // embeds America/New_York so the label works in a minimal image
 
 	"github.com/karvin-nanda/watchtower/internal/rules"
 )
@@ -38,6 +39,9 @@ type AssetAlert struct {
 	Week52High  *float64       // nil when unknown
 	Week52Low   *float64       // nil when unknown
 	Distance    rules.Distance // how far the price is from the rule that fired
+	// SessionStart is when the stock's trading session behind the price
+	// began (the quote timestamp); nil when unknown or not a stock.
+	SessionStart *time.Time
 }
 
 // DataAgeThreshold is how old a price may be before the message says so. It
@@ -46,16 +50,17 @@ type AssetAlert struct {
 const DataAgeThreshold = 15 * time.Minute
 
 type assetGroup struct {
-	symbol      string
-	assetType   string
-	priceUSD    float64
-	nativeIDR   float64
-	changePct   *float64
-	changePct7d *float64
-	fetchedAt   time.Time
-	week52High  *float64
-	week52Low   *float64
-	alerts      []AssetAlert
+	symbol       string
+	assetType    string
+	priceUSD     float64
+	nativeIDR    float64
+	changePct    *float64
+	changePct7d  *float64
+	fetchedAt    time.Time
+	week52High   *float64
+	week52Low    *float64
+	sessionStart *time.Time
+	alerts       []AssetAlert
 }
 
 // AssetMessages renders one user's fired rules as one or more message
@@ -89,7 +94,7 @@ func groupAlerts(alerts []AssetAlert) []assetGroup {
 			g = &assetGroup{
 				symbol: a.Symbol, assetType: a.AssetType, priceUSD: a.PriceUSD, nativeIDR: a.NativeIDR,
 				changePct: a.ChangePct, changePct7d: a.ChangePct7d, fetchedAt: a.FetchedAt,
-				week52High: a.Week52High, week52Low: a.Week52Low,
+				week52High: a.Week52High, week52Low: a.Week52Low, sessionStart: a.SessionStart,
 			}
 			bySymbol[a.Symbol] = g
 			symbols = append(symbols, a.Symbol)
@@ -136,21 +141,49 @@ func priceLine(rate Rate, g assetGroup) string {
 	return first
 }
 
+// newYork is the US exchanges' time zone, used to tell whether a stock's
+// session is today's.
+var newYork = mustLoadLocation("America/New_York")
+
+func mustLoadLocation(name string) *time.Location {
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		panic(err) // time/tzdata is embedded, so this cannot happen
+	}
+	return loc
+}
+
+// stockSessionIsToday reports whether the session behind a stock price is
+// the current day in New York. An unknown session counts as today, so the
+// label stays as it was before the session was known.
+func stockSessionIsToday(sessionStart *time.Time, at time.Time) bool {
+	if sessionStart == nil {
+		return true
+	}
+	sy, sm, sd := sessionStart.In(newYork).Date()
+	ay, am, ad := at.In(newYork).Date()
+	return sy == ay && sm == am && sd == ad
+}
+
 // changeLine is the change line of a symbol block, "" when both values are
 // unknown. A stock's 24h value is the move since the previous close, so it
-// is labelled "Today". The emoji follows the first value shown.
-func changeLine(lang, assetType string, pct24h, pct7d *float64) string {
+// is labelled "Today", or "Last session" when lastSession is true (the price
+// comes from an earlier session: weekend, holiday or before the open). The
+// emoji follows the first value shown.
+func changeLine(lang, assetType string, pct24h, pct7d *float64, lastSession bool) string {
 	pct24h, pct7d = shownPct(pct24h), shownPct(pct7d)
 	var parts []string
 	if pct24h != nil {
 		label := pick(lang, "24h", "24 jam")
-		if assetType == "stock" {
+		suffix := ""
+		switch {
+		case assetType == "stock" && lastSession:
+			label = pick(lang, "Last session", "Sesi terakhir")
+		case assetType == "stock":
 			label = pick(lang, "Today", "Hari ini")
+			suffix = pick(lang, " (vs previous close)", " (vs tutup kemarin)")
 		}
-		part := fmt.Sprintf("%s: %+.2f%%", label, *pct24h)
-		if assetType == "stock" {
-			part += pick(lang, " (vs previous close)", " (vs tutup kemarin)")
-		}
+		part := fmt.Sprintf("%s: %+.2f%%", label, *pct24h) + suffix
 		parts = append(parts, part)
 	}
 	if pct7d != nil {
@@ -222,7 +255,7 @@ func assetBlock(lang string, at time.Time, rate Rate, g assetGroup) string {
 	for _, a := range g.alerts {
 		lines = append(lines, triggerEmoji(a.Trigger)+" "+esc(triggerSentence(lang, rate, a.Trigger)+alertDistanceTail(lang, a.Distance)))
 	}
-	if l := changeLine(lang, g.assetType, g.changePct, g.changePct7d); l != "" {
+	if l := changeLine(lang, g.assetType, g.changePct, g.changePct7d, !stockSessionIsToday(g.sessionStart, at)); l != "" {
 		lines = append(lines, l)
 	}
 	if l := week52Line(g.priceUSD, g.week52High, g.week52Low); l != "" {

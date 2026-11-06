@@ -21,7 +21,10 @@ type ReportSymbol struct {
 	AssetType   string     // "crypto", "stock" or "gold"; empty is shown like crypto
 	ChangePct7d *float64   // nil when unknown
 	StaleSince  *time.Time // cached data used after a refused or failed refresh
-	Rules       []ReportRule
+	// SessionStart is when the stock's trading session behind the price began;
+	// nil when unknown or not a stock.
+	SessionStart *time.Time
+	Rules        []ReportRule
 }
 
 // ReportRule is one active rule and how far the price is from it. Nothing
@@ -76,7 +79,7 @@ func reportBlock(lang string, at time.Time, rate Rate, s ReportSymbol) string {
 	for _, r := range rs {
 		lines = append(lines, triggerEmoji(r.Trigger)+" "+esc(reportRuleText(lang, rate, r)))
 	}
-	if l := changeLine(lang, s.AssetType, s.ChangePct, s.ChangePct7d); l != "" {
+	if l := changeLine(lang, s.AssetType, s.ChangePct, s.ChangePct7d, !stockSessionIsToday(s.SessionStart, at)); l != "" {
 		lines = append(lines, l)
 	}
 	return strings.Join(lines, "\n")
