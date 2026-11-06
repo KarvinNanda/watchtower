@@ -357,7 +357,15 @@ func epssLine(lang string, p *float64) string {
 	if p == nil {
 		return ""
 	}
-	pct := *p * 100
+	v := *p
+	if math.IsNaN(v) || v < 0 {
+		v = 0
+	}
+	if v > 1 {
+		v = 1
+	}
+	// Round away float error (0.29*100 is 28.999999999999996) before flooring.
+	pct := math.Round(v*100*1e6) / 1e6
 	var s string
 	switch {
 	case pct >= 1:

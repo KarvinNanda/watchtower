@@ -164,6 +164,9 @@ func TestEPSSLine(t *testing.T) {
 	assert.Equal(t, "📈 EPSS: 0.4% peluang dieksploitasi dalam 30 hari", epssLine("id", f64(0.004)))
 	assert.Equal(t, "📈 EPSS: < 0.1% peluang dieksploitasi dalam 30 hari", epssLine("id", f64(0.0004)))
 	assert.Equal(t, "", epssLine("id", nil))
+	for in, want := range map[float64]string{0.29: "29%", 0.57: "57%", 0.01: "1%", 0.001: "0.1%", 1.0: "100%", 1.5: "100%", 0.99999: "99%", -0.2: "< 0.1%"} {
+		assert.Equal(t, "📈 EPSS: "+want+" peluang dieksploitasi dalam 30 hari", epssLine("id", f64(in)), "%v", in)
+	}
 	assert.Equal(t, "📈 EPSS: 94% chance of exploitation in the next 30 days", epssLine("en", f64(0.94321)))
 }
 
@@ -178,6 +181,9 @@ func TestAffectedLines(t *testing.T) {
 		affectedLines("id", []AffectedVersion{{Product: "y", Range: "≤ 2.1"}}))
 	assert.Equal(t, []string{"📦 x: terdampak versi 1.0 · belum ada versi aman"},
 		affectedLines("id", []AffectedVersion{{Product: "x", Range: "1.0", NoFix: true}}))
+
+	both := affectedLines("id", []AffectedVersion{{Product: "z", Range: "< 2", Fixed: "2", NoFix: true}})
+	assert.Equal(t, []string{"📦 z: terdampak < 2 · aman mulai 2"}, both)
 
 	five := []AffectedVersion{{"a", "1", "", false}, {"b", "2", "", false}, {"c", "3", "", false}, {"d", "4", "", false}, {"e", "5", "", false}}
 	got := affectedLines("id", five)
