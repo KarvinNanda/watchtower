@@ -154,9 +154,10 @@ func (p Patch) IsEmpty() bool {
 		p.Week52RefUSD == nil && p.Alert == nil && p.Fired == nil
 }
 
-// WithPatch returns a copy of r with the state fields of p applied: the six
-// observed fields, and ClearBaseline clearing BaselinePending. Alert and
-// Fired are not rule state here and are ignored. r itself is not changed.
+// WithPatch returns a copy of r with the state fields of p applied: the five
+// observed state fields plus ClearBaseline, which clears BaselinePending.
+// Alert and Fired are not rule state here and are ignored. r itself is not
+// changed.
 func WithPatch(r Rule, p Patch) Rule {
 	if p.ClearBaseline {
 		r.State.BaselinePending = false
