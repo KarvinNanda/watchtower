@@ -47,6 +47,8 @@ func TestFetchStock_HonoursContextDeadline(t *testing.T) {
 }
 
 // #86: the 60 s rate-limit retry stops as soon as the caller gives up.
+// The retry wait seam signals when the wait starts, so the cancel always
+// lands in that wait and not in the first request.
 func TestFetchStock_RateLimitRetryStopsOnCancel(t *testing.T) {
 	var requests atomic.Int32
 	stubTwelveDataQuote(t, func(w http.ResponseWriter, r *http.Request) {
@@ -54,17 +56,29 @@ func TestFetchStock_RateLimitRetryStopsOnCancel(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":429,"message":"You have run out of API credits for the current minute. 9 API credits were used, with the current limit being 8.","status":"error"}`))
 	})
 	f := NewAssetFetcher("k")
+	waiting := make(chan time.Duration, 1)
+	f.retryAfter = func(d time.Duration) <-chan time.Time {
+		waiting <- d
+		return make(chan time.Time) // never fires: only the cancel can end the wait
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() { _, err := f.FetchStock(ctx, "AAPL"); done <- err }()
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case d := <-waiting:
+		assert.Equal(t, stockRateLimitRetry, d)
+	case <-time.After(5 * time.Second):
+		t.Fatal("FetchStock never started the rate-limit retry wait")
+	}
 	cancel()
 
 	select {
 	case err := <-done:
+		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
+		assert.Contains(t, err.Error(), "rate limit retry", "the cancel must end the retry wait")
 		assert.Equal(t, int32(1), requests.Load(), "no retry after the cancel")
 	case <-time.After(5 * time.Second):
 		t.Fatal("FetchStock kept waiting for the rate-limit retry after the cancel")

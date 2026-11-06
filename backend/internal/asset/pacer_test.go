@@ -58,15 +58,28 @@ func TestPacerWait_NoContextChangeForNormalWait(t *testing.T) {
 
 // #86: a cancelled caller stops waiting for the gap, and since it makes no
 // call, the next caller's gap is still measured from the previous call.
+// The after seam signals when the wait starts and never fires, so the
+// cancel always ends the select.
 func TestPacerWait_ReturnsWhenContextCancelled(t *testing.T) {
 	p := newPacer(time.Hour)
 	require.NoError(t, p.wait(context.Background())) // a prior call
 	prior := p.last
+	waiting := make(chan time.Duration, 1)
+	p.after = func(d time.Duration) <-chan time.Time {
+		waiting <- d
+		return make(chan time.Time)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- p.wait(ctx) }()
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case d := <-waiting:
+		assert.Greater(t, d, time.Duration(0))
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait never started waiting for the gap")
+	}
 	cancel()
 
 	select {

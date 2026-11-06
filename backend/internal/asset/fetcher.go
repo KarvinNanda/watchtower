@@ -82,6 +82,9 @@ type AssetFetcher struct {
 	// coinGeckoKey is an optional Demo API key (#65), sent only as the
 	// x-cg-demo-api-key header so it never appears in a URL, log or error.
 	coinGeckoKey string
+	// retryAfter starts the rate-limit retry wait (time.After); tests
+	// replace it to see when the wait starts.
+	retryAfter func(time.Duration) <-chan time.Time
 }
 
 // NewAssetFetcher builds an AssetFetcher using twelveDataKey for Twelve
@@ -93,6 +96,7 @@ func NewAssetFetcher(twelveDataKey string) *AssetFetcher {
 		httpClient:    utils.NewHTTPClient(),
 		stockPacer:    newPacer(twelveDataMinGap),
 		cryptoPacer:   newPacer(coinGeckoMinGap),
+		retryAfter:    time.After,
 	}
 }
 
@@ -244,12 +248,10 @@ func (f *AssetFetcher) FetchStock(ctx context.Context, symbol string) (*FetchRes
 	result, err := f.fetchStockOnce(ctx, symbol)
 	if err != nil && errors.Is(err, errTwelveDataRateLimit) {
 		log.Printf("[WARN] FetchStock: rate limit hit for %s, retrying in %s", symbol, stockRateLimitRetry)
-		timer := time.NewTimer(stockRateLimitRetry)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return nil, fmt.Errorf("asset: rate limit retry for %s stopped: %w", symbol, ctx.Err())
-		case <-timer.C:
+		case <-f.retryAfter(stockRateLimitRetry):
 		}
 		result, err = f.fetchStockOnce(ctx, symbol)
 	}
