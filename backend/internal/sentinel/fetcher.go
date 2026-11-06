@@ -62,6 +62,10 @@ type SentinelItem struct {
 
 	// Affected products and fixed versions, from NVD CPE or GHSA.
 	Affected []AffectedVersion
+
+	// EPSS is the FIRST.org exploit probability from 0 to 1, filled in by
+	// the scheduler after fetching. nil means unknown.
+	EPSS *float64
 }
 
 // SentinelFetcher polls all six WatchTower threat-intel sources: NVD/NIST,
