@@ -18,11 +18,14 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
-const (
-	lookbackWindow = 7 * 24 * time.Hour
-
+// Package vars, not consts, so tests can point them at an httptest.Server.
+var (
 	nvdAPIURL         = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 	nvdRateLimitDelay = 6 * time.Second
+)
+
+const (
+	lookbackWindow = 7 * 24 * time.Hour
 
 	cisaKEVFeedURL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 
@@ -108,6 +111,33 @@ func (f *SentinelFetcher) FetchNVD() ([]SentinelItem, error) {
 		return nil, fmt.Errorf("sentinel: fetch nvd: %w", err)
 	}
 	return parseNVD(body, now)
+}
+
+// FetchNVDByCVE looks up one CVE in NVD. It returns (nil, nil) when NVD has
+// no record of it. The ID is validated before any request is made.
+func (f *SentinelFetcher) FetchNVDByCVE(cveID string) (*SentinelItem, error) {
+	if !cveIDPattern.MatchString(cveID) {
+		return nil, fmt.Errorf("sentinel: fetch nvd by cve: invalid CVE ID %q", cveID)
+	}
+
+	q := url.Values{}
+	q.Set("cveId", cveID)
+	body, err := f.getBody(nvdAPIURL+"?"+q.Encode(), nil)
+
+	// Same NVD rate limit pause as FetchNVD.
+	time.Sleep(nvdRateLimitDelay)
+
+	if err != nil {
+		return nil, fmt.Errorf("sentinel: fetch nvd by cve %s: %w", cveID, err)
+	}
+	items, err := parseNVD(body, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	return &items[0], nil
 }
 
 // FetchCISAKEV retrieves CISA Known Exploited Vulnerabilities added in the
