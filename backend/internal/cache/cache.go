@@ -48,7 +48,7 @@ const (
 	weekWindowMin = 6 * 24 * time.Hour
 	weekWindowMax = snapshotRetention
 
-	ref7dKeyPrefix = "asset:ref7d:"
+	closes7dKeyPrefix = "asset:closes7d:"
 )
 
 // ManualMaxAge is the oldest price a manual run accepts (spec Q2).
@@ -66,7 +66,7 @@ type FetchOptions struct {
 type marketFetcher interface {
 	FetchAsset(symbol, assetType string) (*asset.FetchResult, error)
 	FetchCryptoWeek52(symbol string) (high, low float64, err error)
-	FetchStockRef7d(symbol string) (asset.DailyClose, error)
+	FetchStockCloses(symbol string) ([]asset.DailyClose, error)
 }
 
 // manualBudget is the subset of quota.Budget the cache uses.
@@ -245,7 +245,7 @@ func (c *Cache) refresh(ctx context.Context, symbol, assetType string, manual bo
 		freshData.ChangePct7d = week
 	}
 	if assetType == "stock" {
-		freshData.ChangePct7d = c.stockChange7d(ctx, symbol, result.PriceUSD, manual)
+		freshData.ChangePct7d = c.stockChange7d(ctx, symbol, result.PriceUSD, result.SessionDay, manual)
 	}
 
 	if err := c.SetMarketData(ctx, freshData); err != nil {
@@ -342,8 +342,8 @@ func pickClosest(snaps []Snapshot, now time.Time, target, minAge, maxAge time.Du
 	return best, found
 }
 
-func ref7dKey(symbol string) string {
-	return ref7dKeyPrefix + symbol
+func closes7dKey(symbol string) string {
+	return closes7dKeyPrefix + symbol
 }
 
 // untilNextUTCMidnight is how long a daily reference stays valid: until
@@ -359,28 +359,42 @@ func untilNextUTCMidnight(now time.Time) time.Duration {
 	return d
 }
 
-type ref7dEntry struct {
-	Close float64   `json:"close"`
-	Day   time.Time `json:"day"`
-}
+// closes7dTimeout bounds the stock closes lookup. It has its own context
+// so a slow /time_series call or Redis write does not run on the caller's
+// per-symbol context.
+const closes7dTimeout = 20 * time.Second
 
 // stockChange7d returns the percent change of price against the stock's
-// close about 7 d ago, or nil when unknown. The reference close is cached
-// in Redis until the next UTC midnight. A miss costs one extra Twelve Data
-// credit on top of the quote, so a manual run takes its own budget credit
-// first. A failed fetch stores nothing, so the next refresh retries.
-func (c *Cache) stockChange7d(ctx context.Context, symbol string, price float64, manual bool) *float64 {
-	var ref ref7dEntry
-	cached := false
-	if raw, err := c.redis.Get(ctx, ref7dKey(symbol)).Bytes(); err == nil {
-		if jsonErr := json.Unmarshal(raw, &ref); jsonErr == nil {
-			cached = true
+// close about 7 days before sessionDay (the trading date of price), or nil
+// when unknown. A zero sessionDay falls back to the newest cached bar.
+//
+// The last daily closes are cached in Redis until the next UTC midnight,
+// and the reference is picked from that list on every call, so it follows
+// the session of the price (before the US open the price is still the
+// previous session's close). A miss costs one extra Twelve Data credit on
+// top of the quote, so a manual run takes its own budget credit first. A
+// failed fetch stores nothing, so the next refresh retries. A Redis read
+// error returns nil without fetching, so Redis being down does not spend a
+// credit on every refresh.
+func (c *Cache) stockChange7d(ctx context.Context, symbol string, price float64, sessionDay time.Time, manual bool) *float64 {
+	own, cancel := context.WithTimeout(context.Background(), closes7dTimeout)
+	defer cancel()
+
+	var closes []asset.DailyClose
+	raw, err := c.redis.Get(own, closes7dKey(symbol)).Bytes()
+	switch {
+	case err == nil:
+		if jsonErr := json.Unmarshal(raw, &closes); jsonErr != nil {
+			log.Printf("[ERROR] stockChange7d: decode cached closes for %s: %v", symbol, jsonErr)
+			closes = nil
 		}
-	} else if !errors.Is(err, redis.Nil) {
+	case errors.Is(err, redis.Nil):
+	default:
 		log.Printf("[ERROR] stockChange7d: redis get %s: %v", symbol, err)
+		return nil
 	}
 
-	if !cached {
+	if len(closes) == 0 {
 		if manual {
 			ok, err := false, error(nil)
 			if c.budget != nil {
@@ -393,22 +407,29 @@ func (c *Cache) stockChange7d(ctx context.Context, symbol string, price float64,
 				return nil
 			}
 		}
-		dc, err := c.fetcher.FetchStockRef7d(symbol)
+		fetched, err := c.fetcher.FetchStockCloses(symbol)
 		if err != nil {
-			log.Printf("[WARN] stockChange7d: reference close for %s: %v", symbol, err)
+			log.Printf("[WARN] stockChange7d: daily closes for %s: %v", symbol, err)
 			return nil
 		}
-		ref = ref7dEntry{Close: dc.Close, Day: dc.Day}
-		raw, err := json.Marshal(ref)
+		if len(fetched) == 0 {
+			return nil
+		}
+		closes = fetched
+		raw, err := json.Marshal(closes)
 		if err == nil {
-			err = c.redis.Set(ctx, ref7dKey(symbol), raw, untilNextUTCMidnight(c.clock())).Err()
+			err = c.redis.Set(own, closes7dKey(symbol), raw, untilNextUTCMidnight(c.clock())).Err()
 		}
 		if err != nil {
 			log.Printf("[ERROR] stockChange7d: redis set %s: %v", symbol, err)
 		}
 	}
 
-	if ref.Close <= 0 {
+	if sessionDay.IsZero() {
+		sessionDay = closes[0].Day
+	}
+	ref, ok := asset.PickRef7d(closes, sessionDay)
+	if !ok || ref.Close <= 0 {
 		return nil
 	}
 	change := (price - ref.Close) / ref.Close * 100

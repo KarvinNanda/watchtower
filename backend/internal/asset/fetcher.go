@@ -57,8 +57,12 @@ type FetchResult struct {
 	// last) trading session. Both nil when unknown; gold has no source.
 	HighUSD   *float64
 	HighSince *time.Time
-	Source    string
-	FetchedAt time.Time
+	// SessionDay is the trading date of a stock quote (its "datetime"), at
+	// 00:00 UTC. Zero when unknown or for crypto and gold. The stock 7-day
+	// change is measured from this session, not from the fetch time.
+	SessionDay time.Time
+	Source     string
+	FetchedAt  time.Time
 }
 
 // AssetFetcher fetches live market data for stocks, crypto, and gold. The
@@ -273,6 +277,7 @@ func (f *AssetFetcher) fetchStockOnce(symbol string) (*FetchResult, error) {
 func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 	var raw struct {
 		Close         string `json:"close"`
+		Datetime      string `json:"datetime"`
 		PercentChange string `json:"percent_change"`
 		High          string `json:"high"`
 		// Timestamp is read leniently (#48): a string or empty value must
@@ -314,6 +319,9 @@ func decodeTwelveDataQuote(r io.Reader, symbol string) (*FetchResult, error) {
 		Week52LowUSD:  parseOptionalFloat(raw.FiftyTwoWeek.Low),
 		Source:        "twelve_data",
 		FetchedAt:     time.Now(),
+	}
+	if day, err := time.Parse("2006-01-02", raw.Datetime); err == nil {
+		res.SessionDay = day
 	}
 	// high is the session's high; timestamp is the session's start. A high
 	// without its window start cannot be used safely, so both or neither. A

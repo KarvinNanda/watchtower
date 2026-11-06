@@ -90,40 +90,59 @@ func TestDecodeTwelveDataTimeSeries_ErrorBody(t *testing.T) {
 }
 
 func TestPickRef7d(t *testing.T) {
-	// Weekdays Mon 2026-10-26 .. Fri 2026-11-06, newest first.
+	// Weekdays Mon 2026-10-19 .. Mon 2026-11-09, newest first, with Mon
+	// 2026-10-26 missing as if it were a market holiday.
 	var closes []DailyClose
-	for d := utcDay(2026, 11, 6); !d.Before(utcDay(2026, 10, 26)); d = d.AddDate(0, 0, -1) {
-		if d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+	for d := utcDay(2026, 11, 9); !d.Before(utcDay(2026, 10, 19)); d = d.AddDate(0, 0, -1) {
+		if d.Weekday() == time.Saturday || d.Weekday() == time.Sunday || d.Equal(utcDay(2026, 10, 26)) {
 			continue
 		}
 		closes = append(closes, DailyClose{Day: d, Close: float64(d.Day())})
 	}
 
 	tests := []struct {
-		name string
-		now  time.Time
-		want time.Time
-		ok   bool
+		name    string
+		session time.Time
+		want    time.Time
+		ok      bool
 	}{
-		{"monday", time.Date(2026, 11, 9, 15, 0, 0, 0, time.UTC), utcDay(2026, 11, 2), true},
-		{"sunday falls back past the weekend", time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC), utcDay(2026, 10, 30), true},
-		{"friday", time.Date(2026, 11, 6, 20, 0, 0, 0, time.UTC), utcDay(2026, 10, 30), true},
-		{"nothing old enough", time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), time.Time{}, false},
+		{"monday session", utcDay(2026, 11, 9), utcDay(2026, 11, 2), true},
+		{"friday session", utcDay(2026, 11, 6), utcDay(2026, 10, 30), true},
+		{"holiday falls back to the friday before", utcDay(2026, 11, 2), utcDay(2026, 10, 23), true},
+		{"nothing old enough", utcDay(2026, 10, 20), time.Time{}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := pickRef7d(closes, tc.now)
+			got, ok := PickRef7d(closes, tc.session)
 			assert.Equal(t, tc.ok, ok)
 			if tc.ok {
 				assert.Equal(t, tc.want, got.Day)
 			}
 		})
 	}
-	_, ok := pickRef7d(nil, time.Now())
+	_, ok := PickRef7d(nil, utcDay(2026, 11, 9))
 	assert.False(t, ok)
 }
 
-func TestFetchStockRef7d_KeyInHeaderOnly(t *testing.T) {
+func TestDecodeTwelveDataQuote_SessionDay(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/twelvedata_quote_aapl.json")
+	require.NoError(t, err)
+
+	res, err := decodeTwelveDataQuote(strings.NewReader(string(fixture)), "AAPL")
+	require.NoError(t, err)
+	assert.Equal(t, utcDay(2026, 10, 14), res.SessionDay)
+	assert.Equal(t, time.UTC, res.SessionDay.Location())
+
+	res, err = decodeTwelveDataQuote(strings.NewReader(`{"close":"10.5"}`), "AAPL")
+	require.NoError(t, err)
+	assert.True(t, res.SessionDay.IsZero(), "missing datetime is zero")
+
+	res, err = decodeTwelveDataQuote(strings.NewReader(`{"close":"10.5","datetime":"2026-10-14 15:30:00"}`), "AAPL")
+	require.NoError(t, err)
+	assert.True(t, res.SessionDay.IsZero(), "unparseable datetime is zero")
+}
+
+func TestFetchStockCloses_KeyInHeaderOnly(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/twelvedata_timeseries_aapl.json")
 	require.NoError(t, err)
 	var auth, query string
@@ -137,7 +156,7 @@ func TestFetchStockRef7d_KeyInHeaderOnly(t *testing.T) {
 	t.Cleanup(func() { twelveDataTimeSeriesURL = old })
 
 	f := NewAssetFetcher("k")
-	ref, err := f.FetchStockRef7d("AAPL")
+	closes, err := f.FetchStockCloses("AAPL")
 
 	require.NoError(t, err)
 	assert.Equal(t, "apikey k", auth)
@@ -147,14 +166,28 @@ func TestFetchStockRef7d_KeyInHeaderOnly(t *testing.T) {
 	assert.Equal(t, "AAPL", vals.Get("symbol"))
 	assert.Equal(t, "1day", vals.Get("interval"))
 	assert.Equal(t, "10", vals.Get("outputsize"))
-	assert.False(t, ref.Day.IsZero())
+	require.Len(t, closes, 10)
+	assert.Equal(t, utcDay(2026, 11, 5), closes[0].Day)
 
 	// Server down: the error must not carry the key.
 	srv.Close()
 	f2 := NewAssetFetcher("k-secret")
-	_, err = f2.FetchStockRef7d("AAPL")
+	_, err = f2.FetchStockCloses("AAPL")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "k-secret")
+}
+
+func TestFetchStockCloses_NoClosesIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok","values":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	old := twelveDataTimeSeriesURL
+	twelveDataTimeSeriesURL = srv.URL
+	t.Cleanup(func() { twelveDataTimeSeriesURL = old })
+
+	_, err := NewAssetFetcher("k").FetchStockCloses("AAPL")
+	require.Error(t, err)
 }
 
 func parseQuery(raw string) (url.Values, error) { return url.ParseQuery(raw) }

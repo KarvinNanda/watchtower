@@ -22,14 +22,14 @@ type fakeFetcher struct {
 	res   *asset.FetchResult
 	err   error
 
-	refCalls int
-	ref      asset.DailyClose
-	refErr   error
+	closesCalls int
+	closes      []asset.DailyClose
+	closesErr   error
 }
 
-func (f *fakeFetcher) FetchStockRef7d(string) (asset.DailyClose, error) {
-	f.refCalls++
-	return f.ref, f.refErr
+func (f *fakeFetcher) FetchStockCloses(string) ([]asset.DailyClose, error) {
+	f.closesCalls++
+	return f.closes, f.closesErr
 }
 
 func (f *fakeFetcher) FetchAsset(symbol, _ string) (*asset.FetchResult, error) {

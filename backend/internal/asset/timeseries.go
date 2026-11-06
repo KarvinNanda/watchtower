@@ -20,10 +20,9 @@ type DailyClose struct {
 	Close float64
 }
 
-// FetchStockRef7d returns the close from about 7 days ago for a stock: the
-// latest trading day on or before today minus 7 days. It costs one Twelve
-// Data credit.
-func (f *AssetFetcher) FetchStockRef7d(symbol string) (DailyClose, error) {
+// FetchStockCloses returns the last daily closes of a stock, newest
+// first. It costs one Twelve Data credit. An empty list is an error.
+func (f *AssetFetcher) FetchStockCloses(symbol string) ([]DailyClose, error) {
 	f.stockPacer.wait()
 	recordStockAPICall()
 
@@ -35,25 +34,24 @@ func (f *AssetFetcher) FetchStockRef7d(symbol string) (DailyClose, error) {
 	// error quotes the full URL, and that error is logged (#74).
 	req, err := http.NewRequest(http.MethodGet, twelveDataTimeSeriesURL+"?"+q.Encode(), nil)
 	if err != nil {
-		return DailyClose{}, fmt.Errorf("asset: build twelve data time series request for %s: %w", symbol, err)
+		return nil, fmt.Errorf("asset: build twelve data time series request for %s: %w", symbol, err)
 	}
 	req.Header.Set("Authorization", "apikey "+f.twelveDataKey)
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		return DailyClose{}, fmt.Errorf("asset: fetch stock time series %s: %w", symbol, err)
+		return nil, fmt.Errorf("asset: fetch stock time series %s: %w", symbol, err)
 	}
 	defer resp.Body.Close()
 
 	closes, err := decodeTwelveDataTimeSeries(resp.Body, symbol)
 	if err != nil {
-		return DailyClose{}, err
+		return nil, err
 	}
-	ref, ok := pickRef7d(closes, time.Now())
-	if !ok {
-		return DailyClose{}, fmt.Errorf("asset: no 7-day reference close for %s", symbol)
+	if len(closes) == 0 {
+		return nil, fmt.Errorf("asset: no daily closes for %s", symbol)
 	}
-	return ref, nil
+	return closes, nil
 }
 
 // decodeTwelveDataTimeSeries parses a /time_series response. Entries whose
@@ -91,11 +89,14 @@ func decodeTwelveDataTimeSeries(r io.Reader, symbol string) ([]DailyClose, error
 	return closes, nil
 }
 
-// pickRef7d returns the close with the latest Day that is on or before the
-// UTC date of now minus 7 days. ok is false when none qualifies.
-func pickRef7d(closes []DailyClose, now time.Time) (DailyClose, bool) {
-	n := now.UTC()
-	cutoff := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -7)
+// PickRef7d returns the close with the latest Day that is on or before
+// sessionDay minus 7 days. sessionDay is the trading date the current
+// price belongs to, so before the US open the reference follows the
+// previous session, not the new UTC date. ok is false when none
+// qualifies.
+func PickRef7d(closes []DailyClose, sessionDay time.Time) (DailyClose, bool) {
+	s := sessionDay.UTC()
+	cutoff := time.Date(s.Year(), s.Month(), s.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -7)
 	var best DailyClose
 	found := false
 	for _, c := range closes {
