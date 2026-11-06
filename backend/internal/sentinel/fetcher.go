@@ -407,18 +407,40 @@ func safeFetch(name string, fn func() ([]SentinelItem, error)) (items []Sentinel
 	return result
 }
 
+// mergeKEV marks dst as actively exploited using the CISA KEV item. Only the
+// KEV fields are copied, so the NVD score, vector, dates and URL stay as is.
+func mergeKEV(dst *SentinelItem, kev SentinelItem) {
+	dst.KnownExploited = true
+	dst.RequiredAction = kev.RequiredAction
+	dst.DueDate = kev.DueDate
+	dst.Ransomware = kev.Ransomware
+}
+
+// dedupeByIdentifier keeps the first item per Identifier. The one exception
+// is a cve item and a cisa_kev item for the same CVE, in either order: the
+// cve item is kept, at the earlier position, with the KEV data merged in.
 func dedupeByIdentifier(items []SentinelItem) []SentinelItem {
-	seen := make(map[string]struct{}, len(items))
+	index := make(map[string]int, len(items))
 	result := make([]SentinelItem, 0, len(items))
 	for _, item := range items {
 		if item.Identifier == "" {
 			continue
 		}
-		if _, ok := seen[item.Identifier]; ok {
+		pos, ok := index[item.Identifier]
+		if !ok {
+			index[item.Identifier] = len(result)
+			result = append(result, item)
 			continue
 		}
-		seen[item.Identifier] = struct{}{}
-		result = append(result, item)
+		kept := &result[pos]
+		switch {
+		case kept.SourceType == "cve" && item.SourceType == "cisa_kev":
+			mergeKEV(kept, item)
+		case kept.SourceType == "cisa_kev" && item.SourceType == "cve":
+			kev := *kept
+			*kept = item
+			mergeKEV(kept, kev)
+		}
 	}
 	return result
 }
