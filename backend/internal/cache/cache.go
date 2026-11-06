@@ -74,6 +74,7 @@ type MarketData struct {
 	PriceUSD      float64    `json:"price_usd"`
 	PriceIDR      float64    `json:"price_idr"`
 	ChangePct24h  *float64   `json:"change_pct_24h"`
+	ChangePct7d   *float64   `json:"change_pct_7d"`
 	Week52HighUSD *float64   `json:"week52_high_usd"`
 	Week52LowUSD  *float64   `json:"week52_low_usd"`
 	HighUSD       *float64   `json:"high_usd"`
@@ -356,15 +357,15 @@ func (c *Cache) getFromRedis(ctx context.Context, symbol string) (*MarketData, e
 
 func (c *Cache) getFromMySQL(ctx context.Context, symbol string) (*MarketData, error) {
 	var (
-		d                    MarketData
-		change, hi, lo, high sql.NullFloat64
-		highSince            sql.NullTime
+		d                              MarketData
+		change, change7d, hi, lo, high sql.NullFloat64
+		highSince                      sql.NullTime
 	)
 	err := c.db.QueryRowContext(ctx, `
-		SELECT symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source
+		SELECT symbol, price_usd, price_idr, change_pct_24h, change_pct_7d, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source
 		FROM market_cache
 		WHERE symbol = ?`, symbol,
-	).Scan(&d.Symbol, &d.PriceUSD, &d.PriceIDR, &change, &hi, &lo, &high, &highSince, &d.LastFetched, &d.Source)
+	).Scan(&d.Symbol, &d.PriceUSD, &d.PriceIDR, &change, &change7d, &hi, &lo, &high, &highSince, &d.LastFetched, &d.Source)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -372,6 +373,7 @@ func (c *Cache) getFromMySQL(ctx context.Context, symbol string) (*MarketData, e
 		return nil, fmt.Errorf("query market_cache for %s: %w", symbol, err)
 	}
 	d.ChangePct24h = nullFloatPtr(change)
+	d.ChangePct7d = nullFloatPtr(change7d)
 	d.Week52HighUSD = nullFloatPtr(hi)
 	d.Week52LowUSD = nullFloatPtr(lo)
 	d.HighUSD = nullFloatPtr(high)
@@ -410,19 +412,20 @@ func (c *Cache) SetMarketData(ctx context.Context, data *MarketData) error {
 	}
 
 	_, err := c.db.ExecContext(ctx, `
-		INSERT INTO market_cache (symbol, price_usd, price_idr, change_pct_24h, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO market_cache (symbol, price_usd, price_idr, change_pct_24h, change_pct_7d, week52_high_usd, week52_low_usd, high_usd, high_since, last_fetched, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 			price_usd = VALUES(price_usd),
 			price_idr = VALUES(price_idr),
 			change_pct_24h = VALUES(change_pct_24h),
+			change_pct_7d = VALUES(change_pct_7d),
 			week52_high_usd = VALUES(week52_high_usd),
 			week52_low_usd = VALUES(week52_low_usd),
 			high_usd = VALUES(high_usd),
 			high_since = VALUES(high_since),
 			last_fetched = VALUES(last_fetched),
 			source = VALUES(source)`,
-		data.Symbol, data.PriceUSD, data.PriceIDR, data.ChangePct24h, data.Week52HighUSD, data.Week52LowUSD, data.HighUSD, data.HighSince, data.LastFetched, data.Source,
+		data.Symbol, data.PriceUSD, data.PriceIDR, data.ChangePct24h, data.ChangePct7d, data.Week52HighUSD, data.Week52LowUSD, data.HighUSD, data.HighSince, data.LastFetched, data.Source,
 	)
 	if err != nil {
 		return fmt.Errorf("cache: upsert market_cache for %s: %w", data.Symbol, err)
