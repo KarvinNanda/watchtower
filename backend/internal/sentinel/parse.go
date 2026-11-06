@@ -31,6 +31,7 @@ type nvdResponse struct {
 				V40 []nvdCVSSMetric `json:"cvssMetricV40"`
 				V30 []nvdCVSSMetric `json:"cvssMetricV30"`
 			} `json:"metrics"`
+			Configurations []nvdConfiguration `json:"configurations"`
 		} `json:"cve"`
 	} `json:"vulnerabilities"`
 }
@@ -93,6 +94,7 @@ func parseNVD(body []byte, now time.Time) ([]SentinelItem, error) {
 			CVSSScore:   score,
 			CVSSVector:  vector,
 			SourceDate:  sourceDate,
+			Affected:    affectedFromConfigurations(v.CVE.Configurations),
 		})
 	}
 	return items, nil
@@ -171,6 +173,13 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 		CWEs []struct {
 			Name string `json:"name"`
 		} `json:"cwes"`
+		Vulnerabilities []struct {
+			Package struct {
+				Name string `json:"name"`
+			} `json:"package"`
+			VulnerableVersionRange string  `json:"vulnerable_version_range"`
+			FirstPatchedVersion    *string `json:"first_patched_version"`
+		} `json:"vulnerabilities"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("decode github advisories response: %w", err)
@@ -195,6 +204,16 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 		)
 		sourceDate, _ := parseTimeKnown(a.PublishedAt)
 
+		var affected []AffectedVersion
+		for _, v := range a.Vulnerabilities {
+			affected = append(affected, AffectedVersion{
+				Product: v.Package.Name,
+				Range:   v.VulnerableVersionRange,
+				Fixed:   derefString(v.FirstPatchedVersion),
+				NoFix:   v.FirstPatchedVersion == nil,
+			})
+		}
+
 		items = append(items, SentinelItem{
 			SourceType:  "github_advisory",
 			Identifier:  a.GHSAID,
@@ -209,6 +228,7 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 			CVSSScore:   score,
 			CVSSVector:  vector,
 			SourceDate:  sourceDate,
+			Affected:    affected,
 		})
 	}
 	return items, nil

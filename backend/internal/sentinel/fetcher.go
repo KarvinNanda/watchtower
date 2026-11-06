@@ -56,6 +56,9 @@ type SentinelItem struct {
 	RequiredAction string
 	DueDate        string
 	Ransomware     bool
+
+	// Affected products and fixed versions, from NVD CPE or GHSA.
+	Affected []AffectedVersion
 }
 
 // SentinelFetcher polls all six WatchTower threat-intel sources: NVD/NIST,
