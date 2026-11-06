@@ -227,3 +227,65 @@ func TestProcessItem_CarriesEnrichmentIntoBatch(t *testing.T) {
 	assert.Equal(t, pub, got.PublishedAt)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// panicSource panics on the NVD lookup, to prove enrichNewItems recovers.
+type panicSource struct{ fakeSentinelSource }
+
+func (p *panicSource) FetchNVDByCVE(string) (*sentinel.SentinelItem, error) {
+	panic("nvd boom")
+}
+
+func TestFetchAndProcess_EnrichPanicStillBatches(t *testing.T) {
+	w, mock, _ := newMockSentinelWorker(t)
+	src := &panicSource{fakeSentinelSource{items: []sentinel.SentinelItem{
+		{SourceType: "cisa_kev", Identifier: "CVE-2026-0020", CVEID: "CVE-2026-0020", Title: "t", KnownExploited: true},
+	}}}
+	w.fetcher = src
+
+	mock.ExpectQuery(`SELECT id FROM sentinel_seen_items`).
+		WithArgs("cisa_kev", "CVE-2026-0020").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`FROM keyword_subscriptions ks`).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "keyword", "telegram_sentinel_chat_id", "preferred_language"}).
+			AddRow(1, "x", 100, "en"))
+	mock.ExpectExec(`INSERT INTO sentinel_seen_items`).
+		WithArgs("cisa_kev", "CVE-2026-0020").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	batches := map[uint64]*SentinelBatch{}
+	require.NotPanics(t, func() {
+		require.NoError(t, w.fetchAndProcess(&ProcessCounters{}, batches))
+	})
+	require.Contains(t, batches, uint64(1))
+	assert.Len(t, batches[1].Items, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndProcess_LookupFailuresStillBatch(t *testing.T) {
+	w, mock, _ := newMockSentinelWorker(t)
+	src := &fakeSentinelSource{
+		items: []sentinel.SentinelItem{
+			{SourceType: "cisa_kev", Identifier: "CVE-2026-0021", CVEID: "CVE-2026-0021", Title: "t", KnownExploited: true},
+		},
+		nvdErr:  map[string]error{"CVE-2026-0021": errors.New("nvd down")},
+		epssErr: errors.New("epss down"),
+	}
+	w.fetcher = src
+
+	mock.ExpectQuery(`SELECT id FROM sentinel_seen_items`).
+		WithArgs("cisa_kev", "CVE-2026-0021").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`FROM keyword_subscriptions ks`).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "keyword", "telegram_sentinel_chat_id", "preferred_language"}).
+			AddRow(1, "x", 100, "en"))
+	mock.ExpectExec(`INSERT INTO sentinel_seen_items`).
+		WithArgs("cisa_kev", "CVE-2026-0021").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	batches := map[uint64]*SentinelBatch{}
+	require.NoError(t, w.fetchAndProcess(&ProcessCounters{}, batches))
+	require.Contains(t, batches, uint64(1))
+	require.Len(t, batches[1].Items, 1)
+	assert.Nil(t, batches[1].Items[0].EPSS)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

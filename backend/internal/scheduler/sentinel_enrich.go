@@ -23,6 +23,14 @@ type SentinelSource interface {
 // reveal which items match a user's keywords. Failures are logged and the
 // item is kept as it is.
 func (w *SentinelWorker) enrichNewItems(items []sentinel.SentinelItem) {
+	// A panic here must not abort the run: items already enriched stay
+	// enriched, and matching and dispatch still happen.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[ERROR] enrichNewItems: recovered from panic: %v", r)
+		}
+	}()
+
 	lookups, skipped := 0, 0
 	for i := range items {
 		if items[i].SourceType != "cisa_kev" || items[i].CVEID == "" {
