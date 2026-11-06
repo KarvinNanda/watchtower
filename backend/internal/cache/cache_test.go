@@ -44,15 +44,16 @@ func TestGoldChangeFromSnapshots_ComputesInIDR(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO price_snapshots`).WithArgs("ANTAM", 2392157.0, now).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`DELETE FROM price_snapshots`).WithArgs("ANTAM", now.Add(-snapshotRetention)).WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectQuery(`SELECT price, observed_at FROM price_snapshots`).
-		WithArgs("ANTAM", now.Add(-changeWindowMax), now.Add(-changeWindowMin)).
+		WithArgs("ANTAM", now.Add(-weekWindowMax), now.Add(-changeWindowMin)).
 		WillReturnRows(sqlmock.NewRows([]string{"price", "observed_at"}).
 			AddRow(2370000.0, now.Add(-24*time.Hour)).
 			AddRow(2380000.0, now.Add(-21*time.Hour)))
 
-	change, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
+	day, week, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
 	require.NoError(t, err)
-	require.NotNil(t, change)
-	assert.InDelta(t, (2392157.0-2370000.0)/2370000.0*100, *change, 1e-9)
+	require.NotNil(t, day)
+	assert.InDelta(t, (2392157.0-2370000.0)/2370000.0*100, *day, 1e-9)
+	assert.Nil(t, week)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -67,9 +68,10 @@ func TestGoldChangeFromSnapshots_UnknownWithoutHistory(t *testing.T) {
 	mock.ExpectQuery(`SELECT price, observed_at FROM price_snapshots`).
 		WillReturnRows(sqlmock.NewRows([]string{"price", "observed_at"}))
 
-	change, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
+	day, week, err := c.goldChangeFromSnapshots(context.Background(), "ANTAM", 2392157, now)
 	require.NoError(t, err)
-	assert.Nil(t, change)
+	assert.Nil(t, day)
+	assert.Nil(t, week)
 }
 
 func TestGetFromMySQL_NullChangeAndWeek52(t *testing.T) {

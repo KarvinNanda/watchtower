@@ -21,6 +21,15 @@ type fakeFetcher struct {
 	calls int
 	res   *asset.FetchResult
 	err   error
+
+	refCalls int
+	ref      asset.DailyClose
+	refErr   error
+}
+
+func (f *fakeFetcher) FetchStockRef7d(string) (asset.DailyClose, error) {
+	f.refCalls++
+	return f.ref, f.refErr
 }
 
 func (f *fakeFetcher) FetchAsset(symbol, _ string) (*asset.FetchResult, error) {
@@ -112,7 +121,7 @@ func TestGetMarketData_ManualStockWithBudgetRefreshes(t *testing.T) {
 	d, err := c.GetMarketData(context.Background(), "AAPL", "stock", manual)
 	require.NoError(t, err)
 	assert.Equal(t, 200.0, d.PriceUSD)
-	assert.Equal(t, 1, b.calls)
+	assert.Equal(t, 2, b.calls, "one credit for the quote, one for the 7-day reference")
 }
 
 func TestGetMarketData_ManualStockWithoutBudgetUsesCacheMarkedStale(t *testing.T) {
