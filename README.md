@@ -8,7 +8,7 @@ You clone it, run one setup script, and the whole thing (database, API, web app,
 
 - **Asset alerts.** Rules per symbol (20 crypto, 20 US stocks plus the SPY S&P 500 ETF, ANTAM gold): a price level above/below, in USD or in rupiah, optionally labelled buy target, take profit or stop loss; a 24h % change; a trailing stop; and a 52-week high/low break. Each card in the web app shows every rule's level and how far the price is from it. A cooldown keeps the same alert from repeating every check.
 - **Status report.** A button sends one Telegram message with every symbol you track, its price and the distance to each rule, even when nothing triggered.
-- **Sentinel.** Polls NVD, CISA KEV, GitHub Security Advisories, BleepingComputer, The Hacker News, Exploit-DB and GitHub. Items matching your keywords arrive with CVSS severity, an "actively exploited" flag for CISA KEV entries, and CISA's required action.
+- **Sentinel.** Polls NVD, CISA KEV, GitHub Security Advisories, BleepingComputer, The Hacker News, Exploit-DB and GitHub. Items matching your keywords arrive with a plain-language impact and attack conditions (from the CVSS vector), affected and safe versions, an EPSS score from FIRST.org (chance of exploitation in the next 30 days), the publish date, an "actively exploited" flag for CISA KEV entries, and CISA's required action. LOW and NONE items are not sent, unless they are actively exploited or have no score.
 - **Check now.** A button on the web app runs your checks immediately instead of waiting for the schedule.
 - **Laptop friendly.** The schedule is stored in the database. After your machine wakes from sleep, a missed check runs within a minute, once.
 

@@ -43,9 +43,6 @@ func TestProcessItem_MatchedItemIsAlwaysBatched(t *testing.T) {
 		CVEID: "CVE-2024-3094", KnownExploited: true, RequiredAction: "Downgrade xz.",
 	}
 
-	mock.ExpectQuery(`SELECT id FROM sentinel_seen_items`).
-		WithArgs("cisa_kev", "CVE-2024-3094").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectQuery(`FROM keyword_subscriptions ks`).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "keyword", "telegram_sentinel_chat_id", "preferred_language"}).
 			AddRow(1, "xz", 100, "en").
@@ -103,5 +100,89 @@ func TestSentinelDispatch_RendersWithAlertmsgInInstanceTimezone(t *testing.T) {
 	assert.True(t, strings.HasPrefix(msg, "🛡️ *Sentinel* · 2 items \\(1 actively exploited\\)\n"), msg)
 	assert.Regexp(t, `⏰ \d{2} \w{3} \d{4} \d{2}:\d{2} TST\n`, msg)
 	assert.Less(t, strings.Index(msg, "CVE\\-2026\\-1"), strings.Index(msg, "*a*"), "KEV first")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func expectSeenLookup(mock sqlmock.Sqlmock, source, id string, seen bool) {
+	rows := sqlmock.NewRows([]string{"id"})
+	if seen {
+		rows.AddRow(1)
+	}
+	mock.ExpectQuery(`SELECT id FROM sentinel_seen_items`).WithArgs(source, id).WillReturnRows(rows)
+}
+
+func expectMatchAndInserts(mock sqlmock.Sqlmock, id string, sources ...string) {
+	mock.ExpectQuery(`FROM keyword_subscriptions ks`).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "keyword", "telegram_sentinel_chat_id", "preferred_language"}).
+			AddRow(1, "x", 100, "en"))
+	for _, s := range sources {
+		mock.ExpectExec(`INSERT INTO sentinel_seen_items`).
+			WithArgs(s, id).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+	}
+}
+
+func mergedItem(id string) sentinel.SentinelItem {
+	return sentinel.SentinelItem{SourceType: "cve", Identifier: id, CVEID: id, Title: "t",
+		Severity: "HIGH", CVSSScore: 8, KnownExploited: true}
+}
+
+func TestFetchAndProcess_MergedItemSeenAsCVEButNotKEV_IsSent(t *testing.T) {
+	w, mock, _ := newMockSentinelWorker(t)
+	w.fetcher = &fakeSentinelSource{items: []sentinel.SentinelItem{mergedItem("CVE-2026-0030")}}
+
+	// Only the KEV key is looked up, and (cve, id) is never queried.
+	expectSeenLookup(mock, "cisa_kev", "CVE-2026-0030", false)
+	expectMatchAndInserts(mock, "CVE-2026-0030", "cve", "cisa_kev")
+
+	batches := map[uint64]*SentinelBatch{}
+	counters := &ProcessCounters{}
+	require.NoError(t, w.fetchAndProcess(counters, batches))
+	require.Contains(t, batches, uint64(1))
+	assert.Len(t, batches[1].Items, 1)
+	assert.Equal(t, 1, counters.New)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndProcess_MergedItemSeenAsKEV_IsSkipped(t *testing.T) {
+	w, mock, _ := newMockSentinelWorker(t)
+	w.fetcher = &fakeSentinelSource{items: []sentinel.SentinelItem{mergedItem("CVE-2026-0031")}}
+
+	expectSeenLookup(mock, "cisa_kev", "CVE-2026-0031", true)
+
+	batches := map[uint64]*SentinelBatch{}
+	counters := &ProcessCounters{}
+	require.NoError(t, w.fetchAndProcess(counters, batches))
+	assert.Empty(t, batches)
+	assert.Equal(t, 0, counters.New)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestProcessItem_MergedItemInsertsBothKeysOnEveryPath(t *testing.T) {
+	t.Run("no match", func(t *testing.T) {
+		w, mock, _ := newMockSentinelWorker(t)
+		mock.ExpectQuery(`FROM keyword_subscriptions ks`).
+			WillReturnRows(sqlmock.NewRows([]string{"user_id", "keyword", "telegram_sentinel_chat_id", "preferred_language"}))
+		mock.ExpectExec(`INSERT INTO sentinel_seen_items`).WithArgs("cve", "CVE-2026-0032").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec(`INSERT INTO sentinel_seen_items`).WithArgs("cisa_kev", "CVE-2026-0032").WillReturnResult(sqlmock.NewResult(1, 1))
+		require.NoError(t, w.processItem(mergedItem("CVE-2026-0032"), &ProcessCounters{}, map[uint64]*SentinelBatch{}))
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+	t.Run("matched", func(t *testing.T) {
+		w, mock, _ := newMockSentinelWorker(t)
+		expectMatchAndInserts(mock, "CVE-2026-0033", "cve", "cisa_kev")
+		batches := map[uint64]*SentinelBatch{}
+		require.NoError(t, w.processItem(mergedItem("CVE-2026-0033"), &ProcessCounters{}, batches))
+		assert.Len(t, batches, 1)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestProcessItem_PlainCVEItemInsertsOneKey(t *testing.T) {
+	w, mock, _ := newMockSentinelWorker(t)
+	item := mergedItem("CVE-2026-0034")
+	item.KnownExploited = false
+	expectMatchAndInserts(mock, "CVE-2026-0034", "cve")
+	require.NoError(t, w.processItem(item, &ProcessCounters{}, map[uint64]*SentinelBatch{}))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

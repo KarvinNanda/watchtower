@@ -2,6 +2,7 @@ package alertmsg
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -43,7 +44,32 @@ type SentinelEntry struct {
 	DueDate         string
 	Ransomware      bool
 	MatchedKeywords []string
+	// CVSSVector is the raw vector string; it feeds the impact and attack lines.
+	CVSSVector string
+	Affected   []AffectedVersion
+	// EPSS is a probability from 0 to 1; nil means unknown (no line).
+	EPSS *float64
+	// PublishedAt is when the source published the item; zero means no line.
+	PublishedAt time.Time
 }
+
+// AffectedVersion is one affected product and version range. It is
+// alertmsg's own copy so this package does not import internal/sentinel.
+// Fixed is empty when no safe version is known. NoFix is true only when the
+// source says no fixed version exists yet.
+type AffectedVersion struct {
+	Product string
+	Range   string
+	Fixed   string
+	NoFix   bool
+}
+
+const (
+	productMaxRunes  = 40
+	versionMaxRunes  = 30
+	rangeMaxRunes    = 60
+	maxAffectedLines = 2
+)
 
 // SentinelMessages renders one user's matched items, most urgent first.
 // at must already be in the instance timezone.
@@ -168,6 +194,22 @@ func sentinelBlock(lang string, e SentinelEntry) string {
 	if len(kev) > 0 {
 		lines = append(lines, esc(strings.Join(kev, " · ")))
 	}
+	if v, ok := parseCVSSVector(e.CVSSVector); ok {
+		for _, l := range []string{impactLine(lang, v), attackLine(lang, v)} {
+			if l != "" {
+				lines = append(lines, esc(l))
+			}
+		}
+	}
+	for _, l := range affectedLines(lang, e.Affected) {
+		lines = append(lines, esc(l))
+	}
+	if l := epssLine(lang, e.EPSS); l != "" {
+		lines = append(lines, esc(l))
+	}
+	if l := publishedLine(lang, e.PublishedAt); l != "" {
+		lines = append(lines, esc(l))
+	}
 	lines = append(lines, "🏷️ "+esc(tagLine(e)))
 	if link := linkLine(e.URL); link != "" {
 		lines = append(lines, link)
@@ -215,6 +257,10 @@ func cvssBand(score float64) string {
 func severityText(e SentinelEntry) string {
 	sev := strings.ToUpper(e.Severity)
 	switch {
+	case e.KnownExploited && sev != "" && e.CVSSScore > 0:
+		return fmt.Sprintf("ACTIVELY EXPLOITED · %s %.1f", sev, e.CVSSScore)
+	case e.KnownExploited && e.CVSSScore > 0:
+		return fmt.Sprintf("ACTIVELY EXPLOITED · %.1f", e.CVSSScore)
 	case e.KnownExploited:
 		return "ACTIVELY EXPLOITED"
 	case sev != "" && e.CVSSScore > 0:
@@ -268,4 +314,74 @@ func isASCII(s string) bool {
 		}
 	}
 	return true
+}
+
+// affectedLines returns up to two "📦" lines, then one "+N more" line. An
+// entry without a Range says nothing useful, so it is skipped and does not
+// count toward the limit or the "+N" total. Text is unescaped.
+func affectedLines(lang string, av []AffectedVersion) []string {
+	var out []string
+	rest := 0
+	for _, a := range av {
+		if a.Range == "" {
+			continue
+		}
+		if len(out) >= maxAffectedLines {
+			rest++
+			continue
+		}
+		rng := TruncateRunes(a.Range, rangeMaxRunes)
+		var phrase string
+		if strings.ContainsRune("<>≤≥=", []rune(a.Range)[0]) {
+			phrase = pick(lang, "affected ", "terdampak ") + rng
+		} else {
+			phrase = pick(lang, "affected version ", "terdampak versi ") + rng
+		}
+		line := "📦 " + TruncateRunes(a.Product, productMaxRunes) + ": " + phrase
+		switch {
+		case a.Fixed != "":
+			line += pick(lang, " · safe from ", " · aman mulai ") + TruncateRunes(a.Fixed, versionMaxRunes)
+		case a.NoFix:
+			line += pick(lang, " · no fixed version yet", " · belum ada versi aman")
+		}
+		out = append(out, line)
+	}
+	if rest > 0 {
+		out = append(out, fmt.Sprintf("📦 +%d %s", rest, pick(lang, "more", "lainnya")))
+	}
+	return out
+}
+
+// epssLine shows the exploitation probability. The percent is floored so a
+// probability just under 1 never reads as a certain 100%.
+func epssLine(lang string, p *float64) string {
+	if p == nil {
+		return ""
+	}
+	v := *p
+	if math.IsNaN(v) || v < 0 {
+		v = 0
+	}
+	if v > 1 {
+		v = 1
+	}
+	// Round away float error (0.29*100 is 28.999999999999996) before flooring.
+	pct := math.Round(v*100*1e6) / 1e6
+	var s string
+	switch {
+	case pct >= 1:
+		s = fmt.Sprintf("%d%%", int(math.Floor(pct)))
+	case pct >= 0.1:
+		s = fmt.Sprintf("%.1f%%", math.Floor(pct*10)/10)
+	default:
+		s = "< 0.1%"
+	}
+	return "📈 EPSS: " + s + pick(lang, " chance of exploitation in the next 30 days", " peluang dieksploitasi dalam 30 hari")
+}
+
+func publishedLine(lang string, t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return pick(lang, "📅 Published: ", "📅 Dipublikasi: ") + formatDueDate(t.UTC().Format("2006-01-02"), lang)
 }

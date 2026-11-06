@@ -18,11 +18,14 @@ import (
 	"github.com/karvin-nanda/watchtower/internal/utils"
 )
 
-const (
-	lookbackWindow = 7 * 24 * time.Hour
-
+// Package vars, not consts, so tests can point them at an httptest.Server.
+var (
 	nvdAPIURL         = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 	nvdRateLimitDelay = 6 * time.Second
+)
+
+const (
+	lookbackWindow = 7 * 24 * time.Hour
 
 	cisaKEVFeedURL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 
@@ -50,10 +53,19 @@ type SentinelItem struct {
 	CVEID          string
 	Severity       string // upper-case: CRITICAL, HIGH, MEDIUM, LOW
 	CVSSScore      float64
-	KnownExploited bool // listed in CISA KEV
+	CVSSVector     string    // vector of the chosen metric, empty if unknown
+	SourceDate     time.Time // publish date from the source, zero = unknown or unparseable
+	KnownExploited bool      // listed in CISA KEV
 	RequiredAction string
 	DueDate        string
 	Ransomware     bool
+
+	// Affected products and fixed versions, from NVD CPE or GHSA.
+	Affected []AffectedVersion
+
+	// EPSS is the FIRST.org exploit probability from 0 to 1, filled in by
+	// the scheduler after fetching. nil means unknown.
+	EPSS *float64
 }
 
 // SentinelFetcher polls all six WatchTower threat-intel sources: NVD/NIST,
@@ -103,6 +115,33 @@ func (f *SentinelFetcher) FetchNVD() ([]SentinelItem, error) {
 		return nil, fmt.Errorf("sentinel: fetch nvd: %w", err)
 	}
 	return parseNVD(body, now)
+}
+
+// FetchNVDByCVE looks up one CVE in NVD. It returns (nil, nil) when NVD has
+// no record of it. The ID is validated before any request is made.
+func (f *SentinelFetcher) FetchNVDByCVE(cveID string) (*SentinelItem, error) {
+	if !cveIDPattern.MatchString(cveID) {
+		return nil, fmt.Errorf("sentinel: fetch nvd by cve: invalid CVE ID %q", cveID)
+	}
+
+	q := url.Values{}
+	q.Set("cveId", cveID)
+	body, err := f.getBody(nvdAPIURL+"?"+q.Encode(), nil)
+
+	// Same NVD rate limit pause as FetchNVD.
+	time.Sleep(nvdRateLimitDelay)
+
+	if err != nil {
+		return nil, fmt.Errorf("sentinel: fetch nvd by cve %s: %w", cveID, err)
+	}
+	items, err := parseNVD(body, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	return &items[0], nil
 }
 
 // FetchCISAKEV retrieves CISA Known Exploited Vulnerabilities added in the
@@ -161,7 +200,11 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 	if len(rss.Channel.Items) > 0 {
 		items := make([]SentinelItem, 0, len(rss.Channel.Items))
 		for _, it := range rss.Channel.Items {
-			published := parseFlexibleTime(it.PubDate, time.Now())
+			sourceDate, _ := parseTimeKnown(it.PubDate)
+			published := sourceDate
+			if published.IsZero() {
+				published = time.Now()
+			}
 			if published.Before(cutoff) {
 				continue
 			}
@@ -180,6 +223,7 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 				Description: it.Description,
 				URL:         it.Link,
 				PublishedAt: published,
+				SourceDate:  sourceDate,
 				Keywords:    extractKeywords(it.Title + " " + it.Description + " " + rawContent),
 				RawContent:  rawContent,
 			})
@@ -198,7 +242,11 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 		if dateStr == "" {
 			dateStr = e.Updated
 		}
-		published := parseFlexibleTime(dateStr, time.Now())
+		sourceDate, _ := parseTimeKnown(dateStr)
+		published := sourceDate
+		if published.IsZero() {
+			published = time.Now()
+		}
 		if published.Before(cutoff) {
 			continue
 		}
@@ -220,6 +268,7 @@ func (f *SentinelFetcher) FetchRSS(feedURL string) ([]SentinelItem, error) {
 			Description: e.Summary,
 			URL:         link,
 			PublishedAt: published,
+			SourceDate:  sourceDate,
 			Keywords:    extractKeywords(e.Title + " " + e.Summary + " " + rawContent),
 			RawContent:  rawContent,
 		})
@@ -293,6 +342,7 @@ func (f *SentinelFetcher) searchGitHubRepos(query string) ([]SentinelItem, error
 
 	items := make([]SentinelItem, 0, len(payload.Items))
 	for _, r := range payload.Items {
+		sourceDate, _ := parseTimeKnown(r.CreatedAt)
 		title := fmt.Sprintf("%s: %s", r.FullName, r.Description)
 		description := r.Description
 		rawContent := r.Description
@@ -307,6 +357,7 @@ func (f *SentinelFetcher) searchGitHubRepos(query string) ([]SentinelItem, error
 			Description: description,
 			URL:         r.HTMLURL,
 			PublishedAt: parseFlexibleTime(r.CreatedAt, time.Now()),
+			SourceDate:  sourceDate,
 			Keywords:    keywords,
 			RawContent:  rawContent,
 		})
@@ -390,18 +441,40 @@ func safeFetch(name string, fn func() ([]SentinelItem, error)) (items []Sentinel
 	return result
 }
 
+// mergeKEV marks dst as actively exploited using the CISA KEV item. Only the
+// KEV fields are copied, so the NVD score, vector, dates and URL stay as is.
+func mergeKEV(dst *SentinelItem, kev SentinelItem) {
+	dst.KnownExploited = true
+	dst.RequiredAction = kev.RequiredAction
+	dst.DueDate = kev.DueDate
+	dst.Ransomware = kev.Ransomware
+}
+
+// dedupeByIdentifier keeps the first item per Identifier. The one exception
+// is a cve item and a cisa_kev item for the same CVE, in either order: the
+// cve item is kept, at the earlier position, with the KEV data merged in.
 func dedupeByIdentifier(items []SentinelItem) []SentinelItem {
-	seen := make(map[string]struct{}, len(items))
+	index := make(map[string]int, len(items))
 	result := make([]SentinelItem, 0, len(items))
 	for _, item := range items {
 		if item.Identifier == "" {
 			continue
 		}
-		if _, ok := seen[item.Identifier]; ok {
+		pos, ok := index[item.Identifier]
+		if !ok {
+			index[item.Identifier] = len(result)
+			result = append(result, item)
 			continue
 		}
-		seen[item.Identifier] = struct{}{}
-		result = append(result, item)
+		kept := &result[pos]
+		switch {
+		case kept.SourceType == "cve" && item.SourceType == "cisa_kev":
+			mergeKEV(kept, item)
+		case kept.SourceType == "cisa_kev" && item.SourceType == "cve":
+			kev := *kept
+			*kept = item
+			mergeKEV(kept, kev)
+		}
 	}
 	return result
 }
@@ -481,20 +554,30 @@ var feedTimeLayouts = []string{
 	"2006-01-02",
 }
 
-// parseFlexibleTime tries a handful of common feed/API timestamp formats,
-// returning fallback (rather than erroring) if none match — a single
-// unparseable timestamp should never take down a whole fetch.
-func parseFlexibleTime(s string, fallback time.Time) time.Time {
+// parseTimeKnown tries a handful of common feed/API timestamp formats. The
+// bool is false for an empty or unparseable string, so callers can tell a
+// real date from a fallback.
+func parseTimeKnown(s string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return fallback
+		return time.Time{}, false
 	}
 	for _, layout := range feedTimeLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t
+			return t, true
 		}
 	}
-	log.Printf("[WARN] parseFlexibleTime: could not parse %q, using fallback", s)
+	log.Printf("[WARN] parseTimeKnown: could not parse %q", s)
+	return time.Time{}, false
+}
+
+// parseFlexibleTime returns the parsed time, or fallback (rather than
+// erroring) if none match: a single unparseable timestamp should never take
+// down a whole fetch.
+func parseFlexibleTime(s string, fallback time.Time) time.Time {
+	if t, ok := parseTimeKnown(s); ok {
+		return t
+	}
 	return fallback
 }
 

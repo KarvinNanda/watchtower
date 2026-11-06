@@ -13,6 +13,7 @@ type nvdCVSSMetric struct {
 	CVSSData struct {
 		BaseScore    float64 `json:"baseScore"`
 		BaseSeverity string  `json:"baseSeverity"`
+		VectorString string  `json:"vectorString"`
 	} `json:"cvssData"`
 }
 
@@ -30,14 +31,16 @@ type nvdResponse struct {
 				V40 []nvdCVSSMetric `json:"cvssMetricV40"`
 				V30 []nvdCVSSMetric `json:"cvssMetricV30"`
 			} `json:"metrics"`
+			Configurations []nvdConfiguration `json:"configurations"`
 		} `json:"cve"`
 	} `json:"vulnerabilities"`
 }
 
 // pickCVSS returns the first available score, preferring CVSS v3.1, then
 // v4.0, then v3.0, and within one version NVD's own "Primary" entry over
-// CNA "Secondary" ones. Unscored CVEs return (0, "").
-func pickCVSS(groups ...[]nvdCVSSMetric) (float64, string) {
+// CNA "Secondary" ones. The vector comes from the same metric as the score.
+// Unscored CVEs return (0, "", "").
+func pickCVSS(groups ...[]nvdCVSSMetric) (score float64, severity, vector string) {
 	for _, g := range groups {
 		if len(g) == 0 {
 			continue
@@ -49,9 +52,9 @@ func pickCVSS(groups ...[]nvdCVSSMetric) (float64, string) {
 				break
 			}
 		}
-		return chosen.CVSSData.BaseScore, strings.ToUpper(chosen.CVSSData.BaseSeverity)
+		return chosen.CVSSData.BaseScore, strings.ToUpper(chosen.CVSSData.BaseSeverity), chosen.CVSSData.VectorString
 	}
-	return 0, ""
+	return 0, "", ""
 }
 
 func parseNVD(body []byte, now time.Time) ([]SentinelItem, error) {
@@ -73,8 +76,9 @@ func parseNVD(body []byte, now time.Time) ([]SentinelItem, error) {
 			description = v.CVE.Descriptions[0].Value
 		}
 
-		score, severity := pickCVSS(v.CVE.Metrics.V31, v.CVE.Metrics.V40, v.CVE.Metrics.V30)
+		score, severity, vector := pickCVSS(v.CVE.Metrics.V31, v.CVE.Metrics.V40, v.CVE.Metrics.V30)
 		title := fmt.Sprintf("%s: %s", v.CVE.ID, truncate(description, 80))
+		sourceDate, _ := parseTimeKnown(v.CVE.Published)
 
 		items = append(items, SentinelItem{
 			SourceType:  "cve",
@@ -88,6 +92,9 @@ func parseNVD(body []byte, now time.Time) ([]SentinelItem, error) {
 			CVEID:       v.CVE.ID,
 			Severity:    severity,
 			CVSSScore:   score,
+			CVSSVector:  vector,
+			SourceDate:  sourceDate,
+			Affected:    affectedFromConfigurations(v.CVE.Configurations),
 		})
 	}
 	return items, nil
@@ -150,19 +157,29 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 		// Deprecated by GitHub in favour of CVSSSeverities; still read as
 		// the last fallback.
 		CVSS struct {
-			Score float64 `json:"score"`
+			Score  float64 `json:"score"`
+			Vector *string `json:"vector_string"`
 		} `json:"cvss"`
 		CVSSSeverities struct {
 			V3 struct {
-				Score float64 `json:"score"`
+				Score  float64 `json:"score"`
+				Vector *string `json:"vector_string"`
 			} `json:"cvss_v3"`
 			V4 struct {
-				Score float64 `json:"score"`
+				Score  float64 `json:"score"`
+				Vector *string `json:"vector_string"`
 			} `json:"cvss_v4"`
 		} `json:"cvss_severities"`
 		CWEs []struct {
 			Name string `json:"name"`
 		} `json:"cwes"`
+		Vulnerabilities []struct {
+			Package struct {
+				Name string `json:"name"`
+			} `json:"package"`
+			VulnerableVersionRange string  `json:"vulnerable_version_range"`
+			FirstPatchedVersion    *string `json:"first_patched_version"`
+		} `json:"vulnerabilities"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("decode github advisories response: %w", err)
@@ -180,6 +197,23 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 			severity = ""
 		}
 
+		score, vector := firstScored(
+			scoredVector{a.CVSSSeverities.V3.Score, derefString(a.CVSSSeverities.V3.Vector)},
+			scoredVector{a.CVSSSeverities.V4.Score, derefString(a.CVSSSeverities.V4.Vector)},
+			scoredVector{a.CVSS.Score, derefString(a.CVSS.Vector)},
+		)
+		sourceDate, _ := parseTimeKnown(a.PublishedAt)
+
+		var affected []AffectedVersion
+		for _, v := range a.Vulnerabilities {
+			affected = append(affected, AffectedVersion{
+				Product: v.Package.Name,
+				Range:   v.VulnerableVersionRange,
+				Fixed:   derefString(v.FirstPatchedVersion),
+				NoFix:   v.FirstPatchedVersion == nil,
+			})
+		}
+
 		items = append(items, SentinelItem{
 			SourceType:  "github_advisory",
 			Identifier:  a.GHSAID,
@@ -191,19 +225,37 @@ func parseGitHubAdvisories(body []byte, now time.Time) ([]SentinelItem, error) {
 			RawContent:  a.Description,
 			CVEID:       a.CVEID,
 			Severity:    severity,
-			CVSSScore:   firstScore(a.CVSSSeverities.V3.Score, a.CVSSSeverities.V4.Score, a.CVSS.Score),
+			CVSSScore:   score,
+			CVSSVector:  vector,
+			SourceDate:  sourceDate,
+			Affected:    affected,
 		})
 	}
 	return items, nil
 }
 
-// firstScore returns the first positive score. GitHub reports a missing
-// cvss_severities score as 0.0 (verified 2026-10-15), not null.
-func firstScore(scores ...float64) float64 {
-	for _, s := range scores {
-		if s > 0 {
-			return s
+// scoredVector is one GitHub CVSS candidate: a score and its vector string.
+type scoredVector struct {
+	Score  float64
+	Vector string
+}
+
+// firstScored returns the first candidate with a positive score, together
+// with its vector. GitHub reports a missing cvss_severities score as 0.0
+// (verified 2026-10-15), not null.
+func firstScored(cands ...scoredVector) (float64, string) {
+	for _, c := range cands {
+		if c.Score > 0 {
+			return c.Score, c.Vector
 		}
 	}
-	return 0
+	return 0, ""
+}
+
+// derefString turns a JSON null (nil pointer) into "".
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

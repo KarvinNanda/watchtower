@@ -68,7 +68,7 @@ type SentinelBatch struct {
 // match several items in the same run.
 type SentinelWorker struct {
 	db       *sql.DB
-	fetcher  *sentinel.SentinelFetcher
+	fetcher  SentinelSource
 	notifier SentinelNotifierInterface
 
 	mu sync.Mutex // serializes periodic and manual sentinel runs
@@ -83,7 +83,7 @@ type SentinelWorker struct {
 // sentinel threat-intel pipeline.
 func NewSentinelWorker(
 	db *sql.DB,
-	fetcher *sentinel.SentinelFetcher,
+	fetcher SentinelSource,
 	notif SentinelNotifierInterface,
 	loc *time.Location,
 ) *SentinelWorker {
@@ -190,7 +190,25 @@ func (w *SentinelWorker) fetchAndProcess(counters *ProcessCounters, batches map[
 	}
 	counters.Fetched = len(items)
 
+	// Only new items are enriched, and all of them, before keyword matching.
+	// The EPSS and NVD lookups must not depend on what users subscribe to.
+	fresh := make([]sentinel.SentinelItem, 0, len(items))
 	for _, item := range items {
+		seen, err := w.itemAlreadySeen(item)
+		if err != nil {
+			log.Printf("[ERROR] fetchAndProcess: check seen for %s/%s failed: %v", item.SourceType, item.Identifier, err)
+			continue
+		}
+		if seen {
+			continue
+		}
+		fresh = append(fresh, item)
+	}
+	counters.New = len(fresh)
+
+	w.enrichNewItems(fresh)
+
+	for _, item := range fresh {
 		if err := w.processItem(item, counters, batches); err != nil {
 			log.Printf("[ERROR] fetchAndProcess: process item %s/%s failed: %v", item.SourceType, item.Identifier, err)
 		}
@@ -199,7 +217,7 @@ func (w *SentinelWorker) fetchAndProcess(counters *ProcessCounters, batches map[
 	return nil
 }
 
-// processItem implements the dedup -> match -> analyze flow for a single
+// processItem implements the match -> filter -> batch flow for a single
 // item, appending a SentinelBatchItem to every matched user's batch rather
 // than sending anything directly — delivery happens once per user after
 // every item has been processed, via dispatchBatches. It never panics —
@@ -213,16 +231,6 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 		}
 	}()
 
-	seen, err := w.itemAlreadySeen(item)
-	if err != nil {
-		return fmt.Errorf("check sentinel_seen_items: %w", err)
-	}
-	if seen {
-		return nil
-	}
-
-	counters.New++
-
 	matches, err := w.findMatchingUsers(item)
 	if err != nil {
 		return fmt.Errorf("find matching users: %w", err)
@@ -235,10 +243,24 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 		return nil
 	}
 
+	if !shouldSend(item) {
+		if err := w.insertSeenItem(item); err != nil {
+			return fmt.Errorf("insert seen item (low severity): %w", err)
+		}
+		return nil
+	}
+
 	counters.Matched++
 
 	if err := w.insertSeenItem(item); err != nil {
 		return fmt.Errorf("insert seen item: %w", err)
+	}
+
+	affected := make([]alertmsg.AffectedVersion, 0, len(item.Affected))
+	for _, a := range item.Affected {
+		affected = append(affected, alertmsg.AffectedVersion{
+			Product: a.Product, Range: a.Range, Fixed: a.Fixed, NoFix: a.NoFix,
+		})
 	}
 
 	for _, u := range groupMatchesByUser(matches) {
@@ -263,11 +285,41 @@ func (w *SentinelWorker) processItem(item sentinel.SentinelItem, counters *Proce
 			RequiredAction:  item.RequiredAction,
 			DueDate:         item.DueDate,
 			Ransomware:      item.Ransomware,
+			CVSSVector:      item.CVSSVector,
+			Affected:        affected,
+			EPSS:            item.EPSS,
+			PublishedAt:     item.SourceDate,
 			MatchedKeywords: u.Keywords,
 		})
 	}
 
 	return nil
+}
+
+// isMergedKEV reports whether item is an NVD item that dedupeByIdentifier
+// merged with a CISA KEV item for the same CVE.
+func isMergedKEV(item sentinel.SentinelItem) bool {
+	return item.SourceType == "cve" && item.KnownExploited
+}
+
+// seenInsertSources lists the source types a processed item is recorded
+// under. A merged item is recorded under both "cve" and "cisa_kev", so a
+// later run that sees the KEV item alone does not alert again.
+func seenInsertSources(item sentinel.SentinelItem) []string {
+	if isMergedKEV(item) {
+		return []string{"cve", "cisa_kev"}
+	}
+	return []string{item.SourceType}
+}
+
+// seenCheckSource is the single source type looked up to decide if an item
+// is new. A merged item is checked only as "cisa_kev": the user may already
+// have the plain CVE alert but has not been told it is exploited yet.
+func seenCheckSource(item sentinel.SentinelItem) string {
+	if isMergedKEV(item) {
+		return "cisa_kev"
+	}
+	return item.SourceType
 }
 
 func (w *SentinelWorker) itemAlreadySeen(item sentinel.SentinelItem) (bool, error) {
@@ -278,7 +330,7 @@ func (w *SentinelWorker) itemAlreadySeen(item sentinel.SentinelItem) (bool, erro
 	err := w.db.QueryRowContext(ctx, `
 		SELECT id FROM sentinel_seen_items
 		WHERE source_type = ? AND item_identifier = ?`,
-		item.SourceType, item.Identifier,
+		seenCheckSource(item), item.Identifier,
 	).Scan(&id)
 
 	if err != nil {
@@ -375,13 +427,22 @@ func groupMatchesByUser(matches []matchRow) []userMatchInfo {
 // insertSeenItem records item in sentinel_seen_items for global dedup, so
 // it isn't reprocessed on the next run.
 func (w *SentinelWorker) insertSeenItem(item sentinel.SentinelItem) error {
+	for _, source := range seenInsertSources(item) {
+		if err := w.insertSeenRow(source, item.Identifier); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *SentinelWorker) insertSeenRow(sourceType, identifier string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
 	defer cancel()
 
 	_, err := w.db.ExecContext(ctx, `
 		INSERT INTO sentinel_seen_items (source_type, item_identifier, first_seen_at, expires_at)
 		VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 7 DAY))`,
-		item.SourceType, item.Identifier,
+		sourceType, identifier,
 	)
 	if err != nil {
 		var mysqlErr *mysqldriver.MySQLError
