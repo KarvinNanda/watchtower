@@ -87,12 +87,14 @@ func (w *AssetWorker) ReportForUser(userID uint64) (result AssetReportResult, er
 // reportSymbol loads userID's active rules on symbol and measures each one
 // against fresh market data. No rows means nothing to report there (or no
 // linked chat). A price that cannot be fetched still lists the symbol.
+//
+// The rules load first, so a symbol with no rows costs no fetch. The load
+// and the fetch each have their own deadline (#86).
 func (w *AssetWorker) reportSymbol(symbol SymbolInfo, userID uint64) (alertmsg.ReportSymbol, []ruleRow, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
-	defer cancel()
-
 	item := alertmsg.ReportSymbol{Symbol: symbol.Symbol}
-	rows, err := w.loadRules(ctx, symbol.Symbol, userID)
+	loadCtx, cancelLoad := context.WithTimeout(context.Background(), dbQueryTimeout)
+	rows, err := w.loadRules(loadCtx, symbol.Symbol, userID)
+	cancelLoad()
 	if err != nil {
 		return item, nil, fmt.Errorf("load rules for %s: %w", symbol.Symbol, err)
 	}
@@ -101,7 +103,9 @@ func (w *AssetWorker) reportSymbol(symbol SymbolInfo, userID uint64) (alertmsg.R
 		return item, nil, nil
 	}
 
-	data, err := w.cache.GetMarketData(ctx, symbol.Symbol, symbol.AssetType, manualFetch)
+	fetchCtx, cancelFetch := context.WithTimeout(context.Background(), marketFetchTimeout)
+	defer cancelFetch()
+	data, err := w.cache.GetMarketData(fetchCtx, symbol.Symbol, symbol.AssetType, manualFetch)
 	if err == nil && data.PriceUSD <= 0 {
 		err = fmt.Errorf("invalid price %v", data.PriceUSD)
 	}
